@@ -148,3 +148,10 @@ logread | grep -Ei "getdomains|vpnroute|dnsmasq|amnezia|awg|nft|error|failed" | 
 cd /tmp/routing-openwrt-main
 sh ./uninstall.sh
 ```
+
+
+## v9 notes
+
+- DNSCrypt2/Stubby interactive selection was removed. The installer keeps the router's existing upstream DNS configuration.
+- `install.sh` can now be used as a GitHub raw bootstrap installer.
+- Default lists are loaded from `dagmagnat/routing-openwrt/lists`.

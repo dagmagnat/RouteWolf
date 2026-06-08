@@ -1633,7 +1633,9 @@ dnsmasqfull
 
 dnsmasqconfdir
 
-add_dns_resolver
+# DNSCrypt2/Stubby interactive selection was removed.
+# The script keeps the router's existing upstream DNS settings and only configures dnsmasq/nftset routing.
+# add_dns_resolver
 
 add_getdomains
 

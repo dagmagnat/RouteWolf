@@ -359,3 +359,45 @@ uci show firewall | grep -E "vpn_domains|vpn_subnets|mark_"
 ## Дисклеймер
 
 Проект находится в доработке. Основной проверенный сценарий сейчас — AmneziaWG + IPv4 domain/CIDR routing. Перед использованием на чужих роутерах рекомендуется тестировать на резервной конфигурации OpenWrt и иметь доступ к роутеру не только через VPN.
+
+
+## Установка с GitHub
+
+После публикации репозитория установка одной командой:
+
+```sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
+```
+
+Альтернативно, если репозиторий уже скачан на роутер:
+
+```sh
+cd /tmp/routing-openwrt
+sh ./install.sh
+```
+
+## Списки по умолчанию
+
+Скрипт без ручного выбора берёт списки из этого репозитория:
+
+```txt
+https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
+https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
+https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
+```
+
+`domains-dnsmasq-nfset.lst` может быть как готовым `nftset=/domain/4#inet#fw4#vpn_domains`, так и обычным списком доменов через строки, пробелы или запятые. Скрипт сам нормализует его перед подключением к `dnsmasq`.
+
+`ipv4.lst` должен содержать IPv4/CIDR, например:
+
+```txt
+8.8.8.8
+142.250.0.0/15
+172.217.0.0/16
+```
+
+Если `ipv4.lst` пустой, установка не должна ломаться, но CIDR-маршрутизация работать не будет, потому что в список нечего добавить. Домены при этом продолжают работать через `dnsmasq/nftset`.
+
+## DNSCrypt2/Stubby
+
+Интерактивный выбор DNSCrypt2/Stubby убран. Скрипт оставляет текущие DNS-настройки роутера и настраивает только `dnsmasq`, `nftset`, firewall mark и таблицу маршрутизации `vpn`.
