@@ -1,70 +1,35 @@
 #!/bin/sh /etc/rc.common
 
 START=99
+CACHE_DIR="/etc/domain-routing/lists"
+TMP_DNSMASQ_DIR="/tmp/dnsmasq.d"
+TMP_LIST_DIR="/tmp/lst"
+
+DOMAINS="{{ domain_list_url | default('https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst') }}"
+IPV4="{{ ipv4_list_url | default('https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst') }}"
 
 start () {
-    {% if ansible_distribution_major_version >= "22" and country == "russia-inside" %}
-    DOMAINS=https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/inside-dnsmasq-nfset.lst
-    {% endif %}
-    {% if ansible_distribution_major_version >= "22" and country == "russia-outside" %}
-    DOMAINS=https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/outside-dnsmasq-nfset.lst
-    {% endif %}
-    {% if ansible_distribution_major_version >= "22" and country == "ukraine" %}
-    DOMAINS=https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Ukraine/inside-dnsmasq-nfset.lst
-    {% endif %}
-    {% if ansible_distribution_major_version < "22" and country == "russia-inside" %}
-    DOMAINS=https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/inside-dnsmasq-ipset.lst
-    {% endif %}
-    {% if ansible_distribution_major_version < "22" and country == "russia-outside" %}
-    DOMAINS=https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Russia/outside-dnsmasq-ipset.lst
-    {% endif %}
-    {% if ansible_distribution_major_version < "22" and country == "ukraine" %}
-    DOMAINS=https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Ukraine/inside-dnsmasq-ipset.lst
-    {% endif %}
-    count=0
-    while true; do
-        if curl -m 3 github.com; then
-            curl -f $DOMAINS --output /tmp/dnsmasq.d/domains.lst
-            break
-        else
-            echo "GitHub is not available. Check the internet availability [$count]"
-            count=$((count+1))
-        fi
-    done
+    mkdir -p "$CACHE_DIR" "$TMP_DNSMASQ_DIR" "$TMP_LIST_DIR"
 
-    if dnsmasq --conf-file=/tmp/dnsmasq.d/domains.lst --test 2>&1 | grep -q "syntax check OK"; then
-        /etc/init.d/dnsmasq restart
+    [ -s "$CACHE_DIR/domains.lst" ] && cp "$CACHE_DIR/domains.lst" "$TMP_DNSMASQ_DIR/domains.lst"
+    [ -s "$CACHE_DIR/ipv4.lst" ] && cp "$CACHE_DIR/ipv4.lst" "$TMP_LIST_DIR/ipv4.lst"
+
+    if [ -n "$DOMAINS" ] && curl -L -f --connect-timeout 10 --retry 3 "$DOMAINS" --output "$TMP_DNSMASQ_DIR/domains.lst.new"; then
+        if dnsmasq --conf-file="$TMP_DNSMASQ_DIR/domains.lst.new" --test 2>&1 | grep -q "syntax check OK"; then
+            mv "$TMP_DNSMASQ_DIR/domains.lst.new" "$TMP_DNSMASQ_DIR/domains.lst"
+            cp "$TMP_DNSMASQ_DIR/domains.lst" "$CACHE_DIR/domains.lst"
+            /etc/init.d/dnsmasq restart
+        else
+            rm -f "$TMP_DNSMASQ_DIR/domains.lst.new"
+            echo "Downloaded domain list is invalid; cached list was kept"
+        fi
     fi
 
-    {% if ansible_distribution_major_version >= "22" and (list_ip or list_community) %}
-    echo "Flush sets"
-    nft flush ruleset
+    {% if list_ip %}
+    if [ -n "$IPV4" ] && curl -L -f --connect-timeout 10 --retry 3 "$IPV4" --output "$TMP_LIST_DIR/ipv4.lst.new"; then
+        mv "$TMP_LIST_DIR/ipv4.lst.new" "$TMP_LIST_DIR/ipv4.lst"
+        cp "$TMP_LIST_DIR/ipv4.lst" "$CACHE_DIR/ipv4.lst"
+        /etc/init.d/firewall restart
+    fi
     {% endif %}
-
-    {% if list_subnet or list_ip or list_community %}
-    dir=/tmp/lst
-    mkdir -p $dir
-
-    count=0
-    while true; do
-        if curl -m 3 https://antifilter.download/; then
-            {% if list_subnet %}
-            curl -f -z $dir/subnet.lst https://antifilter.download/list/subnet.lst --output $dir/subnet.lst
-            {% endif %}
-            {% if list_ip %}
-            curl -f -z $dir/ip.lst https://antifilter.download/list/ip.lst --output $dir/ip.lst
-            {% endif %}
-            {% if list_community %}
-            curl -f -z $dir/community.lst https://community.antifilter.download/list/community.lst --output $dir/community.lst
-            {% endif %}  
-            break
-        else
-            echo "antifilter.download is not available. Check the internet availability [$count]"
-            count=$((count+1))
-        fi
-    done
-
-    echo "Firewall restart"
-    /etc/init.d/firewall restart
-    {% endif %}  
 }

@@ -2,12 +2,18 @@
 
 #set -x
 
-# User-maintained list URLs used by this fork.
-# The installer no longer asks for list URLs: it installs these defaults automatically.
-# Change these values in your fork before publishing, or edit /etc/domain-routing-user.conf after install.
-DEFAULT_DOMAIN_LIST_URL="https://raw.githubusercontent.com/dagmagnat/Routing-OpenWrt/main/domains/my-domains.lst"
-DEFAULT_IPV4_LIST_URL="https://raw.githubusercontent.com/dagmagnat/Routing-OpenWrt/main/domains/my-ip.lst"
-DEFAULT_IPV6_LIST_URL=""
+# Project defaults for dagmagnat/routing-openwrt.
+# Lists are taken from the lists/ directory of this GitHub repository.
+# The installer does not ask for custom list URLs by default.
+# To make your own fork, change these values before publishing.
+DEFAULT_PROJECT_REPO="dagmagnat/routing-openwrt"
+DEFAULT_DOMAIN_LIST_URL="https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst"
+DEFAULT_IPV4_LIST_URL="https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst"
+DEFAULT_IPV6_LIST_URL="https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst"
+
+# Default list modes. 1 = use, 0 = skip.
+DEFAULT_USE_DOMAIN_LIST="1"
+DEFAULT_USE_IPV4_LIST="1"
 DEFAULT_IPV6_SUPPORT="0"
 
 clear_screen() { command -v clear >/dev/null 2>&1 && clear; }
@@ -962,21 +968,38 @@ add_packages() {
 add_getdomains() {
     clear_screen
     echo "Domain/IP lists / Списки доменов и IP"
-    echo "This fork uses the maintainer list URLs automatically."
-    echo "Этот форк автоматически использует списки из репозитория автора форка."
-    echo "Domain list: $DEFAULT_DOMAIN_LIST_URL"
-    echo "IPv4 CIDR list: $DEFAULT_IPV4_LIST_URL"
-    if [ "${DEFAULT_IPV6_SUPPORT:-0}" = "1" ]; then
-        echo "IPv6 support: enabled / включено"
-        echo "IPv6 CIDR list: ${DEFAULT_IPV6_LIST_URL:-not set}"
+    echo "Project / Проект: ${DEFAULT_PROJECT_REPO:-dagmagnat/routing-openwrt}"
+    echo "This fork uses repository lists automatically. No manual URL input is required."
+    echo "Этот форк автоматически использует списки из папки lists/ репозитория. Ручной ввод URL не нужен."
+
+    if [ "${DEFAULT_USE_DOMAIN_LIST:-1}" = "1" ]; then
+        echo "Domain list: enabled / включён"
+        echo "  $DEFAULT_DOMAIN_LIST_URL"
+        DOMAINS_URL="$DEFAULT_DOMAIN_LIST_URL"
     else
-        echo "IPv6 support: disabled / выключено; AAAA DNS answers will be filtered"
+        echo "Domain list: disabled / выключен"
+        DOMAINS_URL=""
     fi
 
-    DOMAINS_URL="$DEFAULT_DOMAIN_LIST_URL"
-    IPV4_URL="$DEFAULT_IPV4_LIST_URL"
-    IPV6_URL="$DEFAULT_IPV6_LIST_URL"
+    if [ "${DEFAULT_USE_IPV4_LIST:-1}" = "1" ]; then
+        echo "IPv4 CIDR list: enabled / включён"
+        echo "  $DEFAULT_IPV4_LIST_URL"
+        IPV4_URL="$DEFAULT_IPV4_LIST_URL"
+    else
+        echo "IPv4 CIDR list: disabled / выключен"
+        IPV4_URL=""
+    fi
+
     IPV6_SUPPORT="${DEFAULT_IPV6_SUPPORT:-0}"
+    if [ "$IPV6_SUPPORT" = "1" ]; then
+        echo "IPv6 support: enabled / включено"
+        echo "IPv6 CIDR list:"
+        echo "  $DEFAULT_IPV6_LIST_URL"
+        IPV6_URL="$DEFAULT_IPV6_LIST_URL"
+    else
+        echo "IPv6 support: disabled / выключено; AAAA DNS answers will be filtered"
+        IPV6_URL=""
+    fi
 
     remove_firewall_section_by_name() {
         type="$1"
