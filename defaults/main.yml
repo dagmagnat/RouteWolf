@@ -1,0 +1,19 @@
+---
+  # routing-openwrt defaults
+  # This fork uses repository-maintained lists instead of country modes.
+  list_domains: true
+  list_subnet: false
+  list_ip: true
+  list_community: false
+
+  domain_list_url: https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
+  ipv4_list_url: https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
+  ipv6_list_url: https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
+  ipv6_support: false
+
+  tunnel: wg
+  dns_encrypt: false
+  nano: true
+  wg_access: false
+
+  wg_listen_port: 51820

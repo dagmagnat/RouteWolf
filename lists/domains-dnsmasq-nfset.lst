@@ -1,0 +1,6 @@
+# Example dnsmasq nftset list for OpenWrt 23/24
+# Replace/add your domains and publish this file on GitHub raw.
+# Format example used by this project:
+server=/example.com/#
+nftset=/example.com/4#inet#fw4#vpn_domains
+nftset=/example.com/6#inet#fw4#vpn_domains6
