@@ -1,6 +1,7 @@
 #!/bin/sh
 
 #set -x
+PROJECT_VERSION="v10"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are taken from the lists/ directory of this GitHub repository.
@@ -965,6 +966,63 @@ add_packages() {
     done
 }
 
+
+install_management_commands() {
+    mkdir -p /usr/sbin
+    cat << 'EOF' > /usr/sbin/routing-openwrt-update.sh
+#!/bin/sh
+# Update routing-openwrt from GitHub without deleting the current tunnel config.
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
+EOF
+    chmod +x /usr/sbin/routing-openwrt-update.sh
+
+    cat << 'EOF' > /usr/sbin/routing-openwrt-uninstall.sh
+#!/bin/sh
+# Remove routing-openwrt rules, lists, cron and helper scripts.
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
+EOF
+    chmod +x /usr/sbin/routing-openwrt-uninstall.sh
+}
+
+update_existing_installation() {
+    clear_screen
+    echo "routing-openwrt update mode / режим обновления routing-openwrt"
+    echo "This updates project scripts, list URLs, cron, firewall marks and cached lists."
+    echo "Tunnel configuration is kept. / Конфиг туннеля сохраняется."
+
+    # Detect existing tunnel only for the policy route helper.
+    if [ "$(uci -q get network.awg0.proto 2>/dev/null)" = "amneziawg" ]; then
+        TUNNEL="awg"
+        route_vpn
+    elif [ "$(uci -q get network.wg0.proto 2>/dev/null)" = "wireguard" ]; then
+        TUNNEL="wg"
+        route_vpn
+    elif [ -f /etc/domain-routing-route.conf ]; then
+        . /etc/domain-routing-route.conf
+        case "$VPN_ROUTE_DEV" in
+            awg0) TUNNEL="awg"; route_vpn ;;
+            wg0) TUNNEL="wg"; route_vpn ;;
+            tun0) TUNNEL="tun2socks"; route_vpn ;;
+        esac
+    else
+        echo "Warning: no existing awg0/wg0/tun0 route config found. Lists/firewall will be updated, but tunnel route may need reinstall."
+    fi
+
+    dnsmasqfull
+    dnsmasqconfdir
+    add_mark
+    add_set
+    install_management_commands
+    add_getdomains
+
+    /etc/init.d/firewall restart >/dev/null 2>&1 || true
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+    /etc/init.d/vpnroute start >/dev/null 2>&1 || true
+
+    echo "Update done / Обновление завершено"
+    echo "Status command / Проверка: /usr/sbin/domain-routing-status.sh"
+}
+
 add_getdomains() {
     clear_screen
     echo "Domain/IP lists / Списки доменов и IP"
@@ -1615,6 +1673,11 @@ fi
 
 printf "\033[31;1mAll actions performed here cannot be rolled back automatically.\033[0m\n"
 
+if [ "$1" = "--update" ] || [ "${ROUTING_OPENWRT_UPDATE_ONLY:-0}" = "1" ]; then
+    update_existing_installation
+    exit 0
+fi
+
 check_repo
 
 add_packages
@@ -1636,6 +1699,8 @@ dnsmasqconfdir
 # DNSCrypt2/Stubby interactive selection was removed.
 # The script keeps the router's existing upstream DNS settings and only configures dnsmasq/nftset routing.
 # add_dns_resolver
+
+install_management_commands
 
 add_getdomains
 

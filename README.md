@@ -401,3 +401,34 @@ https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
 ## DNSCrypt2/Stubby
 
 Интерактивный выбор DNSCrypt2/Stubby убран. Скрипт оставляет текущие DNS-настройки роутера и настраивает только `dnsmasq`, `nftset`, firewall mark и таблицу маршрутизации `vpn`.
+
+
+## Обновление проекта
+
+Чтобы обновить скрипты проекта с GitHub без удаления текущего туннеля AmneziaWG/WireGuard:
+
+```sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
+```
+
+После установки также доступна локальная команда:
+
+```sh
+/usr/sbin/routing-openwrt-update.sh
+```
+
+Режим обновления сохраняет текущий `awg0`/`wg0`, обновляет служебные скрипты, cron, правила маркировки, маршрутизацию и заново скачивает списки из `lists/`.
+
+## Удаление
+
+```sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
+```
+
+После установки также доступна локальная команда:
+
+```sh
+/usr/sbin/routing-openwrt-uninstall.sh
+```
+
+Удаление убирает правила проекта, списки, cron, helper-скрипты и таблицу `vpn`. Сам туннель и пакеты AmneziaWG/WireGuard намеренно не удаляются автоматически, чтобы не сломать пользовательскую конфигурацию.

@@ -155,3 +155,30 @@ sh ./uninstall.sh
 - DNSCrypt2/Stubby interactive selection was removed. The installer keeps the router's existing upstream DNS configuration.
 - `install.sh` can now be used as a GitHub raw bootstrap installer.
 - Default lists are loaded from `dagmagnat/routing-openwrt/lists`.
+
+
+## Update
+
+Update project scripts from GitHub without deleting the current AmneziaWG/WireGuard tunnel:
+
+```sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
+```
+
+After installation, this local command is also available:
+
+```sh
+/usr/sbin/routing-openwrt-update.sh
+```
+
+## Uninstall
+
+```sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
+```
+
+After installation, this local command is also available:
+
+```sh
+/usr/sbin/routing-openwrt-uninstall.sh
+```

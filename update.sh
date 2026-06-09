@@ -1,25 +1,23 @@
 #!/bin/sh
-# routing-openwrt installer/bootstrapper.
+# Update routing-openwrt from GitHub without deleting current VPN tunnel config.
 # Usage:
-#   wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
+#   wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
 
 REPO="dagmagnat/routing-openwrt"
 BRANCH="${ROUTING_OPENWRT_BRANCH:-main}"
-TMP_DIR="/tmp/routing-openwrt"
-ZIP_FILE="/tmp/routing-openwrt.zip"
+TMP_DIR="/tmp/routing-openwrt-update"
+ZIP_FILE="/tmp/routing-openwrt-update.zip"
 ZIP_URL="https://github.com/${REPO}/archive/refs/heads/${BRANCH}.zip"
 
 SELF_NAME="$(basename "$0" 2>/dev/null)"
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 
-# Local mode only when this real file is executed from an unpacked repo.
-# When this script is piped to sh, $0 is usually "sh" or "ash", so we must download from GitHub.
-if [ "$SELF_NAME" = "install.sh" ] && [ -f "$DIR/getdomains-install.sh" ]; then
+if [ "$SELF_NAME" = "update.sh" ] && [ -f "$DIR/getdomains-install.sh" ]; then
     chmod +x "$DIR/getdomains-install.sh" 2>/dev/null || true
-    exec sh "$DIR/getdomains-install.sh" "$@"
+    exec sh "$DIR/getdomains-install.sh" --update
 fi
 
-echo "routing-openwrt: downloading ${REPO}@${BRANCH}..."
+echo "routing-openwrt: downloading update ${REPO}@${BRANCH}..."
 
 if ! command -v unzip >/dev/null 2>&1 || ! command -v wget >/dev/null 2>&1; then
     opkg update
@@ -28,7 +26,6 @@ if ! command -v unzip >/dev/null 2>&1 || ! command -v wget >/dev/null 2>&1; then
 fi
 
 rm -rf "$TMP_DIR" "$ZIP_FILE" "/tmp/routing-openwrt-${BRANCH}"
-
 wget --no-check-certificate -O "$ZIP_FILE" "$ZIP_URL" || wget -O "$ZIP_FILE" "$ZIP_URL" || exit 1
 unzip -o "$ZIP_FILE" -d /tmp >/dev/null || exit 1
 
@@ -40,4 +37,4 @@ fi
 
 cd "$TMP_DIR" || exit 1
 chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh 2>/dev/null || true
-exec sh ./getdomains-install.sh "$@"
+exec sh ./getdomains-install.sh --update
