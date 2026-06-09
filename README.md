@@ -432,3 +432,29 @@ wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/rou
 ```
 
 Удаление убирает правила проекта, списки, cron, helper-скрипты и таблицу `vpn`. Сам туннель и пакеты AmneziaWG/WireGuard намеренно не удаляются автоматически, чтобы не сломать пользовательскую конфигурацию.
+
+## Update and uninstall
+
+Update installed scripts/rules/lists without deleting the existing AWG/WG tunnel:
+
+```sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
+```
+
+Uninstall routing rules, cron, cached lists and helper scripts without deleting the VPN tunnel itself:
+
+```sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
+```
+
+The installer also creates local helper commands:
+
+```sh
+/usr/sbin/routing-openwrt-update.sh
+/usr/sbin/routing-openwrt-uninstall.sh
+/usr/sbin/domain-routing-status.sh
+```
+
+### DNS note
+
+The project redirects ordinary LAN DNS traffic on port 53 to the router. This is required so `dnsmasq` can resolve domains and fill `nftset` sets. It cannot intercept DNS-over-HTTPS or Android/iOS Private DNS, so those options must be disabled on clients when testing domain-based routing.

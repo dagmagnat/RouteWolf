@@ -326,8 +326,14 @@ echo ""
 echo "=== lists ==="
 ls -lah /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst 2>/dev/null || true
 echo ""
+echo "=== firewall DNS redirect ==="
+uci show firewall 2>/dev/null | grep -E "routing_openwrt_force_dns|src_dport='53'|dest_port='53'|dest_ip" || true
+echo ""
 echo "=== firewall marks ==="
 nft list ruleset 2>/dev/null | grep -E "vpn_domains|vpn_subnets|mark_domains|mark_subnet" -n || true
+echo ""
+echo "=== quick checks ==="
+echo "If mark_domains/mark_subnet counters stay at 0 while opening a site from LAN, the client is probably using DoH/Private DNS/cache or not going through br-lan."
 EOF
     chmod +x /usr/sbin/domain-routing-status.sh
 
@@ -967,6 +973,29 @@ add_packages() {
 }
 
 
+
+ensure_lan_dns_redirect() {
+    # Force ordinary LAN DNS (TCP/UDP 53) to the router so dnsmasq can fill nftsets.
+    # This does not affect DoH/DoT; users must disable Private DNS/Secure DNS in browsers/devices.
+    LAN_IP=$(uci -q get network.lan.ipaddr 2>/dev/null)
+    [ -z "$LAN_IP" ] && LAN_IP="192.168.1.1"
+
+    delete_uci_sections_by_name firewall redirect routing_openwrt_force_dns
+
+    uci add firewall redirect >/dev/null
+    uci set firewall.@redirect[-1].name='routing_openwrt_force_dns'
+    uci set firewall.@redirect[-1].src='lan'
+    uci add_list firewall.@redirect[-1].proto='tcp'
+    uci add_list firewall.@redirect[-1].proto='udp'
+    uci set firewall.@redirect[-1].src_dport='53'
+    uci set firewall.@redirect[-1].target='DNAT'
+    uci set firewall.@redirect[-1].dest_ip="$LAN_IP"
+    uci set firewall.@redirect[-1].dest_port='53'
+    uci set firewall.@redirect[-1].family='ipv4'
+    uci commit firewall
+    echo "LAN DNS redirect enabled / DNS LAN перенаправляется на роутер: $LAN_IP:53"
+}
+
 install_management_commands() {
     mkdir -p /usr/sbin
     cat << 'EOF' > /usr/sbin/routing-openwrt-update.sh
@@ -1010,6 +1039,7 @@ update_existing_installation() {
 
     dnsmasqfull
     dnsmasqconfdir
+    ensure_lan_dns_redirect
     add_mark
     add_set
     install_management_commands
@@ -1695,6 +1725,8 @@ add_set
 dnsmasqfull
 
 dnsmasqconfdir
+
+ensure_lan_dns_redirect
 
 # DNSCrypt2/Stubby interactive selection was removed.
 # The script keeps the router's existing upstream DNS settings and only configures dnsmasq/nftset routing.

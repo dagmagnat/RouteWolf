@@ -17,6 +17,13 @@ rm -rf /etc/domain-routing
 
 echo "Чистим firewall, раз раз 🍴"
 
+# Remove LAN DNS redirect created by routing-openwrt
+while true; do
+    redirect_id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@redirect\[\([0-9]*\)\]\.name='routing_openwrt_force_dns'.*/\1/p" | head -n 1)
+    [ -z "$redirect_id" ] && break
+    uci -q delete firewall.@redirect[$redirect_id]
+done
+
 ipset_id=$(uci show firewall | grep -E '@ipset.*name=.vpn_domains.' | awk -F '[][{}]' '{print $2}' | head -n 1)
 if [ ! -z "$ipset_id" ]; then
     while uci -q delete firewall.@ipset[$ipset_id]; do :; done
