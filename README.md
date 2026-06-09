@@ -1,307 +1,154 @@
 # routing-openwrt
 
-`routing-openwrt` настраивает OpenWrt так, чтобы выбранные домены шли через VPN/туннель, а обычный интернет продолжал работать через основной WAN.
+Простая маршрутизация выбранных доменов через VPN на OpenWrt.
 
-Это не проект с нуля. Это изменённый форк проекта [`itdoginfo/domain-routing-openwrt`](https://github.com/itdoginfo/domain-routing-openwrt).
+Проект является форком и доработкой оригинального проекта:
+https://github.com/itdoginfo/domain-routing-openwrt
 
-## Что делает
+## Что делает проект
 
-Проект использует `dnsmasq-full` + `nftset` + policy routing:
+`routing-openwrt` скачивает список доменов с GitHub, подключает его к `dnsmasq`/`nftset` и отправляет только эти домены через выбранный туннель.
+Обычный интернет, который не входит в список, остаётся через обычный WAN.
 
-```txt
-домен из списка → dnsmasq получает IP → IP попадает в nftset → firewall ставит mark 0x1 → table vpn → awg0/wg0/tun0
-```
+Сейчас автоматически поддерживаются:
 
-По умолчанию включена только маршрутизация доменов. IPv4 CIDR, IPv6 и принудительный DNS redirect выключены, чтобы не ломать обычный интернет.
+- WireGuard
+- AmneziaWG / Amnezia WireGuard
+- OpenVPN
 
-Если VPN/сервер/интерфейс не работает, проект не должен ломать обычный WAN-интернет. Домены из списка в таком случае могут временно не маршрутизироваться через VPN, но весь остальной интернет должен работать штатно.
+Sing-box запланирован отдельно. При выборе Sing-box установщик проверяет ресурсы роутера и не продолжает установку, если памяти мало.
+`tun2socks` убран из меню, чтобы не путать пользователей.
 
-## Что сейчас проверялось
+## Списки
 
-Сейчас установщик автоматически настраивает только:
+По умолчанию списки берутся отсюда:
 
-- WireGuard;
-- AmneziaWG / AmneziaWG 2.0.
-
-В меню также оставлены будущие пункты `OpenVPN`, `Sing-box` и `tun2socks`, но сейчас они помечены как `позже` и не запускают установку. Это сделано специально, чтобы пользователь видел план развития проекта, но скрипт не ломал роутер неподготовленной логикой.
-
-Проверялось в первую очередь:
-
-- OpenWrt 24.x;
-- `dnsmasq-full` + `nftset`;
-- AmneziaWG / AmneziaWG 2.0;
-- IPv4 domain routing.
-
-Требует дополнительной проверки:
-
-- обычный WireGuard на разных сборках;
-- OpenVPN/tun;
-- Sing-box/tun2socks;
-- IPv4 CIDR routing;
-- полноценный IPv6 routing;
-- OpenWrt 25.12+ с `apk`.
-
-OpenWrt 24.10 и старее используют `opkg`. OpenWrt 25.12 и новее используют `apk`. Установочные скрипты проекта умеют использовать оба варианта, но OpenWrt 25.12+ ещё нужно проверять на реальном роутере.
-
-## Списки по умолчанию
-
-Сейчас проект берёт списки отсюда:
-
-```txt
+```text
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
 ```
 
-По умолчанию реально используется только файл доменов:
+Основной список — домены:
 
-```txt
+```text
 lists/domains-dnsmasq-nfset.lst
 ```
 
-IPv4 CIDR выключен по умолчанию. Чтобы включить его в своём форке, измените в `getdomains-install.sh`:
+Можно хранить домены простым списком:
 
-```sh
-DEFAULT_USE_IPV4_LIST="1"
-```
-
-IPv6 выключен по умолчанию. Чтобы включить его в своём форке:
-
-```sh
-DEFAULT_IPV6_SUPPORT="1"
-```
-
-### Если списки будут в отдельном репозитории
-
-Можно создать отдельный репозиторий, например:
-
-```txt
-dagmagnat/routing-openwrt-lists
-```
-
-И хранить там:
-
-```txt
-lists/domains-dnsmasq-nfset.lst
-lists/ipv4.lst
-lists/ipv6.lst
-```
-
-Тогда в `getdomains-install.sh` достаточно изменить:
-
-```sh
-DEFAULT_LISTS_REPO="dagmagnat/routing-openwrt-lists"
-```
-
-## Формат списка доменов
-
-Поддерживаются два формата.
-
-Обычный список доменов:
-
-```txt
+```text
 youtube.com
 youtu.be
 googlevideo.com
-ytimg.com
 ```
 
-Можно писать построчно, через пробел или через запятую. Скрипт сам преобразует домены в формат `dnsmasq/nftset`.
+Установщик сам преобразует их в формат `dnsmasq/nftset`.
 
-Также можно сразу использовать готовый формат:
-
-```txt
-nftset=/youtube.com/4#inet#fw4#vpn_domains
-nftset=/youtu.be/4#inet#fw4#vpn_domains
-nftset=/googlevideo.com/4#inet#fw4#vpn_domains
-nftset=/ytimg.com/4#inet#fw4#vpn_domains
-```
-
-## Формат IPv4 CIDR
-
-Файл:
-
-```txt
-lists/ipv4.lst
-```
-
-Пример:
-
-```txt
-8.8.8.8
-13.69.0.0/16
-142.250.0.0/15
-172.217.0.0/16
-```
-
-IPv4 CIDR лучше включать только после того, как доменная маршрутизация уже работает.
+IPv4 CIDR и IPv6 по умолчанию выключены. Их лучше включать позже, когда доменная маршрутизация уже проверена.
 
 ## Установка с GitHub
-
-Рекомендуемый способ, чтобы установщик нормально задавал вопросы:
-
-```sh
-cd /tmp
-rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main /tmp/routing-openwrt.zip
-wget --no-check-certificate -O /tmp/routing-openwrt.zip https://github.com/dagmagnat/routing-openwrt/archive/refs/heads/main.zip
-unzip -o /tmp/routing-openwrt.zip -d /tmp
-mv /tmp/routing-openwrt-main /tmp/routing-openwrt 2>/dev/null
-cd /tmp/routing-openwrt
-chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
-sh ./install.sh
-```
-
-Если нужно принудительно заново настроить туннель и удалить старый `awg0/wg0` проекта:
-
-```sh
-sh ./install.sh --reinstall
-```
-
-Быстрая установка одной командой тоже поддерживается:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
 ```
 
-Но если нужно вводить большой конфиг AmneziaWG, удобнее использовать рекомендуемый способ выше.
+При установке сначала выбирается язык:
 
-## Ручная установка из ZIP-архива
-
-Скопируйте архив проекта на роутер в `/tmp`, например:
-
-```txt
-/tmp/routing-openwrt-v16.zip
+```text
+1) English
+2) Русский
 ```
 
-Потом выполните:
-
-```sh
-cd /tmp
-rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main
-unzip -o /tmp/routing-openwrt-v16.zip -d /tmp
-cd /tmp/routing-openwrt
-chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
-sh ./install.sh
-```
-
-Если после распаковки папка называется иначе, найдите её:
-
-```sh
-ls -lah /tmp | grep routing-openwrt
-```
+После этого всё меню будет на выбранном языке.
 
 ## Обновление проекта
-
-Обновить скрипты проекта с GitHub без полной переустановки туннеля:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
 ```
 
-Локальная команда после установки:
+Обновление не должно удалять существующий VPN-конфиг. Оно обновляет скрипты, правила маршрутизации, cron и служебные файлы.
 
-```sh
-/usr/sbin/routing-openwrt-update.sh
-```
+## Удаление
 
-## Удаление проекта
-
-Удалить правила маршрутизации, cron, списки, init-скрипты и настройки проекта:
+Обычное удаление:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
 ```
 
-Локальная команда после установки:
-
-```sh
-/usr/sbin/routing-openwrt-uninstall.sh
-```
-
-Обычное удаление оставляет сам VPN-туннель `awg0/wg0`, чтобы случайно не удалить пользовательский конфиг.
-
-Полная очистка с удалением `awg0/wg0`, если нужно поставить всё с нуля:
+Полная очистка проекта:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh -s -- --purge
 ```
 
-Если нужно удалить вообще всё старое и поставить с нуля, используйте `--purge`, затем установку с `--reinstall`.
+## Ручная установка ZIP
+
+Если GitHub-загрузка не работает, можно скачать архив проекта и загрузить его на роутер.
+
+Рекомендуемая папка для временной установки:
+
+```text
+/tmp
+```
+
+Пример:
+
+```sh
+cd /tmp
+rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main /tmp/routing-openwrt.zip
+unzip -o /tmp/routing-openwrt.zip -d /tmp
+mv /tmp/routing-openwrt-main /tmp/routing-openwrt 2>/dev/null || true
+cd /tmp/routing-openwrt
+chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
+sh ./install.sh --reinstall
+```
+
+`/tmp` очищается после перезагрузки, но это нормально: установщик копирует нужные файлы в `/usr/sbin`, `/etc/init.d` и `/etc/domain-routing`.
+
+## OpenVPN
+
+При выборе OpenVPN есть два варианта:
+
+1. вставить полный `.ovpn` конфиг прямо в установщик;
+2. создать OpenVPN вручную в LuCI, затем вернуться в установщик.
+
+Если выбран ручной режим, установщик проверяет наличие `tun`-интерфейса. Если OpenVPN ещё не создан или не запущен, он покажет ошибку и предложит проверить ещё раз.
 
 ## Автообновление списков
 
-Списки обновляются автоматически каждый день в 02:00:
+Списки обновляются каждый день:
 
-```cron
-0 2 * * * /etc/init.d/getdomains start
+```text
+02:00 — обновление списков
+03:15 — проверка маршрутов, dnsmasq и VPN-таблицы
 ```
 
-Проверить cron:
+Если домен удалён из GitHub-списка, после обновления он удалится и на роутере. Локальный список заменяется целиком.
 
-```sh
-cat /etc/crontabs/root | grep getdomains
-/etc/init.d/cron status
-```
+Если GitHub временно недоступен, используется последний рабочий кеш:
 
-Обновить списки вручную:
-
-```sh
-/etc/init.d/getdomains start
-```
-
-Последняя рабочая версия списков хранится здесь:
-
-```txt
+```text
 /etc/domain-routing/lists
 ```
 
-Если GitHub временно недоступен, используется кеш.
-
-## Проверка работы
-
-Статус:
+## Проверка
 
 ```sh
 /usr/sbin/domain-routing-status.sh
-```
-
-Основные проверки:
-
-```sh
 ip route show table vpn
-ip rule show
-nft list ruleset | grep -E "vpn_domains|mark_domains|vpn_subnets|mark_subnet" -n
-nft list set inet fw4 vpn_domains | head -n 50
+ip rule show | grep fwmark
+nft list ruleset | grep mark_domains
 ```
 
-Проверка DNS/nftset:
+Если VPN отключить, обычный интернет должен продолжить работать через WAN. Это режим fail-open.
+
+## Важно
+
+После установки задайте пароль root:
 
 ```sh
-nslookup youtube.com 192.168.1.1
-nft list set inet fw4 vpn_domains | head -n 50
+passwd
 ```
-
-Если `youtube.com` появился в `vpn_domains` как IP-адрес, dnsmasq/nftset работает.
-
-Если пакеты не маркируются, проверьте, что клиент использует DNS роутера, а не Private DNS / Secure DNS / DNS-over-HTTPS.
-
-## Важно про AmneziaWG-конфиги
-
-Можно вставлять полный конфиг WireGuard/AmneziaWG. После вставки введите отдельной строкой:
-
-```txt
-END
-```
-
-Для AmneziaWG 2.0 поддерживаются параметры вроде `Jc`, `Jmin`, `Jmax`, `S1`, `S2`, `H1`–`H4`, `S3`, `S4`, `I1`–`I5`.
-
-Если вы уже публиковали `PrivateKey` или `PresharedKey` в чате/логе, лучше создать новый VPN-конфиг.
-
-
-### Note about GitHub download on some routers
-
-Some OpenWrt builds have unstable `wget` behavior on GitHub redirects. The installer uses `codeload.github.com` directly and falls back to `curl`/`wget` where available.
-
-### Note about `opkg update` warnings
-
-If one OpenWrt feed temporarily fails but the required packages are already installed or available from other feeds, the installer continues instead of stopping immediately.

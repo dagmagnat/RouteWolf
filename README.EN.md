@@ -1,75 +1,63 @@
 # routing-openwrt
 
-`routing-openwrt` configures OpenWrt to route selected domains through a VPN/tunnel while keeping normal internet traffic on the regular WAN route.
+Simple domain-based VPN routing for OpenWrt.
 
-This is not a project written from scratch. It is a modified fork of [`itdoginfo/domain-routing-openwrt`](https://github.com/itdoginfo/domain-routing-openwrt).
+This project is a fork and modification of:
+https://github.com/itdoginfo/domain-routing-openwrt
 
-## Default behavior
+## What it does
 
-Safe defaults:
+`routing-openwrt` downloads domain lists from GitHub, connects them to `dnsmasq`/`nftset`, and routes only matched domains through the selected tunnel.
+Normal traffic stays on the regular WAN route.
 
-- domain routing: enabled;
-- IPv4 CIDR routing: disabled;
-- IPv6 routing: disabled;
-- forced DNS redirect: disabled;
-- fail mode: fail-open, so normal WAN internet should not be broken if the VPN is down.
+Currently supported automatically:
 
-The installer currently configures WireGuard and AmneziaWG automatically. OpenVPN, Sing-box and tun2socks are kept in the menu as planned future items, but they are disabled for now and do not start unfinished setup logic.
+- WireGuard
+- AmneziaWG / Amnezia WireGuard
+- OpenVPN
 
-The main tested scenario is OpenWrt 24.x + dnsmasq-full/nftset + AmneziaWG/AmneziaWG 2.0 + IPv4 domain routing. WireGuard, OpenVPN/tun, Sing-box/tun2socks, CIDR routing, IPv6 routing and OpenWrt 25.12+ with apk still need more real-router testing.
+Sing-box is planned. The installer checks router resources before allowing Sing-box work.
+`tun2socks` is removed from the menu to avoid confusion.
 
-OpenWrt 24.10 and older use `opkg`. OpenWrt 25.12 and newer use `apk`. The installer supports both package managers.
+## Lists
 
-## Default lists
+Default lists:
 
-```txt
+```text
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
 ```
 
-By default, only the domain list is used. IPv4 CIDR and IPv6 are disabled for safety.
+Main list:
 
-If you move the lists to a separate repository, edit `DEFAULT_LISTS_REPO` in `getdomains-install.sh`.
+```text
+lists/domains-dnsmasq-nfset.lst
+```
+
+A simple domain list is supported:
+
+```text
+youtube.com
+youtu.be
+googlevideo.com
+```
+
+The installer converts it to `dnsmasq/nftset` format automatically.
+
+IPv4 CIDR and IPv6 are disabled by default.
 
 ## Install from GitHub
-
-Recommended interactive install:
-
-```sh
-cd /tmp
-rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main /tmp/routing-openwrt.zip
-wget --no-check-certificate -O /tmp/routing-openwrt.zip https://github.com/dagmagnat/routing-openwrt/archive/refs/heads/main.zip
-unzip -o /tmp/routing-openwrt.zip -d /tmp
-mv /tmp/routing-openwrt-main /tmp/routing-openwrt 2>/dev/null
-cd /tmp/routing-openwrt
-chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
-sh ./install.sh
-```
-
-Force tunnel reconfiguration:
-
-```sh
-sh ./install.sh --reinstall
-```
-
-Quick install:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
 ```
 
-## Manual ZIP install
+The installer first asks for a language:
 
-Copy the ZIP to `/tmp`, for example `/tmp/routing-openwrt-v16.zip`, then run:
-
-```sh
-cd /tmp
-rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main
-unzip -o /tmp/routing-openwrt-v16.zip -d /tmp
-cd /tmp/routing-openwrt
-chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
-sh ./install.sh
+```text
+1) English
+2) Русский
 ```
 
 ## Update
@@ -78,54 +66,57 @@ sh ./install.sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
 ```
 
-Local command after installation:
-
-```sh
-/usr/sbin/routing-openwrt-update.sh
-```
-
 ## Uninstall
+
+Normal uninstall:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
 ```
 
-Local command after installation:
-
-```sh
-/usr/sbin/routing-openwrt-uninstall.sh
-```
-
-Normal uninstall keeps the existing `awg0/wg0` tunnel. Full purge:
+Full purge:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh -s -- --purge
 ```
 
-## List format
+## Manual ZIP install
 
-Domain list can be plain domains:
+Upload the ZIP to `/tmp` and run:
 
-```txt
-youtube.com
-youtu.be
-googlevideo.com
-ytimg.com
+```sh
+cd /tmp
+rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main /tmp/routing-openwrt.zip
+unzip -o /tmp/routing-openwrt.zip -d /tmp
+mv /tmp/routing-openwrt-main /tmp/routing-openwrt 2>/dev/null || true
+cd /tmp/routing-openwrt
+chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
+sh ./install.sh --reinstall
 ```
 
-or dnsmasq/nftset format:
+`/tmp` is temporary; the installer copies required files into `/usr/sbin`, `/etc/init.d`, and `/etc/domain-routing`.
 
-```txt
-nftset=/youtube.com/4#inet#fw4#vpn_domains
-nftset=/youtu.be/4#inet#fw4#vpn_domains
+## OpenVPN
+
+OpenVPN has two modes:
+
+1. paste a full `.ovpn` config;
+2. create OpenVPN manually in LuCI, then let the installer detect the `tun` interface.
+
+## Auto-update
+
+Lists are refreshed every day:
+
+```text
+02:00 — list update
+03:15 — route/dnsmasq health check
 ```
 
-IPv4 CIDR format:
+The local list is replaced completely, so removed GitHub domains are removed from the router too.
+If GitHub is unavailable, the last working cache is used from:
 
-```txt
-8.8.8.8
-13.69.0.0/16
-142.250.0.0/15
+```text
+/etc/domain-routing/lists
 ```
 
 ## Check
@@ -133,16 +124,8 @@ IPv4 CIDR format:
 ```sh
 /usr/sbin/domain-routing-status.sh
 ip route show table vpn
-ip rule show
-nft list set inet fw4 vpn_domains | head -n 50
-nslookup youtube.com 192.168.1.1
+ip rule show | grep fwmark
+nft list ruleset | grep mark_domains
 ```
 
-
-### Note about GitHub download on some routers
-
-Some OpenWrt builds have unstable `wget` behavior on GitHub redirects. The installer uses `codeload.github.com` directly and falls back to `curl`/`wget` where available.
-
-### Note about `opkg update` warnings
-
-If one OpenWrt feed temporarily fails but the required packages are already installed or available from other feeds, the installer continues instead of stopping immediately.
+Default mode is fail-open: if VPN goes down, normal WAN internet should continue working.

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v18"
+PROJECT_VERSION="v21"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -25,11 +25,47 @@ DEFAULT_FAIL_MODE="open"
 FORCE_REINSTALL="0"
 [ "$1" = "--reinstall" ] && FORCE_REINSTALL="1"
 
+# Colors are used only for orientation during install.
+# Green = success/active, yellow = warning/planned, red = cancel/error/delete, blue = section.
+C_RESET="\033[0m"
+C_RED="\033[31;1m"
+C_GREEN="\033[32;1m"
+C_YELLOW="\033[33;1m"
+C_BLUE="\033[34;1m"
+C_CYAN="\033[36;1m"
+
 clear_screen() { command -v clear >/dev/null 2>&1 && clear; }
+
+is_ru() { [ "${ROUTING_OPENWRT_LANG:-en}" = "ru" ]; }
+msg() { if is_ru; then echo "$2"; else echo "$1"; fi; }
+msgc() {
+    _color="$1"; _en="$2"; _ru="$3"
+    if is_ru; then printf "%b%s%b\n" "$_color" "$_ru" "$C_RESET"; else printf "%b%s%b\n" "$_color" "$_en" "$C_RESET"; fi
+}
+prompt() { if is_ru; then printf "%s" "$2"; else printf "%s" "$1"; fi; }
+
+choose_language() {
+    [ -n "${ROUTING_OPENWRT_LANG:-}" ] && return
+    clear_screen
+    printf "%bRouting OpenWrt%b\n" "$C_BLUE" "$C_RESET"
+    echo "1) English"
+    echo "2) Русский"
+    while true; do
+        printf "Select language / Выберите язык [2]: "
+        read -r RO_LANG_CHOICE
+        RO_LANG_CHOICE=${RO_LANG_CHOICE:-2}
+        case "$RO_LANG_CHOICE" in
+            1|en|EN|english|English) ROUTING_OPENWRT_LANG="en"; export ROUTING_OPENWRT_LANG; break ;;
+            2|ru|RU|русский|Русский) ROUTING_OPENWRT_LANG="ru"; export ROUTING_OPENWRT_LANG; break ;;
+            *) printf "%bChoose 1 or 2 / Выберите 1 или 2%b\n" "$C_RED" "$C_RESET" ;;
+        esac
+    done
+    clear_screen
+}
 
 pause_screen() {
     echo ""
-    read -r -p "Press Enter to continue / Нажмите Enter для продолжения..." _pause
+    if is_ru; then read -r -p "Нажмите Enter для продолжения..." _pause; else read -r -p "Press Enter to continue..." _pause; fi
 }
 
 is_back() { [ "$1" = "?" ] || [ "$1" = "back" ] || [ "$1" = "назад" ]; }
@@ -37,13 +73,204 @@ is_back() { [ "$1" = "?" ] || [ "$1" = "back" ] || [ "$1" = "назад" ]; }
 read_multiline_config() {
     tmp_file="$1"
     : > "$tmp_file"
-    echo "Paste full WireGuard/AmneziaWG config. End with a single line: END"
-    echo "Вставьте полный конфиг WireGuard/AmneziaWG. Завершите отдельной строкой: END"
+    msgc "$C_CYAN" "Paste full WireGuard/AmneziaWG config. End with a single line: END" "Вставьте полный конфиг WireGuard/AmneziaWG. Завершите отдельной строкой: END"
     while IFS= read -r line; do
         [ "$line" = "END" ] && break
         printf '%s
 ' "$line" >> "$tmp_file"
     done
+}
+
+read_multiline_openvpn_config() {
+    tmp_file="$1"
+    : > "$tmp_file"
+    msgc "$C_CYAN" "Paste full OpenVPN .ovpn config. End with a single line: END" "Вставьте полный OpenVPN .ovpn конфиг. Завершите отдельной строкой: END"
+    msg "If your .ovpn references external files (ca.crt, client.key, etc.), use inline blocks or add those files manually." "Если .ovpn ссылается на внешние файлы (ca.crt, client.key и т.д.), используйте inline-блоки или добавьте файлы вручную."
+    while IFS= read -r line; do
+        [ "$line" = "END" ] && break
+        printf '%s\n' "$line" >> "$tmp_file"
+    done
+}
+
+ovpn_detect_dev() {
+    cfg="$1"
+    dev=$(awk '
+        /^[[:space:]]*#/ || /^[[:space:]]*;/ { next }
+        tolower($1)=="dev" { print $2; exit }
+    ' "$cfg" 2>/dev/null)
+    dev=${dev:-tun0}
+    [ "$dev" = "tun" ] && dev="tun0"
+    echo "$dev"
+}
+
+ovpn_harden_route_only_config() {
+    cfg="$1"
+    # Keep OpenVPN from installing its own default route. routing-openwrt will route
+    # only marked traffic through the separate vpn table.
+    grep -qi '^[[:space:]]*route-nopull' "$cfg" 2>/dev/null || echo 'route-nopull' >> "$cfg"
+    grep -qi '^[[:space:]]*pull-filter[[:space:]].*redirect-gateway' "$cfg" 2>/dev/null || echo 'pull-filter ignore "redirect-gateway"' >> "$cfg"
+}
+
+configure_openvpn_from_paste() {
+    msgc "$C_GREEN" "Configure OpenVPN from pasted .ovpn" "Настройка OpenVPN из вставленного .ovpn"
+    if pkg_is_installed openvpn-openssl; then
+        msg "OpenVPN already installed" "OpenVPN уже установлен"
+    else
+        msg "Installing openvpn-openssl" "Установка openvpn-openssl"
+        pkg_install openvpn-openssl || return 1
+    fi
+
+    mkdir -p /etc/openvpn
+    OVPN_TMP="/tmp/routing-openwrt-client.ovpn"
+    OVPN_CFG="/etc/openvpn/routing_openwrt.ovpn"
+    read_multiline_openvpn_config "$OVPN_TMP"
+
+    if grep -qi '^[[:space:]]*dev[[:space:]]\+tap' "$OVPN_TMP"; then
+        msgc "$C_RED" "TAP configs are not supported. Use a TUN OpenVPN config." "TAP-конфиги не поддерживаются. Используйте OpenVPN TUN-конфиг."
+        rm -f "$OVPN_TMP"
+        return 1
+    fi
+
+    cp "$OVPN_TMP" "$OVPN_CFG"
+    rm -f "$OVPN_TMP"
+    ovpn_harden_route_only_config "$OVPN_CFG"
+
+    OVPN_ROUTE_DEV=$(ovpn_detect_dev "$OVPN_CFG")
+    [ -n "$OVPN_ROUTE_DEV" ] || OVPN_ROUTE_DEV="tun0"
+
+    uci -q delete openvpn.routing_openwrt
+    uci set openvpn.routing_openwrt='openvpn'
+    uci set openvpn.routing_openwrt.enabled='1'
+    uci set openvpn.routing_openwrt.config="$OVPN_CFG"
+    uci commit openvpn
+
+    uci -q delete network.ovpn0
+    uci set network.ovpn0='interface'
+    uci set network.ovpn0.proto='none'
+    uci set network.ovpn0.device="$OVPN_ROUTE_DEV"
+    uci commit network
+
+    /etc/init.d/openvpn enable >/dev/null 2>&1 || true
+    /etc/init.d/openvpn restart >/dev/null 2>&1 || true
+
+    msg "OpenVPN config saved to $OVPN_CFG" "OpenVPN-конфиг сохранён в $OVPN_CFG"
+    msg "OpenVPN route device: $OVPN_ROUTE_DEV" "Интерфейс маршрутизации OpenVPN: $OVPN_ROUTE_DEV"
+    TUNNEL="ovpn"
+    route_vpn
+    return 0
+}
+
+detect_openvpn_candidates() {
+    {
+        ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^tun[0-9]*/ { print $2 }'
+        uci show network 2>/dev/null | sed -n "s/^network\.[^.]*\.device='\(tun[^']*\)'.*/\1/p"
+        uci show openvpn 2>/dev/null | sed -n "s/.*\.config='\([^']*\)'.*/\1/p" | while read -r _cfg; do
+            [ -f "$_cfg" ] || continue
+            awk 'tolower($1)=="dev" && $2 ~ /^tun/ { print $2; exit }' "$_cfg"
+        done
+    } | sed '/^$/d' | sort -u
+}
+
+configure_openvpn_existing() {
+    msgc "$C_GREEN" "Use an existing OpenVPN tunnel" "Использовать существующий OpenVPN-туннель"
+    msg "Create and start OpenVPN in LuCI first. Then return here and choose Check again." "Сначала создайте и запустите OpenVPN в LuCI. Затем вернитесь сюда и выберите Проверить ещё раз."
+
+    while true; do
+        OVPN_CANDIDATES="$(detect_openvpn_candidates)"
+        if [ -z "$OVPN_CANDIDATES" ]; then
+            msgc "$C_RED" "OpenVPN tunnel was not found." "OpenVPN-туннель не найден."
+            echo "1) $(prompt "Check again" "Проверить ещё раз")"
+            echo "2) $(prompt "Cancel" "Отмена")"
+            printf "%s" "$(prompt "Choice [1]: " "Выбор [1]: ")"
+            read -r OVPN_WAIT_CHOICE
+            OVPN_WAIT_CHOICE=${OVPN_WAIT_CHOICE:-1}
+            case "$OVPN_WAIT_CHOICE" in
+                1) continue ;;
+                2) return 1 ;;
+                *) continue ;;
+            esac
+        fi
+
+        msg "Detected OpenVPN tun devices/configs:" "Найденные OpenVPN tun-интерфейсы/конфиги:"
+        i=1
+        : > /tmp/routing-openwrt-ovpn-candidates
+        echo "$OVPN_CANDIDATES" | while read -r dev; do
+            echo "$dev" >> /tmp/routing-openwrt-ovpn-candidates
+            echo "$i) $dev"
+            i=$((i+1))
+        done
+        echo "r) $(prompt "Check again" "Проверить ещё раз")"
+        echo "m) $(prompt "Enter device manually" "Ввести интерфейс вручную")"
+        echo "c) $(prompt "Cancel" "Отмена")"
+        printf "%s" "$(prompt "Choice [1]: " "Выбор [1]: ")"
+        read -r OVPN_CHOICE
+        OVPN_CHOICE=${OVPN_CHOICE:-1}
+        case "$OVPN_CHOICE" in
+            r|R) continue ;;
+            c|C) return 1 ;;
+            m|M)
+                printf "%s" "$(prompt "Enter OpenVPN tun device [tun0]: " "Введите OpenVPN tun-интерфейс [tun0]: ")"
+                read -r OVPN_ROUTE_DEV
+                OVPN_ROUTE_DEV=${OVPN_ROUTE_DEV:-tun0}
+                ;;
+            *[!0-9]*|'')
+                msgc "$C_RED" "Wrong choice." "Неверный выбор."
+                continue
+                ;;
+            *)
+                OVPN_ROUTE_DEV=$(sed -n "${OVPN_CHOICE}p" /tmp/routing-openwrt-ovpn-candidates)
+                [ -n "$OVPN_ROUTE_DEV" ] || { msgc "$C_RED" "Wrong choice." "Неверный выбор."; continue; }
+                ;;
+        esac
+
+        if ! ip link show "$OVPN_ROUTE_DEV" >/dev/null 2>&1; then
+            msgc "$C_YELLOW" "Device is in config but not currently up. Routing will be configured, but OpenVPN must be started." "Интерфейс есть в конфиге, но сейчас не поднят. Маршрутизация будет настроена, но OpenVPN нужно запустить."
+        fi
+
+        uci -q delete network.ovpn0
+        uci set network.ovpn0='interface'
+        uci set network.ovpn0.proto='none'
+        uci set network.ovpn0.device="$OVPN_ROUTE_DEV"
+        uci commit network
+        TUNNEL="ovpn"
+        route_vpn
+        return 0
+    done
+}
+
+configure_openvpn_menu() {
+    msgc "$C_BLUE" "OpenVPN setup" "Настройка OpenVPN"
+    echo "1) $(prompt "Paste full .ovpn config now" "Вставить полный .ovpn конфиг сейчас")"
+    echo "2) $(prompt "I already created OpenVPN manually" "Я уже создал OpenVPN вручную")"
+    echo "3) $(prompt "Cancel" "Отмена")"
+    while true; do
+        printf "%s" "$(prompt "Choice [1]: " "Выбор [1]: ")"
+        read -r OVPN_MODE
+        OVPN_MODE=${OVPN_MODE:-1}
+        case "$OVPN_MODE" in
+            1) configure_openvpn_from_paste && return 0; return 1 ;;
+            2) configure_openvpn_existing && return 0; return 1 ;;
+            3) return 1 ;;
+            *) msgc "$C_RED" "Choose 1, 2 or 3." "Выберите 1, 2 или 3." ;;
+        esac
+    done
+}
+
+check_singbox_requirements() {
+    DISK_TOTAL_MB=$(df -m / 2>/dev/null | awk 'NR==2 {print $2+0}')
+    DISK_FREE_MB=$(df -m / 2>/dev/null | awk 'NR==2 {print $4+0}')
+    RAM_TOTAL_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
+    [ -n "$DISK_TOTAL_MB" ] || DISK_TOTAL_MB=0
+    [ -n "$DISK_FREE_MB" ] || DISK_FREE_MB=0
+    [ -n "$RAM_TOTAL_MB" ] || RAM_TOTAL_MB=0
+
+    echo "Router resources / Ресурсы роутера: flash total=${DISK_TOTAL_MB}MB, free=${DISK_FREE_MB}MB, RAM=${RAM_TOTAL_MB}MB"
+    if [ "$DISK_TOTAL_MB" -lt 64 ] || [ "$DISK_FREE_MB" -lt 20 ] || [ "$RAM_TOTAL_MB" -lt 128 ]; then
+        printf "\033[31;1mNot enough resources for Sing-box. Minimum: 64MB flash, 20MB free flash, 128MB RAM.\033[0m\n"
+        printf "\033[31;1mНедостаточно памяти для Sing-box. Минимум: 64MB flash, 20MB свободно, 128MB RAM. Выберите WireGuard/AmneziaWG/OpenVPN.\033[0m\n"
+        return 1
+    fi
+    return 0
 }
 
 cfg_get_section_value() {
@@ -138,6 +365,9 @@ detect_existing_routing_config() {
     elif [ "$(uci -q get network.wg0.proto 2>/dev/null)" = "wireguard" ]; then
         EXISTING_TUNNEL="wg"
         EXISTING_IFACE="wg0"
+    elif [ -n "$(uci -q get openvpn.routing_openwrt.config 2>/dev/null)" ]; then
+        EXISTING_TUNNEL="ovpn"
+        EXISTING_IFACE="${OVPN_ROUTE_DEV:-tun0}"
     elif uci show network 2>/dev/null | grep -q '^network\.@amneziawg_awg0\['; then
         # Orphaned peer section without network.awg0 interface: previous broken cleanup/install.
         EXISTING_TUNNEL="0"
@@ -151,7 +381,7 @@ detect_existing_routing_config() {
         case "$old_route_dev" in
             awg0) EXISTING_TUNNEL="awg"; EXISTING_IFACE="awg0" ;;
             wg0) EXISTING_TUNNEL="wg"; EXISTING_IFACE="wg0" ;;
-            tun0) EXISTING_TUNNEL="tun2socks"; EXISTING_IFACE="tun0" ;;
+            tun*) EXISTING_TUNNEL="ovpn"; EXISTING_IFACE="$old_route_dev" ;;
         esac
     fi
 
@@ -173,6 +403,7 @@ cleanup_existing_routing_config() {
 
     uci -q delete network.wg0
     uci -q delete network.awg0
+    uci -q delete network.ovpn0
     uci -q delete network.vpn_route
     delete_uci_sections_by_type network wireguard_wg0
     delete_uci_sections_by_type network amneziawg_awg0
@@ -181,8 +412,12 @@ cleanup_existing_routing_config() {
 
     delete_uci_sections_by_name firewall zone wg
     delete_uci_sections_by_name firewall zone awg
+    delete_uci_sections_by_name firewall zone ovpn
     delete_uci_sections_by_name firewall forwarding wg-lan
     delete_uci_sections_by_name firewall forwarding awg-lan
+    delete_uci_sections_by_name firewall forwarding ovpn-lan
+    uci -q delete openvpn.routing_openwrt
+    uci commit openvpn 2>/dev/null || true
     uci commit firewall 2>/dev/null || true
 
     rm -f /etc/domain-routing-route.conf
@@ -286,8 +521,14 @@ route_vpn () {
     elif [ "$TUNNEL" = awg ]; then
         VPN_ROUTE_DEV="awg0"
         VPN_ROUTE_UCI_INTERFACE="awg0"
-    elif [ "$TUNNEL" = singbox ] || [ "$TUNNEL" = ovpn ] || [ "$TUNNEL" = tun2socks ]; then
-        VPN_ROUTE_DEV="tun0"
+    elif [ "$TUNNEL" = ovpn ]; then
+        VPN_ROUTE_DEV="${OVPN_ROUTE_DEV:-tun0}"
+        VPN_ROUTE_UCI_INTERFACE="ovpn0"
+    elif [ "$TUNNEL" = singbox ]; then
+        VPN_ROUTE_DEV="${SINGBOX_ROUTE_DEV:-tun0}"
+        VPN_ROUTE_UCI_INTERFACE=""
+    elif [ "$TUNNEL" = tun2socks ]; then
+        VPN_ROUTE_DEV="${TUN2SOCKS_ROUTE_DEV:-tun0}"
         VPN_ROUTE_UCI_INTERFACE=""
     else
         return 0
@@ -295,16 +536,16 @@ route_vpn () {
 
     grep -q "99 vpn" /etc/iproute2/rt_tables || echo '99 vpn' >> /etc/iproute2/rt_tables
 
-    # For UCI-managed WireGuard/AmneziaWG interfaces, let netifd recreate the route on boot.
-    # For manual tun0-based tunnels we still rely on the init/hotplug helper below.
-    if [ -n "$VPN_ROUTE_UCI_INTERFACE" ]; then
-        uci set network.vpn_route=route
-        uci set network.vpn_route.name='vpn'
-        uci set network.vpn_route.interface="$VPN_ROUTE_UCI_INTERFACE"
-        uci set network.vpn_route.table='vpn'
-        uci set network.vpn_route.target='0.0.0.0/0'
-        uci commit network
-    fi
+    # Do NOT create a persistent UCI route here.
+    # Older builds created network.vpn_route and then the helper added a second
+    # route too. v20 keeps the table owned by domain-routing-route.sh only,
+    # so there is a single route and fail-open behavior stays predictable.
+    uci -q delete network.vpn_route
+    uci -q delete network.vpn_route6
+    uci -q delete network.vpn_route_internal
+    uci -q delete network.vpn_route_blackhole
+    uci -q delete network.vpn_route_blackhole6
+    uci commit network >/dev/null 2>&1 || true
 
     cat << EOF > /etc/domain-routing-route.conf
 VPN_ROUTE_DEV='$VPN_ROUTE_DEV'
@@ -379,7 +620,7 @@ EOF
 [ -f /etc/domain-routing-route.conf ] && . /etc/domain-routing-route.conf
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
 
-echo "=== routing-openwrt v13 status ==="
+echo "=== routing-openwrt v21 status ==="
 echo "VPN_ROUTE_DEV=${VPN_ROUTE_DEV:-not set}"
 echo "IPV6_SUPPORT=${IPV6_SUPPORT:-0}"
 echo "DOMAINS_URL=${DOMAINS_URL:-not set}"
@@ -409,6 +650,49 @@ echo "If table vpn shows blackhole default, it is stale from older builds: run /
 echo "If mark counters stay at 0 while opening a site from LAN, the client is probably using DoH/Private DNS/cache or not going through br-lan."
 EOF
     chmod +x /usr/sbin/domain-routing-status.sh
+
+    cat << 'EOF' > /usr/sbin/routing-openwrt-healthcheck.sh
+#!/bin/sh
+
+# Daily self-healing check. It must never break ordinary WAN internet.
+# It only restarts local services and reapplies the separate vpn table.
+
+LOG_TAG="routing-openwrt-healthcheck"
+log() { logger -t "$LOG_TAG" "$*" 2>/dev/null || echo "$LOG_TAG: $*"; }
+
+[ -f /etc/domain-routing-route.conf ] && . /etc/domain-routing-route.conf
+[ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
+
+# Remove stale fail-closed leftovers from old builds.
+ip route del blackhole default table vpn metric 42767 >/dev/null 2>&1 || true
+ip -6 route del blackhole default table vpn metric 42767 >/dev/null 2>&1 || true
+
+# Make sure only the helper owns the vpn table.
+ip route flush table vpn >/dev/null 2>&1 || true
+/usr/sbin/domain-routing-route.sh >/dev/null 2>&1 || true
+
+# Refresh lists from GitHub/cache. This replaces removed domains too.
+/etc/init.d/getdomains start >/dev/null 2>&1 || log "getdomains refresh failed"
+
+# dnsmasq can sometimes get stuck after many DNS requests; restart safely if test fails.
+if ! dnsmasq --test >/dev/null 2>&1; then
+    log "dnsmasq test failed; restarting dnsmasq"
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+else
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+fi
+
+# Reapply route after firewall/dnsmasq changes.
+/usr/sbin/domain-routing-route.sh >/dev/null 2>&1 || true
+
+# Basic AWG/WG visibility log; no blocking actions.
+if [ -n "$VPN_ROUTE_DEV" ] && ip link show "$VPN_ROUTE_DEV" >/dev/null 2>&1; then
+    log "ok: $VPN_ROUTE_DEV exists; vpn table: $(ip route show table vpn 2>/dev/null | tr '\n' ' ')"
+else
+    log "vpn interface missing/down; fail-open keeps WAN unaffected"
+fi
+EOF
+    chmod +x /usr/sbin/routing-openwrt-healthcheck.sh
 
     cat << 'EOF' > /etc/init.d/vpnroute
 #!/bin/sh /etc/rc.common
@@ -463,28 +747,40 @@ add_tunnel() {
         return
     fi
     clear_screen
-    echo "Select a tunnel / Выберите туннель:"
-    echo "1) WireGuard                         [active / работает]"
-    echo "2) OpenVPN                           [later / позже]"
-    echo "3) Sing-box                          [later / позже]"
-    echo "4) tun2socks                         [later / позже]"
-    echo "5) Skip tunnel setup / Пропустить настройку туннеля"
-    echo "6) AmneziaWG / Amnezia WireGuard     [active / работает]"
-    echo
-    echo "Currently only WireGuard and AmneziaWG are configured automatically."
-    echo "Сейчас автоматически настраиваются только WireGuard и AmneziaWG."
+    msgc "$C_BLUE" "Select a tunnel" "Выберите туннель"
+    if is_ru; then
+        printf "1) %bWireGuard%b                         %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        printf "2) %bOpenVPN%b                           %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        printf "3) %bSing-box%b                          %b[позже, с проверкой памяти]%b\n" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "4) %bПропустить настройку туннеля%b\n" "$C_RED" "$C_RESET"
+        printf "5) %bAmneziaWG / Amnezia WireGuard%b     %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        echo
+        echo "Сейчас автоматически настраиваются WireGuard, AmneziaWG и OpenVPN."
+    else
+        printf "1) %bWireGuard%b                         %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        printf "2) %bOpenVPN%b                           %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        printf "3) %bSing-box%b                          %b[later, resource check]%b\n" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "4) %bSkip tunnel setup%b\n" "$C_RED" "$C_RESET"
+        printf "5) %bAmneziaWG / Amnezia WireGuard%b     %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        echo
+        echo "Currently WireGuard, AmneziaWG and OpenVPN are configured automatically."
+    fi
 
     while true; do
-        read -r -p "Choice [6]: " TUNNEL
-        TUNNEL=${TUNNEL:-6}
+        printf "%s" "$(prompt "Choice [5]: " "Выбор [5]: ")"
+        read -r TUNNEL
+        TUNNEL=${TUNNEL:-5}
         case $TUNNEL in
         1) TUNNEL=wg; break ;;
-        2) echo "OpenVPN support is planned, but not enabled yet. Choose 1, 5 or 6." ;;
-        3) echo "Sing-box support is planned, but not enabled yet. Choose 1, 5 or 6." ;;
-        4) echo "tun2socks support is planned, but not enabled yet. Choose 1, 5 or 6." ;;
-        5) echo "Skip"; TUNNEL=0; break ;;
-        6) TUNNEL=awg; break ;;
-        *) echo "Choose 1, 5 or 6. OpenVPN/Sing-box/tun2socks are planned for later." ;;
+        2) TUNNEL=ovpn; break ;;
+        3)
+            if check_singbox_requirements; then
+                msgc "$C_YELLOW" "Sing-box support is planned for the next stage." "Поддержка Sing-box будет на следующем этапе."
+            fi
+            ;;
+        4) msgc "$C_RED" "Skip tunnel setup" "Настройка туннеля пропущена"; TUNNEL=0; break ;;
+        5) TUNNEL=awg; break ;;
+        *) msgc "$C_RED" "Choose 1, 2, 3, 4 or 5." "Выберите 1, 2, 3, 4 или 5." ;;
         esac
     done
 
@@ -542,14 +838,10 @@ add_tunnel() {
     fi
 
     if [ "$TUNNEL" == 'ovpn' ]; then
-        if pkg_is_installed openvpn-openssl; then
-            echo "OpenVPN already installed"
-        else
-            echo "Installed openvpn"
-            pkg_install openvpn-openssl
-        fi
-        printf "\033[32;1mConfigure route for OpenVPN\033[0m\n"
-        route_vpn
+        configure_openvpn_menu || {
+            msgc "$C_RED" "OpenVPN setup cancelled" "Настройка OpenVPN отменена"
+            TUNNEL=0
+        }
     fi
 
     if [ "$TUNNEL" == 'singbox' ]; then
@@ -809,7 +1101,7 @@ add_zone() {
         elif [ "$TUNNEL" == awg ]; then
             uci set firewall.@zone[-1].network='awg0'
         elif [ "$TUNNEL" == singbox ] || [ "$TUNNEL" == ovpn ] || [ "$TUNNEL" == tun2socks ]; then
-            uci set firewall.@zone[-1].device='tun0'
+            uci set firewall.@zone[-1].device="${VPN_ROUTE_DEV:-tun0}"
         fi
         if [ "$TUNNEL" == wg ] || [ "$TUNNEL" == awg ] || [ "$TUNNEL" == ovpn ] || [ "$TUNNEL" == tun2socks ]; then
             uci set firewall.@zone[-1].forward='REJECT'
@@ -870,11 +1162,11 @@ add_zone() {
 
 show_manual() {
     if [ "$TUNNEL" == tun2socks ]; then
-        printf "\033[42;1mZone for tun2socks cofigured. But you need to set up the tunnel yourself.\033[0m\n"
+        printf "\033[42;1mZone for tun2socks configured. But you need to set up the tunnel yourself.\033[0m\n"
         echo "Use this manual: https://cli.co/VNZISEM"
     elif [ "$TUNNEL" == ovpn ]; then
-        printf "\033[42;1mZone for OpenVPN cofigured. But you need to set up the tunnel yourself.\033[0m\n"
-        echo "Use this manual: https://itdog.info/nastrojka-klienta-openvpn-na-openwrt/"
+        printf "\033[42;1mOpenVPN routing configured. If you used manual mode, make sure the OpenVPN tunnel is up.\033[0m\n"
+        printf "\033[42;1mМаршрутизация OpenVPN настроена. Если был ручной режим, убедитесь, что OpenVPN-туннель поднят.\033[0m\n"
     fi
 }
 
@@ -1307,7 +1599,9 @@ load_config() {
 
 restore_cache() {
     cache="$1"; out="$2"; label="$3"
-    if [ -s "$cache" ]; then
+    # Cache may intentionally be empty when the GitHub list is empty.
+    # /tmp is cleared on reboot, so restore even zero-byte cache files.
+    if [ -e "$cache" ]; then
         cp "$cache" "$out"
         echo "Restored cached $label list"
     fi
@@ -1322,7 +1616,10 @@ download_file() {
 
 validate_domain_list() {
     file="$1"
-    [ -s "$file" ] || return 1
+    [ -f "$file" ] || return 1
+    # Empty list is valid: it means "route nothing by domain".
+    # This allows removing domains from GitHub and having them removed on the router.
+    [ -s "$file" ] || return 0
     dnsmasq --conf-file="$file" --test 2>&1 | grep -q "syntax check OK"
 }
 
@@ -1351,7 +1648,7 @@ normalize_domain_list() {
             }
         ' "$clean" | sort -u > "$out"
         rm -f "$clean"
-        [ -s "$out" ]
+        [ -f "$out" ]
         return $?
     fi
 
@@ -1378,7 +1675,7 @@ normalize_domain_list() {
         }
     ' "$clean" | sort -u > "$out"
     rm -f "$clean"
-    [ -s "$out" ]
+    [ -f "$out" ]
 }
 
 normalize_ipv4_cidr_list() {
@@ -1393,7 +1690,7 @@ normalize_ipv4_cidr_list() {
             }
         }
     ' | sort -u > "$out"
-    [ -s "$out" ]
+    [ -f "$out" ]
 }
 
 normalize_ipv6_cidr_list() {
@@ -1408,7 +1705,7 @@ normalize_ipv6_cidr_list() {
             }
         }
     ' | sort -u > "$out"
-    [ -s "$out" ]
+    [ -f "$out" ]
 }
 
 start () {
@@ -1429,7 +1726,7 @@ start () {
                 cp "$TMP_DNSMASQ_DIR/domains.lst" "$CACHE_DIR/domains.lst"
                 echo "Domain list is ready: $(wc -l < "$TMP_DNSMASQ_DIR/domains.lst") entries"
             else
-                echo "Warning: downloaded domain list is invalid or empty after conversion; keeping cached list"
+                echo "Warning: downloaded domain list is invalid after conversion; keeping cached list"
                 rm -f "$TMP_DNSMASQ_DIR/domains.lst.new"
             fi
             rm -f "$TMP_DNSMASQ_DIR/domains.raw"
@@ -1439,7 +1736,7 @@ start () {
         fi
     fi
 
-    if [ -s "$TMP_DNSMASQ_DIR/domains.lst" ]; then
+    if [ -f "$TMP_DNSMASQ_DIR/domains.lst" ]; then
         if validate_domain_list "$TMP_DNSMASQ_DIR/domains.lst"; then
             /etc/init.d/dnsmasq restart
         else
@@ -1455,7 +1752,7 @@ start () {
                 cp "$TMP_LIST_DIR/ipv4.lst" "$CACHE_DIR/ipv4.lst"
                 echo "IPv4 CIDR list is ready: $(wc -l < "$TMP_LIST_DIR/ipv4.lst") entries"
             else
-                echo "Warning: IPv4 list is invalid or empty after conversion; using cached list if available"
+                echo "Warning: IPv4 list is invalid after conversion; using cached list if available"
                 rm -f "$TMP_LIST_DIR/ipv4.lst.new"
             fi
             rm -f "$TMP_LIST_DIR/ipv4.raw"
@@ -1473,7 +1770,7 @@ start () {
                 cp "$TMP_LIST_DIR/ipv6.lst" "$CACHE_DIR/ipv6.lst"
                 echo "IPv6 CIDR list is ready: $(wc -l < "$TMP_LIST_DIR/ipv6.lst") entries"
             else
-                echo "Warning: IPv6 list is invalid or empty after conversion; using cached list if available"
+                echo "Warning: IPv6 list is invalid after conversion; using cached list if available"
                 rm -f "$TMP_LIST_DIR/ipv6.lst.new"
             fi
             rm -f "$TMP_LIST_DIR/ipv6.raw"
@@ -1492,8 +1789,9 @@ EOF
     chmod +x /etc/init.d/getdomains
     /etc/init.d/getdomains enable
 
-    sed -i '/getdomains start/d' /etc/crontabs/root 2>/dev/null || true
+    sed -i '/getdomains start/d;/routing-openwrt-healthcheck/d' /etc/crontabs/root 2>/dev/null || true
     echo "0 2 * * * /etc/init.d/getdomains start" >> /etc/crontabs/root
+    echo "15 3 * * * /usr/sbin/routing-openwrt-healthcheck.sh" >> /etc/crontabs/root
     /etc/init.d/cron enable
     /etc/init.d/cron restart
 

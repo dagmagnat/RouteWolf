@@ -9,7 +9,7 @@ echo "Выпиливаем скрипты"
 rm -rf /etc/init.d/getdomains
 
 /etc/init.d/vpnroute disable 2>/dev/null
-rm -f /etc/init.d/vpnroute /usr/sbin/domain-routing-route.sh /usr/sbin/domain-routing-status.sh /usr/sbin/routing-openwrt-update.sh /usr/sbin/routing-openwrt-uninstall.sh /etc/domain-routing-route.conf
+rm -f /etc/init.d/vpnroute /usr/sbin/domain-routing-route.sh /usr/sbin/domain-routing-status.sh /usr/sbin/routing-openwrt-update.sh /usr/sbin/routing-openwrt-uninstall.sh /usr/sbin/routing-openwrt-healthcheck.sh /etc/domain-routing-route.conf
 rm -f /etc/hotplug.d/iface/30-vpnroute /etc/hotplug.d/net/30-vpnroute
 
 echo "Выпиливаем из crontab"
@@ -89,15 +89,17 @@ for name in mark_domains mark_domains6 mark_domains_intenal mark_subnet mark_sub
         uci -q delete firewall.@rule[$id]
     done
 done
-while true; do
-    id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='vpn'.*/\1/p" | head -n 1)
-    [ -z "$id" ] && break
-    uci -q delete firewall.@zone[$id]
+for zone_name in vpn wg awg ovpn singbox tun2socks; do
+    while true; do
+        id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$zone_name'.*/\1/p" | head -n 1)
+        [ -z "$id" ] && break
+        uci -q delete firewall.@zone[$id]
+    done
 done
 while true; do
     id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@forwarding\[\([0-9]*\)\]\.src='lan'.*/\1/p" | head -n 1)
     [ -z "$id" ] && break
-    if uci -q get firewall.@forwarding[$id].dest | grep -q '^vpn$'; then
+    if uci -q get firewall.@forwarding[$id].dest | grep -qE '^(vpn|wg|awg|ovpn|singbox|tun2socks)$'; then
         uci -q delete firewall.@forwarding[$id]
     else
         break
@@ -123,6 +125,9 @@ if [ ! -z "$rule_id" ]; then
     while uci -q delete network.@rule[$rule_id]; do :; done
 fi
 
+uci -q delete network.ovpn0
+uci -q delete openvpn.routing_openwrt
+uci commit openvpn 2>/dev/null || true
 while uci -q delete network.vpn_route; do :; done
 while uci -q delete network.vpn_route6; do :; done
 while uci -q delete network.vpn_route_internal; do :; done
@@ -135,13 +140,18 @@ if [ "$PURGE_TUNNEL" = "1" ]; then
     echo "Purge mode: removing project tunnel interfaces awg0/wg0 and peer sections"
     ifdown awg0 2>/dev/null || true
     ifdown wg0 2>/dev/null || true
+    /etc/init.d/openvpn stop 2>/dev/null || true
+    rm -f /etc/openvpn/routing_openwrt.ovpn
     uci -q delete network.awg0
     uci -q delete network.wg0
+    uci -q delete network.ovpn0
+    uci -q delete openvpn.routing_openwrt
+    uci commit openvpn 2>/dev/null || true
     while uci -q delete network.@amneziawg_awg0[0] 2>/dev/null; do :; done
     while uci -q delete network.@wireguard_wg0[0] 2>/dev/null; do :; done
     uci commit network
 
-    for zone_name in awg wg vpn; do
+    for zone_name in awg wg ovpn vpn; do
         while true; do
             id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$zone_name'.*/\1/p" | head -n 1)
             [ -z "$id" ] && break
