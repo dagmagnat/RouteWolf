@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v21"
+PROJECT_VERSION="v22"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -111,14 +111,43 @@ ovpn_harden_route_only_config() {
     grep -qi '^[[:space:]]*pull-filter[[:space:]].*redirect-gateway' "$cfg" 2>/dev/null || echo 'pull-filter ignore "redirect-gateway"' >> "$cfg"
 }
 
-configure_openvpn_from_paste() {
-    msgc "$C_GREEN" "Configure OpenVPN from pasted .ovpn" "Настройка OpenVPN из вставленного .ovpn"
-    if pkg_is_installed openvpn-openssl; then
-        msg "OpenVPN already installed" "OpenVPN уже установлен"
+install_openvpn_packages() {
+    msgc "$C_BLUE" "Checking OpenVPN packages" "Проверка пакетов OpenVPN"
+
+    if pkg_is_installed openvpn-openssl || command -v openvpn >/dev/null 2>&1; then
+        msgc "$C_GREEN" "OpenVPN is already installed" "OpenVPN уже установлен"
     else
         msg "Installing openvpn-openssl" "Установка openvpn-openssl"
-        pkg_install openvpn-openssl || return 1
+        pkg_install openvpn-openssl || {
+            msgc "$C_RED" "OpenVPN installation failed. Check package repository, DNS and router date/time." "Не удалось установить OpenVPN. Проверьте репозиторий пакетов, DNS и дату/время роутера."
+            return 1
+        }
     fi
+
+    if pkg_is_installed luci-app-openvpn; then
+        msgc "$C_GREEN" "LuCI OpenVPN app is already installed" "LuCI OpenVPN уже установлен"
+    else
+        msg "Installing optional luci-app-openvpn" "Установка дополнительного luci-app-openvpn"
+        pkg_install luci-app-openvpn >/dev/null 2>&1 ||             msgc "$C_YELLOW" "luci-app-openvpn was not installed. This is not critical for CLI/paste mode." "luci-app-openvpn не установлен. Это не критично для режима вставки/CLI."
+    fi
+
+    if pkg_is_installed kmod-ovpn-dco; then
+        msgc "$C_GREEN" "OpenVPN DCO kernel module is already installed" "Модуль OpenVPN DCO уже установлен"
+    else
+        msg "Installing optional kmod-ovpn-dco" "Установка дополнительного kmod-ovpn-dco"
+        if pkg_install kmod-ovpn-dco >/dev/null 2>&1; then
+            msgc "$C_GREEN" "OpenVPN DCO installed" "OpenVPN DCO установлен"
+        else
+            msgc "$C_YELLOW" "kmod-ovpn-dco is unavailable or failed to install. OpenVPN will continue in normal userspace mode." "kmod-ovpn-dco недоступен или не установился. OpenVPN продолжит работу в обычном userspace-режиме."
+        fi
+    fi
+
+    return 0
+}
+
+configure_openvpn_from_paste() {
+    msgc "$C_GREEN" "Configure OpenVPN from pasted .ovpn" "Настройка OpenVPN из вставленного .ovpn"
+    install_openvpn_packages || return 1
 
     mkdir -p /etc/openvpn
     OVPN_TMP="/tmp/routing-openwrt-client.ovpn"
@@ -173,6 +202,7 @@ detect_openvpn_candidates() {
 
 configure_openvpn_existing() {
     msgc "$C_GREEN" "Use an existing OpenVPN tunnel" "Использовать существующий OpenVPN-туннель"
+    install_openvpn_packages || return 1
     msg "Create and start OpenVPN in LuCI first. Then return here and choose Check again." "Сначала создайте и запустите OpenVPN в LuCI. Затем вернитесь сюда и выберите Проверить ещё раз."
 
     while true; do
@@ -399,7 +429,7 @@ detect_existing_routing_config() {
 }
 
 cleanup_existing_routing_config() {
-    echo "Removing old project tunnel/routing config / Удаляю старый конфиг туннеля/маршрутизации проекта..."
+    msgc "$C_YELLOW" "Removing old project tunnel/routing config..." "Удаляю старый конфиг туннеля/маршрутизации проекта..."
 
     uci -q delete network.wg0
     uci -q delete network.awg0
@@ -429,15 +459,16 @@ cleanup_existing_routing_config() {
 handle_existing_routing_config() {
     detect_existing_routing_config || return 1
 
-    echo "Existing routing configuration detected / Найден существующий конфиг маршрутизации."
+    msgc "$C_YELLOW" "Existing routing configuration detected." "Найден существующий конфиг маршрутизации."
     if [ -n "$EXISTING_IFACE" ]; then
-        echo "Detected interface / Найден интерфейс: $EXISTING_IFACE"
+        msg "Detected interface: $EXISTING_IFACE" "Найден интерфейс: $EXISTING_IFACE"
     fi
-    echo "1) Skip tunnel setup and use existing config / Пропустить настройку туннеля и использовать существующий [default]"
-    echo "2) Replace old config and create a new one / Заменить старый конфиг и настроить новый"
+    echo "1) $(prompt "Skip tunnel setup and use existing config" "Пропустить настройку туннеля и использовать существующий") [$(prompt "default" "по умолчанию")]"
+    echo "2) $(prompt "Replace old config and create a new one" "Заменить старый конфиг и настроить новый")"
 
     while true; do
-        read -r -p "Select / Выберите [1]: " existing_choice
+        printf "%s" "$(prompt "Select [1]: " "Выберите [1]: ")"
+        read -r existing_choice
         existing_choice=${existing_choice:-1}
         case "$existing_choice" in
             1)
@@ -446,17 +477,18 @@ handle_existing_routing_config() {
                 if [ "$TUNNEL" != "0" ]; then
                     route_vpn
                 fi
-                echo "Tunnel setup skipped / Настройка туннеля пропущена"
+                msgc "$C_GREEN" "Tunnel setup skipped" "Настройка туннеля пропущена"
                 return 0
                 ;;
             2)
                 cleanup_existing_routing_config
                 return 1
                 ;;
-            *) echo "Choose 1 or 2 / Выберите 1 или 2" ;;
+            *) msgc "$C_RED" "Choose 1 or 2" "Выберите 1 или 2" ;;
         esac
     done
 }
+
 
 
 # OpenWrt 24.10 and older use opkg; OpenWrt 25.12 and newer use apk.
@@ -620,7 +652,7 @@ EOF
 [ -f /etc/domain-routing-route.conf ] && . /etc/domain-routing-route.conf
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
 
-echo "=== routing-openwrt v21 status ==="
+echo "=== routing-openwrt v22 status ==="
 echo "VPN_ROUTE_DEV=${VPN_ROUTE_DEV:-not set}"
 echo "IPV6_SUPPORT=${IPV6_SUPPORT:-0}"
 echo "DOMAINS_URL=${DOMAINS_URL:-not set}"
@@ -2053,21 +2085,27 @@ install_awg_packages() {
     echo "Detected AmneziaWG protocol generation: $AWG_VERSION"
 }
 
+# Choose installer language before any interactive menu.
+# Do not ask during non-interactive update mode.
+if [ "$1" != "--update" ] && [ "${ROUTING_OPENWRT_UPDATE_ONLY:-0}" != "1" ]; then
+    choose_language
+fi
+
 # System Details
 MODEL=$(cat /tmp/sysinfo/model)
 source /etc/os-release
-printf "\033[34;1mModel: $MODEL\033[0m\n"
-printf "\033[34;1mVersion: $OPENWRT_RELEASE\033[0m\n"
+printf "\033[34;1m%s\033[0m\n" "$(prompt "Model: $MODEL" "Модель: $MODEL")"
+printf "\033[34;1m%s\033[0m\n" "$(prompt "Version: $OPENWRT_RELEASE" "Версия: $OPENWRT_RELEASE")"
 
 VERSION_ID=$(echo $VERSION | awk -F. '{print $1}')
 
 if [ "$VERSION_ID" -ne 23 ] && [ "$VERSION_ID" -ne 24 ] && [ "$VERSION_ID" -ne 25 ]; then
-    printf "\033[31;1mScript supports OpenWrt 23.05, 24.10 and experimental 25.x.\033[0m\n"
-    echo "For older OpenWrt versions use manual configuration."
+    msgc "$C_RED" "Script supports OpenWrt 23.05, 24.10 and experimental 25.x." "Скрипт поддерживает OpenWrt 23.05, 24.10 и экспериментально 25.x."
+    msg "For older OpenWrt versions use manual configuration." "Для более старых версий OpenWrt используйте ручную настройку."
     exit 1
 fi
 
-printf "\033[31;1mAll actions performed here cannot be rolled back automatically.\033[0m\n"
+msgc "$C_RED" "All actions performed here cannot be rolled back automatically." "Все действия здесь нельзя автоматически откатить назад."
 
 if [ "$1" = "--update" ] || [ "${ROUTING_OPENWRT_UPDATE_ONLY:-0}" = "1" ]; then
     update_existing_installation

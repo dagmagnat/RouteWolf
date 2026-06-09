@@ -1,27 +1,21 @@
 # routing-openwrt
 
-Simple domain-based VPN routing for OpenWrt.
+A simple OpenWrt script: domains from your list are routed through the selected VPN tunnel, while normal internet stays on WAN.
 
-This project is a fork and modification of:
-https://github.com/itdoginfo/domain-routing-openwrt
+This project is a fork and modification of the original project: https://github.com/itdoginfo/domain-routing-openwrt
 
-## What it does
-
-`routing-openwrt` downloads domain lists from GitHub, connects them to `dnsmasq`/`nftset`, and routes only matched domains through the selected tunnel.
-Normal traffic stays on the regular WAN route.
-
-Currently supported automatically:
+## Supported
 
 - WireGuard
 - AmneziaWG / Amnezia WireGuard
-- OpenVPN
+- OpenVPN: paste a full `.ovpn` config or select an existing tun interface
+- Sing-box: not configured automatically yet, resource check only
 
-Sing-box is planned. The installer checks router resources before allowing Sing-box work.
-`tun2socks` is removed from the menu to avoid confusion.
+`tun2socks` was removed from the menu to avoid confusing users. For VLESS/Reality, Sing-box is the better future direction.
 
-## Lists
+## Routing lists
 
-Default lists:
+Default lists are loaded from:
 
 ```text
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
@@ -29,35 +23,12 @@ https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
 ```
 
-Main list:
-
-```text
-lists/domains-dnsmasq-nfset.lst
-```
-
-A simple domain list is supported:
-
-```text
-youtube.com
-youtu.be
-googlevideo.com
-```
-
-The installer converts it to `dnsmasq/nftset` format automatically.
-
-IPv4 CIDR and IPv6 are disabled by default.
+Lists update daily at 02:00. If a domain is removed from GitHub, it is removed from the router after the next update. If GitHub is unavailable, the last working cache is used.
 
 ## Install from GitHub
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
-```
-
-The installer first asks for a language:
-
-```text
-1) English
-2) Русский
 ```
 
 ## Update
@@ -68,13 +39,11 @@ wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/rou
 
 ## Uninstall
 
-Normal uninstall:
-
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
 ```
 
-Full purge:
+Full project config purge:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh -s -- --purge
@@ -82,50 +51,39 @@ wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/rou
 
 ## Manual ZIP install
 
-Upload the ZIP to `/tmp` and run:
+Upload the archive to `/tmp` on the router, then run:
 
 ```sh
 cd /tmp
-rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main /tmp/routing-openwrt.zip
-unzip -o /tmp/routing-openwrt.zip -d /tmp
+unzip -o routing-openwrt.zip -d /tmp
 mv /tmp/routing-openwrt-main /tmp/routing-openwrt 2>/dev/null || true
 cd /tmp/routing-openwrt
 chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
-sh ./install.sh --reinstall
+sh ./install.sh
 ```
 
-`/tmp` is temporary; the installer copies required files into `/usr/sbin`, `/etc/init.d`, and `/etc/domain-routing`.
+`/tmp` is recommended for manual install because it is temporary and does not consume permanent flash after reboot.
 
 ## OpenVPN
 
-OpenVPN has two modes:
+When OpenVPN is selected, the installer checks and installs:
+
+- `openvpn-openssl`
+- `luci-app-openvpn` — optional LuCI UI
+- `kmod-ovpn-dco` — optional DCO acceleration when available for your firmware
+
+OpenVPN modes:
 
 1. paste a full `.ovpn` config;
-2. create OpenVPN manually in LuCI, then let the installer detect the `tun` interface.
+2. create OpenVPN manually in LuCI first, then return and select the existing tun interface.
 
-## Auto-update
-
-Lists are refreshed every day:
-
-```text
-02:00 — list update
-03:15 — route/dnsmasq health check
-```
-
-The local list is replaced completely, so removed GitHub domains are removed from the router too.
-If GitHub is unavailable, the last working cache is used from:
-
-```text
-/etc/domain-routing/lists
-```
-
-## Check
+## Check status
 
 ```sh
 /usr/sbin/domain-routing-status.sh
 ip route show table vpn
 ip rule show | grep fwmark
-nft list ruleset | grep mark_domains
+nft list set inet fw4 vpn_domains | head
 ```
 
-Default mode is fail-open: if VPN goes down, normal WAN internet should continue working.
+If the VPN goes down temporarily, normal WAN internet should continue working. Default mode is fail-open.
