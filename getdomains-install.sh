@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v14"
+PROJECT_VERSION="v15"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -462,65 +462,19 @@ add_tunnel() {
         return
     fi
     clear_screen
-    echo "We can automatically configure only Wireguard and Amnezia WireGuard. OpenVPN, Sing-box(Shadowsocks2022, VMess, VLESS, etc) and tun2socks will need to be configured manually"
-    echo "Select a tunnel:"
+    echo "Select a tunnel / Выберите туннель:"
     echo "1) WireGuard"
-    echo "2) OpenVPN"
-    echo "3) Sing-box"
-    echo "4) tun2socks"
-    echo "5) wgForYoutube"
-    echo "6) Amnezia WireGuard"
-    echo "7) Amnezia WireGuard For Youtube"
-    echo "8) Skip this step"
+    echo "2) AmneziaWG / Amnezia WireGuard"
+    echo "3) Skip tunnel setup / Пропустить настройку туннеля"
 
     while true; do
-    read -r -p '' TUNNEL
-        case $TUNNEL in 
-
-        1) 
-            TUNNEL=wg
-            break
-            ;;
-
-        2)
-            TUNNEL=ovpn
-            break
-            ;;
-
-        3) 
-            TUNNEL=singbox
-            break
-            ;;
-
-        4) 
-            TUNNEL=tun2socks
-            break
-            ;;
-
-        5) 
-            TUNNEL=wgForYoutube
-            break
-            ;;
-
-        6) 
-            TUNNEL=awg
-            break
-            ;;
-
-        7) 
-            TUNNEL=awgForYoutube
-            break
-            ;;
-
-        8)
-            echo "Skip"
-            TUNNEL=0
-            break
-            ;;
-
-        *)
-            echo "Choose from the following options"
-            ;;
+        read -r -p "Choice [2]: " TUNNEL
+        TUNNEL=${TUNNEL:-2}
+        case $TUNNEL in
+        1) TUNNEL=wg; break ;;
+        2) TUNNEL=awg; break ;;
+        3) echo "Skip"; TUNNEL=0; break ;;
+        *) echo "Choose 1, 2 or 3" ;;
         esac
     done
 
@@ -1726,11 +1680,20 @@ add_internal_wg() {
 }
 
 install_awg_packages() {
-    # Use the maintained installer from Slava-Shchipunov as the source of truth.
-    # It detects AWG 1.0/2.0, uses luci-proto-amneziawg for AWG 2.0, supports opkg/apk,
-    # and falls back between ipk/apk where possible.
     AWG_INSTALLER_URL="https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/refs/heads/master/amneziawg-install.sh"
     AWG_INSTALLER="/tmp/amneziawg-install.sh"
+
+    awg_already_installed() {
+        command -v awg >/dev/null 2>&1 && {
+            [ -f /lib/netifd/proto/amneziawg.sh ] || [ -f /lib/netifd/proto/awg.sh ] || opkg list-installed 2>/dev/null | grep -qiE 'luci-proto-amneziawg|amneziawg';
+        }
+    }
+
+    if awg_already_installed; then
+        echo "AmneziaWG packages already installed, skipping package installer."
+        AWG_VERSION="2.0"
+        return 0
+    fi
 
     echo "Installing AmneziaWG packages / Установка пакетов AmneziaWG..."
     if command -v wget >/dev/null 2>&1; then
@@ -1744,9 +1707,20 @@ install_awg_packages() {
         exit 1
     fi
 
-    # -n means install packages only, do not create a separate full-tunnel interface.
-    # This script will configure selective routing itself.
     sh "$AWG_INSTALLER" -n
+    AWG_RC="$?"
+
+    if [ "$AWG_RC" -ne 0 ]; then
+        if awg_already_installed; then
+            echo "Warning: AmneziaWG installer returned error $AWG_RC, but awg command/proto exists. Continuing."
+        else
+            echo ""
+            echo "AmneziaWG package installation failed."
+            echo "Most common reasons: OpenWrt package repository is temporarily unreachable, IPv6/DNS issue, or missing packages for this build."
+            echo "Try: opkg update; opkg install ca-certificates ca-bundle libustream-mbedtls; then run installer again."
+            exit 1
+        fi
+    fi
 
     VERSION=$(ubus call system board | jsonfilter -e '@.release.version')
     MAJOR_VERSION=$(echo "$VERSION" | cut -d '.' -f 1)
@@ -1770,11 +1744,9 @@ printf "\033[34;1mVersion: $OPENWRT_RELEASE\033[0m\n"
 
 VERSION_ID=$(echo $VERSION | awk -F. '{print $1}')
 
-if [ "$VERSION_ID" -ne 23 ] && [ "$VERSION_ID" -ne 24 ]; then
-    printf "\033[31;1mScript only support OpenWrt 23.05 and 24.10\033[0m\n"
-    echo "For OpenWrt 21.02 and 22.03 you can:"
-    echo "1) Use ansible https://github.com/itdoginfo/domain-routing-openwrt"
-    echo "2) Configure manually. Old manual: https://itdog.info/tochechnaya-marshrutizaciya-na-routere-s-openwrt-wireguard-i-dnscrypt/"
+if [ "$VERSION_ID" -ne 23 ] && [ "$VERSION_ID" -ne 24 ] && [ "$VERSION_ID" -ne 25 ]; then
+    printf "\033[31;1mScript supports OpenWrt 23.05, 24.10 and experimental 25.x.\033[0m\n"
+    echo "For older OpenWrt versions use manual configuration."
     exit 1
 fi
 

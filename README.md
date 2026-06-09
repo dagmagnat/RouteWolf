@@ -163,7 +163,7 @@ wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/rou
 Скопируйте архив проекта на роутер в `/tmp`, например:
 
 ```txt
-/tmp/routing-openwrt-v14.zip
+/tmp/routing-openwrt-v15.zip
 ```
 
 Потом выполните:
@@ -171,7 +171,7 @@ wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/rou
 ```sh
 cd /tmp
 rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main
-unzip -o /tmp/routing-openwrt-v14.zip -d /tmp
+unzip -o /tmp/routing-openwrt-v15.zip -d /tmp
 cd /tmp/routing-openwrt
 chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
 sh ./install.sh

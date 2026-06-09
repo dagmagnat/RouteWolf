@@ -59,12 +59,12 @@ wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/rou
 
 ## Manual ZIP install
 
-Copy the ZIP to `/tmp`, for example `/tmp/routing-openwrt-v14.zip`, then run:
+Copy the ZIP to `/tmp`, for example `/tmp/routing-openwrt-v15.zip`, then run:
 
 ```sh
 cd /tmp
 rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main
-unzip -o /tmp/routing-openwrt-v14.zip -d /tmp
+unzip -o /tmp/routing-openwrt-v15.zip -d /tmp
 cd /tmp/routing-openwrt
 chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
 sh ./install.sh
