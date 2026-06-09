@@ -1,42 +1,44 @@
 # routing-openwrt
 
-> v13: режим безопасности по умолчанию изменён на **fail-open**. Если VPN-интерфейс недоступен, обычный интернет не должен ломаться; старые `fail-open/no-blackhole default` маршруты удаляются автоматически.
+`routing-openwrt` настраивает OpenWrt так, чтобы выбранные домены шли через VPN/туннель, а обычный интернет продолжал работать через основной WAN.
 
-> **Важно:** этот проект не создан с нуля. Это изменённый форк проекта [`itdoginfo/domain-routing-openwrt`](https://github.com/itdoginfo/domain-routing-openwrt).  
-> Оригинальная идея, базовая логика маршрутизации по доменам/IP и часть кода взяты из оригинального проекта. В этом форке изменены списки, добавлена поддержка AmneziaWG 2.0, автообновление, кеширование списков и более безопасное поведение при сбоях.
+Это не проект с нуля. Это изменённый форк проекта [`itdoginfo/domain-routing-openwrt`](https://github.com/itdoginfo/domain-routing-openwrt).
 
-## Что делает проект
+## Что делает
 
-`routing-openwrt` настраивает OpenWrt так, чтобы **только домены и IPv4/IPv6-сети из списков** шли через VPN-интерфейс, а обычный интернет продолжал работать через основной WAN.
-
-Основная схема:
-
-1. `dnsmasq-full` получает IP-адреса доменов из списка.
-2. Эти IP попадают в `nftset` `vpn_domains`.
-3. IPv4 CIDR-сети из списка попадают в `vpn_subnets`.
-4. Firewall помечает подходящий трафик меткой `0x1`.
-5. `ip rule` отправляет только помеченный трафик в отдельную таблицу маршрутизации `vpn`.
-6. Таблица `vpn` отправляет этот трафик через выбранный VPN-интерфейс: `awg0`, `wg0`, `tun0` и т.п.
-
-Трафик, который **не попал в списки**, не должен затрагиваться и должен идти через обычный маршрут OpenWrt.
-
-## Репозиторий и списки по умолчанию
-
-Проект рассчитан на репозиторий:
+Проект использует `dnsmasq-full` + `nftset` + policy routing:
 
 ```txt
-dagmagnat/routing-openwrt
+домен из списка → dnsmasq получает IP → IP попадает в nftset → firewall ставит mark 0x1 → table vpn → awg0/wg0/tun0
 ```
 
-По умолчанию установщик берёт списки только из папки `lists/` этого репозитория:
+По умолчанию включена только маршрутизация доменов. IPv4 CIDR, IPv6 и принудительный DNS redirect выключены, чтобы не ломать обычный интернет.
 
-```txt
-lists/domains-dnsmasq-nfset.lst
-lists/ipv4.lst
-lists/ipv6.lst
-```
+Если VPN/сервер/интерфейс не работает, проект не должен ломать обычный WAN-интернет. Домены из списка в таком случае могут временно не маршрутизироваться через VPN, но весь остальной интернет должен работать штатно.
 
-Raw-ссылки по умолчанию:
+## Что сейчас проверялось
+
+Проверялось в первую очередь:
+
+- OpenWrt 24.x;
+- `dnsmasq-full` + `nftset`;
+- AmneziaWG / AmneziaWG 2.0;
+- IPv4 domain routing.
+
+Требует дополнительной проверки:
+
+- обычный WireGuard на разных сборках;
+- OpenVPN/tun;
+- Sing-box/tun2socks;
+- IPv4 CIDR routing;
+- полноценный IPv6 routing;
+- OpenWrt 25.12+ с `apk`.
+
+OpenWrt 24.10 и старее используют `opkg`. OpenWrt 25.12 и новее используют `apk`. Установочные скрипты проекта умеют использовать оба варианта, но OpenWrt 25.12+ ещё нужно проверять на реальном роутере.
+
+## Списки по умолчанию
+
+Сейчас проект берёт списки отсюда:
 
 ```txt
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
@@ -44,92 +46,51 @@ https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
 ```
 
-Ручной ввод URL сейчас специально убран: проект использует списки владельца репозитория. Если вы делаете свой форк, измените значения в начале `getdomains-install.sh`.
-
-## Статус проверки
-
-Пока реально проверенный основной сценарий:
-
-- OpenWrt 24.x;
-- `dnsmasq-full` + `nftset`;
-- AmneziaWG / AmneziaWG 2.0;
-- IPv4 domain routing;
-- IPv4 CIDR routing.
-
-Пока требуют дополнительной проверки:
-
-- обычный WireGuard во всех сценариях;
-- OpenVPN/tun;
-- Sing-box/tun2socks;
-- полноценная IPv6-маршрутизация.
-
-Режимы оставлены в проекте, но перед массовым использованием их нужно проверять на реальном роутере.
-
-## Чем отличается от оригинала
-
-- Убраны старые режимы списков `russia-inside`, `russia-outside`, `ukraine`.
-- Списки берутся из `dagmagnat/routing-openwrt/lists`.
-- Списки обновляются автоматически каждый день в **02:00**.
-- Последняя рабочая версия списков кешируется в `/etc/domain-routing/lists`.
-- Если GitHub, DNS или интернет временно недоступны, используется кеш.
-- Если скачанный список пустой/битый, он не применяется.
-- Добавлена установка актуального AmneziaWG через внешний installer `awg-openwrt`.
-- Добавлена поддержка параметров AmneziaWG 2.0: `S3`, `S4`, `I1`–`I5`.
-- Можно вставить полный WireGuard/AmneziaWG-конфиг целиком, завершив ввод строкой `END`.
-- Если уже есть `wg0`/`awg0` или старая маршрутизация, установщик спрашивает: использовать существующий конфиг или заменить его.
-- IPv6 по умолчанию выключен через `dnsmasq filter_aaaa`, чтобы клиенты не уходили к YouTube/Google по IPv6 мимо IPv4-маршрутизации.
-- Маршрут в таблице `vpn` восстанавливается через отдельный helper и init-сервис.
-- Если VPN-интерфейс не поднят, в таблицу `vpn` ставится `fail-open/no-blackhole default`, чтобы домены/IP из списков не утекали напрямую в WAN.
-
-## Безопасное поведение при сбоях
-
-Проект должен сохранять обычный интернет, даже если сломался VPN, VPS, список или интерфейс.
-
-Используется отдельная таблица маршрутизации:
-
-```sh
-ip rule show
-ip route show table vpn
-```
-
-Только трафик с меткой `0x1` попадает в таблицу `vpn`. Остальной трафик идёт через обычную таблицу `main`.
-
-Если VPN работает, в таблице `vpn` должно быть примерно так:
-
-```sh
-default dev awg0 scope link
-```
-
-Если VPN-интерфейс не найден или не поднят, helper ставит:
-
-```sh
-fail-open/no-blackhole default
-```
-
-Это значит:
-
-- обычный интернет через WAN продолжает работать;
-- ресурсы из списков временно не открываются;
-- трафик из списков не уходит напрямую через провайдера.
-
-## Формат списка доменов
-
-Файл:
+По умолчанию реально используется только файл доменов:
 
 ```txt
 lists/domains-dnsmasq-nfset.lst
 ```
 
-Можно хранить в готовом `dnsmasq/nftset` формате:
+IPv4 CIDR выключен по умолчанию. Чтобы включить его в своём форке, измените в `getdomains-install.sh`:
 
-```txt
-nftset=/youtube.com/4#inet#fw4#vpn_domains
-nftset=/youtu.be/4#inet#fw4#vpn_domains
-nftset=/googlevideo.com/4#inet#fw4#vpn_domains
-nftset=/ytimg.com/4#inet#fw4#vpn_domains
+```sh
+DEFAULT_USE_IPV4_LIST="1"
 ```
 
-Также поддерживается обычный список доменов:
+IPv6 выключен по умолчанию. Чтобы включить его в своём форке:
+
+```sh
+DEFAULT_IPV6_SUPPORT="1"
+```
+
+### Если списки будут в отдельном репозитории
+
+Можно создать отдельный репозиторий, например:
+
+```txt
+dagmagnat/routing-openwrt-lists
+```
+
+И хранить там:
+
+```txt
+lists/domains-dnsmasq-nfset.lst
+lists/ipv4.lst
+lists/ipv6.lst
+```
+
+Тогда в `getdomains-install.sh` достаточно изменить:
+
+```sh
+DEFAULT_LISTS_REPO="dagmagnat/routing-openwrt-lists"
+```
+
+## Формат списка доменов
+
+Поддерживаются два формата.
+
+Обычный список доменов:
 
 ```txt
 youtube.com
@@ -138,7 +99,16 @@ googlevideo.com
 ytimg.com
 ```
 
-Скрипт умеет читать домены построчно, через пробелы или через запятые и сам преобразует их в `nftset`-формат.
+Можно писать построчно, через пробел или через запятую. Скрипт сам преобразует домены в формат `dnsmasq/nftset`.
+
+Также можно сразу использовать готовый формат:
+
+```txt
+nftset=/youtube.com/4#inet#fw4#vpn_domains
+nftset=/youtu.be/4#inet#fw4#vpn_domains
+nftset=/googlevideo.com/4#inet#fw4#vpn_domains
+nftset=/ytimg.com/4#inet#fw4#vpn_domains
+```
 
 ## Формат IPv4 CIDR
 
@@ -148,7 +118,7 @@ ytimg.com
 lists/ipv4.lst
 ```
 
-Формат:
+Пример:
 
 ```txt
 8.8.8.8
@@ -157,306 +127,165 @@ lists/ipv4.lst
 172.217.0.0/16
 ```
 
-Комментарии после `#` допускаются. Пустые строки игнорируются.
-
-## Формат IPv6 CIDR
-
-Файл:
-
-```txt
-lists/ipv6.lst
-```
-
-Формат:
-
-```txt
-2001:4860::/32
-2a00:1450::/32
-```
-
-IPv6 по умолчанию выключен. Чтобы включить его в своём форке, измените в начале `getdomains-install.sh`:
-
-```sh
-DEFAULT_IPV6_SUPPORT="1"
-```
-
-Для полноценного IPv6 нужны IPv6-адрес внутри туннеля, корректный `AllowedIPs = ::/0`, IPv6 firewall/ipset правила и рабочий IPv6 CIDR-список.
-
-## Установка из GitHub
-
-На роутере OpenWrt:
-
-```sh
-cd /tmp
-opkg update
-opkg install unzip wget
-
-rm -rf /tmp/routing-openwrt-main /tmp/routing-openwrt.zip
-wget -O /tmp/routing-openwrt.zip https://github.com/dagmagnat/routing-openwrt/archive/refs/heads/main.zip
-unzip -o /tmp/routing-openwrt.zip -d /tmp
-
-cd /tmp/routing-openwrt-main
-chmod +x install.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
-sh ./install.sh
-```
-
-Если вы скопировали ZIP вручную в `/tmp`, распакуйте его и запустите `install.sh` из папки проекта.
-
-## Установка AmneziaWG
-
-При выборе AmneziaWG установщик может предложить вставить полный конфиг.
-
-Пример:
-
-```ini
-[Interface]
-PrivateKey = ...
-Address = 10.28.8.160/32
-DNS = 1.1.1.1, 1.0.0.1
-Jc = 100
-Jmin = 20
-Jmax = 100
-S1 = 0
-S2 = 0
-H1 = 1
-H2 = 2
-H3 = 3
-H4 = 4
-I1 = <b 0x...>
-
-[Peer]
-PublicKey = ...
-PresharedKey = ...
-Endpoint = example.com:51820
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 15
-```
-
-После вставки конфига завершите ввод отдельной строкой:
-
-```txt
-END
-```
-
-Длинные строки `I1`, `I2` и похожие параметры должны оставаться одной строкой. Визуальный перенос в терминале — это нормально.
-
-## Автообновление списков
-
-После установки создаётся cron-задача:
-
-```cron
-0 2 * * * /etc/init.d/getdomains start
-```
-
-Каждый день в 02:00 роутер скачивает списки из GitHub, нормализует их, проверяет и применяет.
-
-Запустить обновление вручную:
-
-```sh
-/etc/init.d/getdomains start
-```
-
-Проверить cron:
-
-```sh
-cat /etc/crontabs/root
-/etc/init.d/cron status
-```
-
-## Где лежат настройки и кеш
-
-Конфигурация URL и режимов после установки:
-
-```sh
-/etc/domain-routing-user.conf
-```
-
-Кеш последней рабочей версии списков:
-
-```sh
-/etc/domain-routing/lists/domains.lst
-/etc/domain-routing/lists/ipv4.lst
-/etc/domain-routing/lists/ipv6.lst
-```
-
-Рабочие временные файлы:
-
-```sh
-/tmp/dnsmasq.d/domains.lst
-/tmp/lst/ipv4.lst
-/tmp/lst/ipv6.lst
-```
-
-`/tmp` очищается после перезагрузки, поэтому кеш в `/etc/domain-routing/lists` нужен обязательно.
-
-## Проверка после установки
-
-Быстрая диагностика:
-
-```sh
-/usr/sbin/domain-routing-status.sh
-```
-
-Подробная диагностика:
-
-```sh
-ip addr show awg0
-ip route show table vpn
-ip rule show
-
-dnsmasq --test
-head -n 20 /tmp/dnsmasq.d/domains.lst
-head -n 20 /tmp/lst/ipv4.lst
-
-nft list set inet fw4 vpn_domains | head -n 80
-nft list set inet fw4 vpn_subnets | head -n 80
-nft list ruleset | grep -E "vpn_domains|vpn_subnets|mark_domains|mark_subnet|0x00000001" -n
-
-logread | grep -Ei "getdomains|vpnroute|dnsmasq|amnezia|awg|nft|error|failed" | tail -n 100
-```
-
-Проверка маршрута для конкретного IP с меткой:
-
-```sh
-ip route get 172.217.19.238 mark 0x1
-```
-
-Ожидаемый результат — маршрут через `awg0`, `wg0` или другой выбранный VPN-интерфейс.
-
-## Если YouTube не открывается
-
-Проверьте, попадают ли IP YouTube/Google в `vpn_domains`:
-
-```sh
-nslookup youtube.com 192.168.1.1
-nslookup googlevideo.com 192.168.1.1
-nft list set inet fw4 vpn_domains | head -n 80
-```
-
-В `nftset` хранятся IP-адреса, а не домены. Поэтому `grep youtube` обычно ничего не покажет.
-
-Также проверьте:
-
-1. Клиент использует DNS роутера.
-2. На клиенте отключены Private DNS / Secure DNS / DNS-over-HTTPS.
-3. IPv6 выключен или корректно маршрутизируется через VPN.
-4. `ip route show table vpn` показывает маршрут через VPN.
-5. VPN-интерфейс поднят и есть RX/TX.
-
-## Удаление
-
-```sh
-cd /tmp/routing-openwrt-main
-sh ./uninstall.sh
-```
-
-После удаления желательно проверить:
-
-```sh
-ip rule show
-ip route show table vpn
-uci show firewall | grep -E "vpn_domains|vpn_subnets|mark_"
-```
-
-## Дисклеймер
-
-Проект находится в доработке. Основной проверенный сценарий сейчас — AmneziaWG + IPv4 domain/CIDR routing. Перед использованием на чужих роутерах рекомендуется тестировать на резервной конфигурации OpenWrt и иметь доступ к роутеру не только через VPN.
-
+IPv4 CIDR лучше включать только после того, как доменная маршрутизация уже работает.
 
 ## Установка с GitHub
 
-После публикации репозитория установка одной командой:
+Рекомендуемый способ, чтобы установщик нормально задавал вопросы:
+
+```sh
+cd /tmp
+rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main /tmp/routing-openwrt.zip
+wget --no-check-certificate -O /tmp/routing-openwrt.zip https://github.com/dagmagnat/routing-openwrt/archive/refs/heads/main.zip
+unzip -o /tmp/routing-openwrt.zip -d /tmp
+mv /tmp/routing-openwrt-main /tmp/routing-openwrt 2>/dev/null
+cd /tmp/routing-openwrt
+chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
+sh ./install.sh
+```
+
+Если нужно принудительно заново настроить туннель и удалить старый `awg0/wg0` проекта:
+
+```sh
+sh ./install.sh --reinstall
+```
+
+Быстрая установка одной командой тоже поддерживается:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
 ```
 
-Альтернативно, если репозиторий уже скачан на роутер:
+Но если нужно вводить большой конфиг AmneziaWG, удобнее использовать рекомендуемый способ выше.
+
+## Ручная установка из ZIP-архива
+
+Скопируйте архив проекта на роутер в `/tmp`, например:
+
+```txt
+/tmp/routing-openwrt-v14.zip
+```
+
+Потом выполните:
 
 ```sh
+cd /tmp
+rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main
+unzip -o /tmp/routing-openwrt-v14.zip -d /tmp
 cd /tmp/routing-openwrt
+chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
 sh ./install.sh
 ```
 
-## Списки по умолчанию
+Если после распаковки папка называется иначе, найдите её:
 
-Скрипт без ручного выбора берёт списки из этого репозитория:
-
-```txt
-https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
-https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
-https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
+```sh
+ls -lah /tmp | grep routing-openwrt
 ```
-
-`domains-dnsmasq-nfset.lst` может быть как готовым `nftset=/domain/4#inet#fw4#vpn_domains`, так и обычным списком доменов через строки, пробелы или запятые. Скрипт сам нормализует его перед подключением к `dnsmasq`.
-
-`ipv4.lst` должен содержать IPv4/CIDR, например:
-
-```txt
-8.8.8.8
-142.250.0.0/15
-172.217.0.0/16
-```
-
-Если `ipv4.lst` пустой, установка не должна ломаться, но CIDR-маршрутизация работать не будет, потому что в список нечего добавить. Домены при этом продолжают работать через `dnsmasq/nftset`.
-
-## DNSCrypt2/Stubby
-
-Интерактивный выбор DNSCrypt2/Stubby убран. Скрипт оставляет текущие DNS-настройки роутера и настраивает только `dnsmasq`, `nftset`, firewall mark и таблицу маршрутизации `vpn`.
-
 
 ## Обновление проекта
 
-Чтобы обновить скрипты проекта с GitHub без удаления текущего туннеля AmneziaWG/WireGuard:
+Обновить скрипты проекта с GitHub без полной переустановки туннеля:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
 ```
 
-После установки также доступна локальная команда:
+Локальная команда после установки:
 
 ```sh
 /usr/sbin/routing-openwrt-update.sh
 ```
 
-Режим обновления сохраняет текущий `awg0`/`wg0`, обновляет служебные скрипты, cron, правила маркировки, маршрутизацию и заново скачивает списки из `lists/`.
+## Удаление проекта
 
-## Удаление
-
-```sh
-wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
-```
-
-После установки также доступна локальная команда:
-
-```sh
-/usr/sbin/routing-openwrt-uninstall.sh
-```
-
-Удаление убирает правила проекта, списки, cron, helper-скрипты и таблицу `vpn`. Сам туннель и пакеты AmneziaWG/WireGuard намеренно не удаляются автоматически, чтобы не сломать пользовательскую конфигурацию.
-
-## Update and uninstall
-
-Update installed scripts/rules/lists without deleting the existing AWG/WG tunnel:
-
-```sh
-wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
-```
-
-Uninstall routing rules, cron, cached lists and helper scripts without deleting the VPN tunnel itself:
+Удалить правила маршрутизации, cron, списки, init-скрипты и настройки проекта:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
 ```
 
-The installer also creates local helper commands:
+Локальная команда после установки:
 
 ```sh
-/usr/sbin/routing-openwrt-update.sh
 /usr/sbin/routing-openwrt-uninstall.sh
+```
+
+Обычное удаление оставляет сам VPN-туннель `awg0/wg0`, чтобы случайно не удалить пользовательский конфиг.
+
+Полная очистка с удалением `awg0/wg0`, если нужно поставить всё с нуля:
+
+```sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh -s -- --purge
+```
+
+Если нужно удалить вообще всё старое и поставить с нуля, используйте `--purge`, затем установку с `--reinstall`.
+
+## Автообновление списков
+
+Списки обновляются автоматически каждый день в 02:00:
+
+```cron
+0 2 * * * /etc/init.d/getdomains start
+```
+
+Проверить cron:
+
+```sh
+cat /etc/crontabs/root | grep getdomains
+/etc/init.d/cron status
+```
+
+Обновить списки вручную:
+
+```sh
+/etc/init.d/getdomains start
+```
+
+Последняя рабочая версия списков хранится здесь:
+
+```txt
+/etc/domain-routing/lists
+```
+
+Если GitHub временно недоступен, используется кеш.
+
+## Проверка работы
+
+Статус:
+
+```sh
 /usr/sbin/domain-routing-status.sh
 ```
 
-### DNS note
+Основные проверки:
 
-The project redirects ordinary LAN DNS traffic on port 53 to the router. This is required so `dnsmasq` can resolve domains and fill `nftset` sets. It cannot intercept DNS-over-HTTPS or Android/iOS Private DNS, so those options must be disabled on clients when testing domain-based routing.
+```sh
+ip route show table vpn
+ip rule show
+nft list ruleset | grep -E "vpn_domains|mark_domains|vpn_subnets|mark_subnet" -n
+nft list set inet fw4 vpn_domains | head -n 50
+```
+
+Проверка DNS/nftset:
+
+```sh
+nslookup youtube.com 192.168.1.1
+nft list set inet fw4 vpn_domains | head -n 50
+```
+
+Если `youtube.com` появился в `vpn_domains` как IP-адрес, dnsmasq/nftset работает.
+
+Если пакеты не маркируются, проверьте, что клиент использует DNS роутера, а не Private DNS / Secure DNS / DNS-over-HTTPS.
+
+## Важно про AmneziaWG-конфиги
+
+Можно вставлять полный конфиг WireGuard/AmneziaWG. После вставки введите отдельной строкой:
+
+```txt
+END
+```
+
+Для AmneziaWG 2.0 поддерживаются параметры вроде `Jc`, `Jmin`, `Jmax`, `S1`, `S2`, `H1`–`H4`, `S3`, `S4`, `I1`–`I5`.
+
+Если вы уже публиковали `PrivateKey` или `PresharedKey` в чате/логе, лучше создать новый VPN-конфиг.

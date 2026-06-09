@@ -1,5 +1,5 @@
 #!/bin/sh
-# routing-openwrt uninstall/bootstrapper.
+# routing-openwrt uninstall/bootstrapper. Supports opkg and apk-based OpenWrt.
 # Usage:
 #   wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
 
@@ -19,11 +19,26 @@ fi
 
 echo "routing-openwrt: downloading uninstaller ${REPO}@${BRANCH}..."
 
-if ! command -v unzip >/dev/null 2>&1 || ! command -v wget >/dev/null 2>&1; then
-    opkg update
-    opkg install unzip wget ca-certificates ca-bundle libustream-mbedtls 2>/dev/null || \
-    opkg install unzip wget ca-certificates 2>/dev/null || true
-fi
+install_deps() {
+    if command -v unzip >/dev/null 2>&1 && command -v wget >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if command -v apk >/dev/null 2>&1; then
+        apk update
+        apk -U add unzip wget ca-certificates ca-bundle libustream-mbedtls 2>/dev/null || \
+        apk -U add unzip wget ca-certificates 2>/dev/null || true
+    elif command -v opkg >/dev/null 2>&1; then
+        opkg update
+        opkg install unzip wget ca-certificates ca-bundle libustream-mbedtls 2>/dev/null || \
+        opkg install unzip wget ca-certificates 2>/dev/null || true
+    else
+        echo "Error: neither apk nor opkg was found on this OpenWrt system."
+        exit 1
+    fi
+}
+
+install_deps
 
 rm -rf "$TMP_DIR" "$ZIP_FILE" "/tmp/routing-openwrt-${BRANCH}"
 wget --no-check-certificate -O "$ZIP_FILE" "$ZIP_URL" || wget -O "$ZIP_FILE" "$ZIP_URL" || exit 1

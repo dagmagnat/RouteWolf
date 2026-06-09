@@ -1,21 +1,27 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v13"
+PROJECT_VERSION="v14"
 
 # Project defaults for dagmagnat/routing-openwrt.
-# Lists are taken from the lists/ directory of this GitHub repository.
-# The installer does not ask for custom list URLs by default.
-# To make your own fork, change these values before publishing.
+# Lists are read from GitHub RAW links. By default they are stored in this repository,
+# but you can move lists to a separate repo later by changing DEFAULT_LISTS_REPO/BRANCH.
 DEFAULT_PROJECT_REPO="dagmagnat/routing-openwrt"
-DEFAULT_DOMAIN_LIST_URL="https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst"
-DEFAULT_IPV4_LIST_URL="https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst"
-DEFAULT_IPV6_LIST_URL="https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst"
+DEFAULT_LISTS_REPO="${ROUTING_OPENWRT_LISTS_REPO:-dagmagnat/routing-openwrt}"
+DEFAULT_LISTS_BRANCH="${ROUTING_OPENWRT_LISTS_BRANCH:-main}"
+DEFAULT_LISTS_BASE_URL="https://raw.githubusercontent.com/${DEFAULT_LISTS_REPO}/${DEFAULT_LISTS_BRANCH}/lists"
+DEFAULT_DOMAIN_LIST_URL="${ROUTING_OPENWRT_DOMAINS_URL:-${DEFAULT_LISTS_BASE_URL}/domains-dnsmasq-nfset.lst}"
+DEFAULT_IPV4_LIST_URL="${ROUTING_OPENWRT_IPV4_URL:-${DEFAULT_LISTS_BASE_URL}/ipv4.lst}"
+DEFAULT_IPV6_LIST_URL="${ROUTING_OPENWRT_IPV6_URL:-${DEFAULT_LISTS_BASE_URL}/ipv6.lst}"
 
-# Default list modes. 1 = use, 0 = skip.
+# Safe defaults. 1 = use, 0 = skip.
+# Domain routing is enabled. IPv4 CIDR, IPv6, DNS redirect and blackhole are OFF by default
+# so ordinary WAN internet is not broken if VPN/list/DNS is unavailable.
 DEFAULT_USE_DOMAIN_LIST="1"
 DEFAULT_USE_IPV4_LIST="0"
 DEFAULT_IPV6_SUPPORT="0"
+DEFAULT_DNS_REDIRECT="0"
+DEFAULT_FAIL_MODE="open"
 FORCE_REINSTALL="0"
 [ "$1" = "--reinstall" ] && FORCE_REINSTALL="1"
 
@@ -218,9 +224,58 @@ handle_existing_routing_config() {
 }
 
 
+# OpenWrt 24.10 and older use opkg; OpenWrt 25.12 and newer use apk.
+# Keep all package operations behind these helpers.
+detect_pkg_manager() {
+    if command -v apk >/dev/null 2>&1; then
+        PKG_MANAGER="apk"
+    elif command -v opkg >/dev/null 2>&1; then
+        PKG_MANAGER="opkg"
+    else
+        echo "Error: neither apk nor opkg was found on this OpenWrt system."
+        exit 1
+    fi
+}
+
+pkg_update() {
+    detect_pkg_manager
+    case "$PKG_MANAGER" in
+        apk) apk update ;;
+        opkg) opkg update ;;
+    esac
+}
+
+pkg_install() {
+    detect_pkg_manager
+    case "$PKG_MANAGER" in
+        apk) apk -U add "$@" ;;
+        opkg) opkg install "$@" ;;
+    esac
+}
+
+pkg_remove() {
+    detect_pkg_manager
+    case "$PKG_MANAGER" in
+        apk) apk del "$@" ;;
+        opkg) opkg remove "$@" ;;
+    esac
+}
+
+pkg_is_installed() {
+    detect_pkg_manager
+    pkg="$1"
+    case "$PKG_MANAGER" in
+        apk) apk info -e "$pkg" >/dev/null 2>&1 ;;
+        opkg) opkg list-installed | grep -q "^$pkg " ;;
+    esac
+}
+
 check_repo() {
-    printf "\033[32;1mChecking OpenWrt repo availability...\033[0m\n"
-    opkg update | grep -q "Failed to download" && printf "\033[32;1mopkg failed. Check internet or date. Command for force ntp sync: ntpd -p ptbtime1.ptb.de\033[0m\n" && exit 1
+    printf "\033[32;1mChecking OpenWrt package repository...\033[0m\n"
+    if ! pkg_update; then
+        printf "\033[31;1mPackage repository update failed. Check internet, DNS or router date/time. Try: ntpd -p ptbtime1.ptb.de\033[0m\n"
+        exit 1
+    fi
 }
 
 route_vpn () {
@@ -471,11 +526,11 @@ add_tunnel() {
 
     if [ "$TUNNEL" == 'wg' ]; then
         printf "\033[32;1mConfigure WireGuard\033[0m\n"
-        if opkg list-installed | grep -q wireguard-tools; then
+        if pkg_is_installed wireguard-tools; then
             echo "Wireguard already installed"
         else
             echo "Installed wg..."
-            opkg install wireguard-tools
+            pkg_install wireguard-tools
         fi
 
         route_vpn
@@ -523,24 +578,24 @@ add_tunnel() {
     fi
 
     if [ "$TUNNEL" == 'ovpn' ]; then
-        if opkg list-installed | grep -q openvpn-openssl; then
+        if pkg_is_installed openvpn-openssl; then
             echo "OpenVPN already installed"
         else
             echo "Installed openvpn"
-            opkg install openvpn-openssl
+            pkg_install openvpn-openssl
         fi
         printf "\033[32;1mConfigure route for OpenVPN\033[0m\n"
         route_vpn
     fi
 
     if [ "$TUNNEL" == 'singbox' ]; then
-        if opkg list-installed | grep -q sing-box; then
+        if pkg_is_installed sing-box; then
             echo "Sing-box already installed"
         else
             AVAILABLE_SPACE=$(df / | awk 'NR>1 { print $4 }')
             if  [[ "$AVAILABLE_SPACE" -gt 2000 ]]; then
                 echo "Installed sing-box"
-                opkg install sing-box
+                pkg_install sing-box
             else
                 printf "\033[31;1mNo free space for a sing-box. Sing-box is not installed.\033[0m\n"
                 exit 1
@@ -713,14 +768,19 @@ EOF
 }
 
 dnsmasqfull() {
-    if opkg list-installed | grep -q dnsmasq-full; then
+    if pkg_is_installed dnsmasq-full; then
         printf "\033[32;1mdnsmasq-full already installed\033[0m\n"
     else
-        printf "\033[32;1mInstalled dnsmasq-full\033[0m\n"
-        cd /tmp/ && opkg download dnsmasq-full
-        opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/
-
-        [ -f /etc/config/dhcp-opkg ] && cp /etc/config/dhcp /etc/config/dhcp-old && mv /etc/config/dhcp-opkg /etc/config/dhcp
+        printf "\033[32;1mInstalling dnsmasq-full\033[0m\n"
+        detect_pkg_manager
+        if [ "$PKG_MANAGER" = "apk" ]; then
+            # OpenWrt 25.12+ uses apk. apk resolves package replacement itself on most builds.
+            pkg_install dnsmasq-full || { pkg_remove dnsmasq; pkg_install dnsmasq-full; }
+        else
+            cd /tmp/ && opkg download dnsmasq-full
+            opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/
+            [ -f /etc/config/dhcp-opkg ] && cp /etc/config/dhcp /etc/config/dhcp-old && mv /etc/config/dhcp-opkg /etc/config/dhcp
+        fi
     fi
 }
 
@@ -855,31 +915,28 @@ show_manual() {
 }
 
 add_set() {
-    if uci show firewall | grep -q "@ipset.*name='vpn_domains'"; then
-        printf "\033[32;1mSet already exist\033[0m\n"
-    else
-        printf "\033[32;1mCreate set\033[0m\n"
-        uci add firewall ipset
-        uci set firewall.@ipset[-1].name='vpn_domains'
-        uci set firewall.@ipset[-1].match='dst_net'
-        uci commit
-    fi
-    if uci show firewall | grep -q "@rule.*name='mark_domains'"; then
-        printf "\033[32;1mRule for set already exist\033[0m\n"
-    else
-        printf "\033[32;1mCreate rule set\033[0m\n"
-        uci add firewall rule
-        uci set firewall.@rule[-1]=rule
-        uci set firewall.@rule[-1].name='mark_domains'
-        uci set firewall.@rule[-1].src='lan'
-        uci set firewall.@rule[-1].dest='*'
-        uci set firewall.@rule[-1].proto='all'
-        uci set firewall.@rule[-1].ipset='vpn_domains'
-        uci set firewall.@rule[-1].set_mark='0x1'
-        uci set firewall.@rule[-1].target='MARK'
-        uci set firewall.@rule[-1].family='ipv4'
-        uci commit
-    fi
+    # Recreate project domain set/rule idempotently. This prevents fw4 errors like
+    # "set vpn_domains: File exists" after previous broken installs or manual tests.
+    delete_uci_sections_by_name firewall ipset vpn_domains
+    delete_uci_sections_by_name firewall rule mark_domains
+
+    printf "[32;1mCreate domain nft set and mark rule[0m
+"
+    uci add firewall ipset >/dev/null
+    uci set firewall.@ipset[-1].name='vpn_domains'
+    uci set firewall.@ipset[-1].match='dst_net'
+
+    uci add firewall rule >/dev/null
+    uci set firewall.@rule[-1]=rule
+    uci set firewall.@rule[-1].name='mark_domains'
+    uci set firewall.@rule[-1].src='lan'
+    uci set firewall.@rule[-1].dest='*'
+    uci set firewall.@rule[-1].proto='all'
+    uci set firewall.@rule[-1].ipset='vpn_domains'
+    uci set firewall.@rule[-1].set_mark='0x1'
+    uci set firewall.@rule[-1].target='MARK'
+    uci set firewall.@rule[-1].family='ipv4'
+    uci commit firewall
 }
 
 add_dns_resolver() {
@@ -919,11 +976,11 @@ add_dns_resolver() {
     done
 
     if [ "$DNS_RESOLVER" == 'DNSCRYPT' ]; then
-        if opkg list-installed | grep -q dnscrypt-proxy2; then
+        if pkg_is_installed dnscrypt-proxy2; then
             printf "\033[32;1mDNSCrypt2 already installed\033[0m\n"
         else
             printf "\033[32;1mInstalled dnscrypt-proxy2\033[0m\n"
-            opkg install dnscrypt-proxy2
+            pkg_install dnscrypt-proxy2
             if grep -q "# server_names" /etc/dnscrypt-proxy2/dnscrypt-proxy.toml; then
                 sed -i "s/^# server_names =.*/server_names = [\'google\', \'cloudflare\', \'scaleway-fr\', \'yandex\']/g" /etc/dnscrypt-proxy2/dnscrypt-proxy.toml
             fi
@@ -953,11 +1010,11 @@ add_dns_resolver() {
     if [ "$DNS_RESOLVER" == 'STUBBY' ]; then
         printf "\033[32;1mConfigure Stubby\033[0m\n"
 
-        if opkg list-installed | grep -q stubby; then
+        if pkg_is_installed stubby; then
             printf "\033[32;1mStubby already installed\033[0m\n"
         else
             printf "\033[32;1mInstalled stubby\033[0m\n"
-            opkg install stubby
+            pkg_install stubby
 
             printf "\033[32;1mConfigure Dnsmasq for Stubby\033[0m\n"
             uci set dhcp.@dnsmasq[0].noresolv="1"
@@ -975,11 +1032,11 @@ add_dns_resolver() {
 
 add_packages() {
     for package in curl nano; do
-        if opkg list-installed | grep -q "^$package "; then
+        if pkg_is_installed "$package"; then
             printf "\033[32;1m$package already installed\033[0m\n"
         else
             printf "\033[32;1mInstalling $package...\033[0m\n"
-            opkg install "$package"
+            pkg_install "$package"
             
             if "$package" --version >/dev/null 2>&1; then
                 printf "\033[32;1m$package was successfully installed and available\033[0m\n"
@@ -1076,6 +1133,7 @@ add_getdomains() {
     clear_screen
     echo "Domain/IP lists / Списки доменов и IP"
     echo "Project / Проект: ${DEFAULT_PROJECT_REPO:-dagmagnat/routing-openwrt}"
+    echo "Lists repo / Репозиторий списков: ${DEFAULT_LISTS_REPO:-dagmagnat/routing-openwrt}"
     echo "This fork uses repository lists automatically. No manual URL input is required."
     echo "Этот форк автоматически использует списки из папки lists/ репозитория. Ручной ввод URL не нужен."
 
@@ -1487,11 +1545,11 @@ add_internal_wg() {
         PROTO="wireguard"
         ZONE_NAME="wg_internal"
 
-        if opkg list-installed | grep -q wireguard-tools; then
+        if pkg_is_installed wireguard-tools; then
             echo "Wireguard already installed"
         else
             echo "Installed wg..."
-            opkg install wireguard-tools
+            pkg_install wireguard-tools
         fi
     fi
 

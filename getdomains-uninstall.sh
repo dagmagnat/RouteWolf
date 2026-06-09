@@ -1,5 +1,9 @@
 #!/bin/ash
 
+PURGE_TUNNEL=0
+[ "$1" = "--purge" ] && PURGE_TUNNEL=1
+
+
 echo "Выпиливаем скрипты"
 /etc/init.d/getdomains disable
 rm -rf /etc/init.d/getdomains
@@ -9,7 +13,8 @@ rm -f /etc/init.d/vpnroute /usr/sbin/domain-routing-route.sh /usr/sbin/domain-ro
 rm -f /etc/hotplug.d/iface/30-vpnroute /etc/hotplug.d/net/30-vpnroute
 
 echo "Выпиливаем из crontab"
-sed -i '/getdomains start/d' /etc/crontabs/root
+sed -i '/getdomains start/d;/routing-openwrt/d;/domain-routing/d;/vpnroute/d' /etc/crontabs/root
+/etc/init.d/cron restart 2>/dev/null || true
 
 echo "Выпиливаем домены"
 rm -f /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst
@@ -125,8 +130,30 @@ while uci -q delete network.vpn_route_blackhole; do :; done
 while uci -q delete network.vpn_route_blackhole6; do :; done
 
 uci commit network
+
+if [ "$PURGE_TUNNEL" = "1" ]; then
+    echo "Purge mode: removing project tunnel interfaces awg0/wg0 and peer sections"
+    ifdown awg0 2>/dev/null || true
+    ifdown wg0 2>/dev/null || true
+    uci -q delete network.awg0
+    uci -q delete network.wg0
+    while uci -q delete network.@amneziawg_awg0[0] 2>/dev/null; do :; done
+    while uci -q delete network.@wireguard_wg0[0] 2>/dev/null; do :; done
+    uci commit network
+
+    for zone_name in awg wg vpn; do
+        while true; do
+            id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$zone_name'.*/\1/p" | head -n 1)
+            [ -z "$id" ] && break
+            uci -q delete firewall.@zone[$id]
+        done
+    done
+    uci commit firewall
+fi
+
 /etc/init.d/network restart
 
+uci -q del_list dhcp.@dnsmasq[0].confdir='/tmp/dnsmasq.d'
 uci -q delete dhcp.@dnsmasq[0].filter_aaaa
 uci commit dhcp 2>/dev/null || true
 /etc/init.d/dnsmasq restart 2>/dev/null || true
@@ -136,7 +163,11 @@ if uci show dhcp | grep -q ipset; then
     echo "В dnsmasq (/etc/config/dhcp) заданы домены. Нужные из них сохраните, остальные удалите вместе с ipset"
 fi
 
-echo "Все туннели, прокси, зоны и forwarding к ним оставляем на месте, они вам не помешают и скорее пригодятся"
+if [ "$PURGE_TUNNEL" = "1" ]; then
+    echo "Туннели awg0/wg0 проекта удалены"
+else
+    echo "Туннели оставлены. Для полного удаления используйте: uninstall.sh --purge"
+fi
 echo "Dnscrypt, stubby тоже не трогаем"
 
 echo "  ______  _____        _____   _____  ______  _     _  _____   _____"

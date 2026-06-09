@@ -1,13 +1,24 @@
 # routing-openwrt
 
-> **Important:** this project was not created from scratch. It is a modified fork of [`itdoginfo/domain-routing-openwrt`](https://github.com/itdoginfo/domain-routing-openwrt).  
-> The original routing idea, base domain/IP routing logic and parts of the code come from the original project. This fork adds repository-maintained lists, AmneziaWG 2.0 support, daily updates, list caching and safer failure behavior.
+`routing-openwrt` configures OpenWrt to route selected domains through a VPN/tunnel while keeping normal internet traffic on the regular WAN route.
 
-## What it does
+This is not a project written from scratch. It is a modified fork of [`itdoginfo/domain-routing-openwrt`](https://github.com/itdoginfo/domain-routing-openwrt).
 
-`routing-openwrt` configures OpenWrt so that **only selected domains and CIDR networks** go through a VPN interface, while normal internet traffic continues to use the default WAN route.
+## Default behavior
 
-Default list source for this fork:
+Safe defaults:
+
+- domain routing: enabled;
+- IPv4 CIDR routing: disabled;
+- IPv6 routing: disabled;
+- forced DNS redirect: disabled;
+- fail mode: fail-open, so normal WAN internet should not be broken if the VPN is down.
+
+The main tested scenario is OpenWrt 24.x + dnsmasq-full/nftset + AmneziaWG/AmneziaWG 2.0 + IPv4 domain routing. WireGuard, OpenVPN/tun, Sing-box/tun2socks, CIDR routing, IPv6 routing and OpenWrt 25.12+ with apk still need more real-router testing.
+
+OpenWrt 24.10 and older use `opkg`. OpenWrt 25.12 and newer use `apk`. The installer supports both package managers.
+
+## Default lists
 
 ```txt
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
@@ -15,157 +26,57 @@ https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
 ```
 
-The installer does not ask for custom list URLs by default. If you fork this project, change the defaults at the top of `getdomains-install.sh`.
+By default, only the domain list is used. IPv4 CIDR and IPv6 are disabled for safety.
 
-## Tested status
-
-Currently tested mainly with:
-
-- OpenWrt 24.x;
-- `dnsmasq-full` + `nftset`;
-- AmneziaWG / AmneziaWG 2.0;
-- IPv4 domain routing;
-- IPv4 CIDR routing.
-
-Still needs real-device testing:
-
-- plain WireGuard in all scenarios;
-- OpenVPN/tun;
-- Sing-box/tun2socks;
-- full IPv6 routing.
-
-## Safety behavior
-
-Only traffic marked with `0x1` is routed through the separate `vpn` table. Unmarked traffic continues to use the normal OpenWrt `main` table.
-
-If the VPN interface is up, the `vpn` table should contain something like:
-
-```sh
-default dev awg0 scope link
-```
-
-If the VPN interface is missing or down, the helper installs:
-
-```sh
-blackhole default
-```
-
-This prevents routed domains/IPs from leaking directly to WAN, while normal unmarked internet should remain unaffected.
-
-## List files
-
-Repository paths:
-
-```txt
-lists/domains-dnsmasq-nfset.lst
-lists/ipv4.lst
-lists/ipv6.lst
-```
-
-Domain list may be either dnsmasq/nftset format:
-
-```txt
-nftset=/youtube.com/4#inet#fw4#vpn_domains
-nftset=/youtu.be/4#inet#fw4#vpn_domains
-```
-
-or a plain domain list:
-
-```txt
-youtube.com
-youtu.be
-googlevideo.com
-```
-
-The script normalizes plain domains into dnsmasq/nftset format automatically.
-
-IPv4 list format:
-
-```txt
-8.8.8.8
-13.69.0.0/16
-142.250.0.0/15
-```
-
-IPv6 is disabled by default. To enable it in your fork, set this at the top of `getdomains-install.sh`:
-
-```sh
-DEFAULT_IPV6_SUPPORT="1"
-```
+If you move the lists to a separate repository, edit `DEFAULT_LISTS_REPO` in `getdomains-install.sh`.
 
 ## Install from GitHub
 
+Recommended interactive install:
+
 ```sh
 cd /tmp
-opkg update
-opkg install unzip wget
-
-rm -rf /tmp/routing-openwrt-main /tmp/routing-openwrt.zip
-wget -O /tmp/routing-openwrt.zip https://github.com/dagmagnat/routing-openwrt/archive/refs/heads/main.zip
+rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main /tmp/routing-openwrt.zip
+wget --no-check-certificate -O /tmp/routing-openwrt.zip https://github.com/dagmagnat/routing-openwrt/archive/refs/heads/main.zip
 unzip -o /tmp/routing-openwrt.zip -d /tmp
-
-cd /tmp/routing-openwrt-main
-chmod +x install.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
+mv /tmp/routing-openwrt-main /tmp/routing-openwrt 2>/dev/null
+cd /tmp/routing-openwrt
+chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
 sh ./install.sh
 ```
 
-## Daily list updates
-
-The installer creates this cron job:
-
-```cron
-0 2 * * * /etc/init.d/getdomains start
-```
-
-Manual update:
+Force tunnel reconfiguration:
 
 ```sh
-/etc/init.d/getdomains start
+sh ./install.sh --reinstall
 ```
 
-## Diagnostics
-
-Quick status:
+Quick install:
 
 ```sh
-/usr/sbin/domain-routing-status.sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
 ```
 
-Detailed checks:
+## Manual ZIP install
+
+Copy the ZIP to `/tmp`, for example `/tmp/routing-openwrt-v14.zip`, then run:
 
 ```sh
-ip route show table vpn
-ip rule show
-dnsmasq --test
-nft list set inet fw4 vpn_domains | head -n 80
-nft list set inet fw4 vpn_subnets | head -n 80
-logread | grep -Ei "getdomains|vpnroute|dnsmasq|amnezia|awg|nft|error|failed" | tail -n 100
+cd /tmp
+rm -rf /tmp/routing-openwrt /tmp/routing-openwrt-main
+unzip -o /tmp/routing-openwrt-v14.zip -d /tmp
+cd /tmp/routing-openwrt
+chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
+sh ./install.sh
 ```
-
-## Uninstall
-
-```sh
-cd /tmp/routing-openwrt-main
-sh ./uninstall.sh
-```
-
-
-## v9 notes
-
-- DNSCrypt2/Stubby interactive selection was removed. The installer keeps the router's existing upstream DNS configuration.
-- `install.sh` can now be used as a GitHub raw bootstrap installer.
-- Default lists are loaded from `dagmagnat/routing-openwrt/lists`.
-
 
 ## Update
-
-Update project scripts from GitHub without deleting the current AmneziaWG/WireGuard tunnel:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
 ```
 
-After installation, this local command is also available:
+Local command after installation:
 
 ```sh
 /usr/sbin/routing-openwrt-update.sh
@@ -177,8 +88,50 @@ After installation, this local command is also available:
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
 ```
 
-After installation, this local command is also available:
+Local command after installation:
 
 ```sh
 /usr/sbin/routing-openwrt-uninstall.sh
+```
+
+Normal uninstall keeps the existing `awg0/wg0` tunnel. Full purge:
+
+```sh
+wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh -s -- --purge
+```
+
+## List format
+
+Domain list can be plain domains:
+
+```txt
+youtube.com
+youtu.be
+googlevideo.com
+ytimg.com
+```
+
+or dnsmasq/nftset format:
+
+```txt
+nftset=/youtube.com/4#inet#fw4#vpn_domains
+nftset=/youtu.be/4#inet#fw4#vpn_domains
+```
+
+IPv4 CIDR format:
+
+```txt
+8.8.8.8
+13.69.0.0/16
+142.250.0.0/15
+```
+
+## Check
+
+```sh
+/usr/sbin/domain-routing-status.sh
+ip route show table vpn
+ip rule show
+nft list set inet fw4 vpn_domains | head -n 50
+nslookup youtube.com 192.168.1.1
 ```
