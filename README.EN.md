@@ -137,3 +137,12 @@ ip rule show
 nft list set inet fw4 vpn_domains | head -n 50
 nslookup youtube.com 192.168.1.1
 ```
+
+
+### Note about GitHub download on some routers
+
+Some OpenWrt builds have unstable `wget` behavior on GitHub redirects. The installer uses `codeload.github.com` directly and falls back to `curl`/`wget` where available.
+
+### Note about `opkg update` warnings
+
+If one OpenWrt feed temporarily fails but the required packages are already installed or available from other feeds, the installer continues instead of stopping immediately.

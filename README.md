@@ -296,3 +296,12 @@ END
 Для AmneziaWG 2.0 поддерживаются параметры вроде `Jc`, `Jmin`, `Jmax`, `S1`, `S2`, `H1`–`H4`, `S3`, `S4`, `I1`–`I5`.
 
 Если вы уже публиковали `PrivateKey` или `PresharedKey` в чате/логе, лучше создать новый VPN-конфиг.
+
+
+### Note about GitHub download on some routers
+
+Some OpenWrt builds have unstable `wget` behavior on GitHub redirects. The installer uses `codeload.github.com` directly and falls back to `curl`/`wget` where available.
+
+### Note about `opkg update` warnings
+
+If one OpenWrt feed temporarily fails but the required packages are already installed or available from other feeds, the installer continues instead of stopping immediately.

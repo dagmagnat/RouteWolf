@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v16"
+PROJECT_VERSION="v18"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -273,8 +273,9 @@ pkg_is_installed() {
 check_repo() {
     printf "\033[32;1mChecking OpenWrt package repository...\033[0m\n"
     if ! pkg_update; then
-        printf "\033[31;1mPackage repository update failed. Check internet, DNS or router date/time. Try: ntpd -p ptbtime1.ptb.de\033[0m\n"
-        exit 1
+        printf "\033[33;1mWarning: package repository update returned an error.\033[0m\n"
+        printf "\033[33;1mThe installer will continue and try to use already updated feeds/cache.\033[0m\n"
+        printf "\033[33;1mIf package installation fails, check internet, DNS, date/time or run: ntpd -p ptbtime1.ptb.de\033[0m\n"
     fi
 }
 
@@ -1716,8 +1717,13 @@ install_awg_packages() {
         exit 1
     fi
 
-    sh "$AWG_INSTALLER" -n
+    sh "$AWG_INSTALLER" -en
     AWG_RC="$?"
+    if [ "$AWG_RC" -ne 0 ]; then
+        # Fallback for older awg-openwrt installers where -en may not exist
+        sh "$AWG_INSTALLER" -n
+        AWG_RC="$?"
+    fi
 
     if [ "$AWG_RC" -ne 0 ]; then
         if awg_already_installed; then
@@ -1726,6 +1732,10 @@ install_awg_packages() {
             echo ""
             echo "AmneziaWG package installation failed."
             echo "Most common reasons: OpenWrt package repository is temporarily unreachable, IPv6/DNS issue, or missing packages for this build."
+            echo "If only one kmod dependency failed to download, install it manually, then run installer again."
+            echo "Example for OpenWrt 24.10 ramips/mt7621:"
+            echo "  curl -L --retry 5 -o /tmp/kmod-crypto-lib-curve25519.ipk https://downloads.openwrt.org/releases/24.10.6/targets/ramips/mt7621/kmods/6.6.127-1-f31f6f85a36836e510d64a18a9a5f1bf/kmod-crypto-lib-curve25519_6.6.127-r1_mipsel_24kc.ipk"
+            echo "  opkg install /tmp/kmod-crypto-lib-curve25519.ipk"
             echo "Try: opkg update; opkg install ca-certificates ca-bundle libustream-mbedtls; then run installer again."
             exit 1
         fi
