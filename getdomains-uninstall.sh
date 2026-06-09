@@ -5,7 +5,7 @@ echo "Выпиливаем скрипты"
 rm -rf /etc/init.d/getdomains
 
 /etc/init.d/vpnroute disable 2>/dev/null
-rm -f /etc/init.d/vpnroute /usr/sbin/domain-routing-route.sh /usr/sbin/domain-routing-status.sh /etc/domain-routing-route.conf
+rm -f /etc/init.d/vpnroute /usr/sbin/domain-routing-route.sh /usr/sbin/domain-routing-status.sh /usr/sbin/routing-openwrt-update.sh /usr/sbin/routing-openwrt-uninstall.sh /etc/domain-routing-route.conf
 rm -f /etc/hotplug.d/iface/30-vpnroute /etc/hotplug.d/net/30-vpnroute
 
 echo "Выпиливаем из crontab"
@@ -68,13 +68,45 @@ for name in mark_domains6 mark_subnet6; do
     fi
 done
 
+
+# Extra cleanup for named ipsets/rules that may have shifted indexes.
+for name in vpn_domains vpn_domains6 vpn_domains_internal vpn_subnets vpn_subnets6; do
+    while true; do
+        id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@ipset\[\([0-9]*\)\]\.name='$name'.*/\1/p" | head -n 1)
+        [ -z "$id" ] && break
+        uci -q delete firewall.@ipset[$id]
+    done
+done
+for name in mark_domains mark_domains6 mark_domains_intenal mark_subnet mark_subnet6; do
+    while true; do
+        id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@rule\[\([0-9]*\)\]\.name='$name'.*/\1/p" | head -n 1)
+        [ -z "$id" ] && break
+        uci -q delete firewall.@rule[$id]
+    done
+done
+while true; do
+    id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='vpn'.*/\1/p" | head -n 1)
+    [ -z "$id" ] && break
+    uci -q delete firewall.@zone[$id]
+done
+while true; do
+    id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@forwarding\[\([0-9]*\)\]\.src='lan'.*/\1/p" | head -n 1)
+    [ -z "$id" ] && break
+    if uci -q get firewall.@forwarding[$id].dest | grep -q '^vpn$'; then
+        uci -q delete firewall.@forwarding[$id]
+    else
+        break
+    fi
+done
 uci commit firewall
 /etc/init.d/firewall restart
 
 echo "Чистим сеть"
+while ip rule del fwmark 0x1 table vpn 2>/dev/null; do :; done
+while ip rule del priority 100 2>/dev/null; do :; done
 ip route flush table vpn 2>/dev/null || true
 ip -6 route flush table vpn 2>/dev/null || true
-sed -i '/99 vpn/d' /etc/iproute2/rt_tables
+sed -i '/[[:space:]]vpn$/d;/^99[[:space:]]/d' /etc/iproute2/rt_tables 2>/dev/null || true
 
 rule_id=$(uci show network | grep -E '@rule.*name=.mark0x1.' | awk -F '[][{}]' '{print $2}' | head -n 1)
 if [ ! -z "$rule_id" ]; then
@@ -87,7 +119,10 @@ if [ ! -z "$rule_id" ]; then
 fi
 
 while uci -q delete network.vpn_route; do :; done
+while uci -q delete network.vpn_route6; do :; done
 while uci -q delete network.vpn_route_internal; do :; done
+while uci -q delete network.vpn_route_blackhole; do :; done
+while uci -q delete network.vpn_route_blackhole6; do :; done
 
 uci commit network
 /etc/init.d/network restart

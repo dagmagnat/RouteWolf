@@ -16,7 +16,7 @@ DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 # When this script is piped to sh, $0 is usually "sh" or "ash", so we must download from GitHub.
 if [ "$SELF_NAME" = "install.sh" ] && [ -f "$DIR/getdomains-install.sh" ]; then
     chmod +x "$DIR/getdomains-install.sh" 2>/dev/null || true
-    exec sh "$DIR/getdomains-install.sh" "$@"
+    if [ -r /dev/tty ]; then exec sh "$DIR/getdomains-install.sh" "$@" < /dev/tty; else exec sh "$DIR/getdomains-install.sh" "$@"; fi
 fi
 
 echo "routing-openwrt: downloading ${REPO}@${BRANCH}..."
@@ -40,4 +40,4 @@ fi
 
 cd "$TMP_DIR" || exit 1
 chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh 2>/dev/null || true
-exec sh ./getdomains-install.sh "$@"
+if [ -r /dev/tty ]; then exec sh ./getdomains-install.sh "$@" < /dev/tty; else exec sh ./getdomains-install.sh "$@"; fi

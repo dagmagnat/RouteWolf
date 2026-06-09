@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v10"
+PROJECT_VERSION="v13"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are taken from the lists/ directory of this GitHub repository.
@@ -14,8 +14,10 @@ DEFAULT_IPV6_LIST_URL="https://raw.githubusercontent.com/dagmagnat/routing-openw
 
 # Default list modes. 1 = use, 0 = skip.
 DEFAULT_USE_DOMAIN_LIST="1"
-DEFAULT_USE_IPV4_LIST="1"
+DEFAULT_USE_IPV4_LIST="0"
 DEFAULT_IPV6_SUPPORT="0"
+FORCE_REINSTALL="0"
+[ "$1" = "--reinstall" ] && FORCE_REINSTALL="1"
 
 clear_screen() { command -v clear >/dev/null 2>&1 && clear; }
 
@@ -130,6 +132,13 @@ detect_existing_routing_config() {
     elif [ "$(uci -q get network.wg0.proto 2>/dev/null)" = "wireguard" ]; then
         EXISTING_TUNNEL="wg"
         EXISTING_IFACE="wg0"
+    elif uci show network 2>/dev/null | grep -q '^network\.@amneziawg_awg0\['; then
+        # Orphaned peer section without network.awg0 interface: previous broken cleanup/install.
+        EXISTING_TUNNEL="0"
+        EXISTING_IFACE="orphaned-awg0-peer"
+    elif uci show network 2>/dev/null | grep -q '^network\.@wireguard_wg0\['; then
+        EXISTING_TUNNEL="0"
+        EXISTING_IFACE="orphaned-wg0-peer"
     elif [ -f /etc/domain-routing-route.conf ]; then
         old_route_dev=$(grep -m1 "^VPN_ROUTE_DEV=" /etc/domain-routing-route.conf 2>/dev/null | cut -d= -f2 | tr -d "'")
         old_route_dev=$(echo "$old_route_dev" | tr -d '"')
@@ -250,8 +259,10 @@ EOF
 
 # Maintains the separate "vpn" routing table used only by marked traffic.
 # Normal, unmarked internet uses the main routing table and is not changed.
-# If the VPN interface is missing/down, this script installs a blackhole
-# default route in table vpn so routed domains/IPs do not silently leak to WAN.
+# Default safety mode is FAIL-OPEN: if VPN is missing/down, table vpn is left empty
+# and Linux policy routing falls back to the main WAN table. This prevents Android/iOS
+# from showing "No internet" when connectivity-check domains are in the routing list.
+# Leak-protection/fail-closed can be added later as an explicit optional mode.
 
 [ -f /etc/domain-routing-route.conf ] && . /etc/domain-routing-route.conf
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
@@ -267,18 +278,23 @@ ensure_rule() {
     fi
 }
 
-fail_closed_route() {
-    # Only table vpn is blackholed. The main/default internet route is not touched.
-    ip route replace blackhole default table "$TABLE" metric 42767 >/dev/null 2>&1 || true
+fail_open_route() {
+    # Remove stale blackhole or stale VPN default routes from earlier versions.
+    ip route del blackhole default table "$TABLE" metric 42767 >/dev/null 2>&1 || true
+    ip route del default table "$TABLE" >/dev/null 2>&1 || true
     if [ "$IPV6_SUPPORT" = "1" ]; then
-        ip -6 route replace blackhole default table "$TABLE" metric 42767 >/dev/null 2>&1 || true
+        ip -6 route del blackhole default table "$TABLE" metric 42767 >/dev/null 2>&1 || true
+        ip -6 route del default table "$TABLE" >/dev/null 2>&1 || true
     fi
 }
 
 use_vpn_route() {
-    ip route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" scope link >/dev/null 2>&1 || return 1
+    # Always remove the old fail-closed blackhole before installing a working VPN route.
+    ip route del blackhole default table "$TABLE" metric 42767 >/dev/null 2>&1 || true
+    ip route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" scope link metric 10 >/dev/null 2>&1 || return 1
     if [ "$IPV6_SUPPORT" = "1" ]; then
-        ip -6 route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" >/dev/null 2>&1 || true
+        ip -6 route del blackhole default table "$TABLE" metric 42767 >/dev/null 2>&1 || true
+        ip -6 route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" metric 10 >/dev/null 2>&1 || true
     fi
     return 0
 }
@@ -296,7 +312,7 @@ while [ "$i" -lt 30 ]; do
     sleep 1
 done
 
-fail_closed_route
+fail_open_route
 exit 0
 EOF
     chmod +x /usr/sbin/domain-routing-route.sh
@@ -307,7 +323,7 @@ EOF
 [ -f /etc/domain-routing-route.conf ] && . /etc/domain-routing-route.conf
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
 
-echo "=== domain-routing status ==="
+echo "=== routing-openwrt v13 status ==="
 echo "VPN_ROUTE_DEV=${VPN_ROUTE_DEV:-not set}"
 echo "IPV6_SUPPORT=${IPV6_SUPPORT:-0}"
 echo "DOMAINS_URL=${DOMAINS_URL:-not set}"
@@ -333,7 +349,8 @@ echo "=== firewall marks ==="
 nft list ruleset 2>/dev/null | grep -E "vpn_domains|vpn_subnets|mark_domains|mark_subnet" -n || true
 echo ""
 echo "=== quick checks ==="
-echo "If mark_domains/mark_subnet counters stay at 0 while opening a site from LAN, the client is probably using DoH/Private DNS/cache or not going through br-lan."
+echo "If table vpn shows blackhole default, it is stale from older builds: run /usr/sbin/domain-routing-route.sh."
+echo "If mark counters stay at 0 while opening a site from LAN, the client is probably using DoH/Private DNS/cache or not going through br-lan."
 EOF
     chmod +x /usr/sbin/domain-routing-status.sh
 
@@ -375,16 +392,18 @@ add_mark() {
         uci commit
     fi
 
-    # Fail closed for marked traffic until a VPN route is installed.
-    # This does not touch the main/default route, so normal unmarked internet stays available.
-    if ! ip route show table vpn 2>/dev/null | grep -q '^default dev '; then
-        ip route replace blackhole default table vpn metric 42767 >/dev/null 2>&1 || true
-    fi
+    # v12 default is fail-open. Do not install blackhole routes automatically.
+    # If VPN is not available, routed domains fall back to the normal WAN route instead
+    # of breaking Android/iOS connectivity checks and normal internet indicators.
+    ip route del blackhole default table vpn metric 42767 >/dev/null 2>&1 || true
 }
 
 add_tunnel() {
     clear_screen
-    if handle_existing_routing_config; then
+    if [ "$FORCE_REINSTALL" = "1" ]; then
+        echo "Forced reinstall requested / Запрошена принудительная переустановка"
+        cleanup_existing_routing_config
+    elif handle_existing_routing_config; then
         return
     fi
     clear_screen
@@ -1001,14 +1020,14 @@ install_management_commands() {
     cat << 'EOF' > /usr/sbin/routing-openwrt-update.sh
 #!/bin/sh
 # Update routing-openwrt from GitHub without deleting the current tunnel config.
-wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
+cd /tmp && wget --no-check-certificate -O /tmp/routing-openwrt-update.sh https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh && sh /tmp/routing-openwrt-update.sh
 EOF
     chmod +x /usr/sbin/routing-openwrt-update.sh
 
     cat << 'EOF' > /usr/sbin/routing-openwrt-uninstall.sh
 #!/bin/sh
 # Remove routing-openwrt rules, lists, cron and helper scripts.
-wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
+cd /tmp && wget --no-check-certificate -O /tmp/routing-openwrt-uninstall.sh https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh && sh /tmp/routing-openwrt-uninstall.sh
 EOF
     chmod +x /usr/sbin/routing-openwrt-uninstall.sh
 }
@@ -1039,7 +1058,7 @@ update_existing_installation() {
 
     dnsmasqfull
     dnsmasqconfdir
-    ensure_lan_dns_redirect
+    # DNS redirect is intentionally OFF by default. It can break normal internet checks.
     add_mark
     add_set
     install_management_commands
@@ -1726,7 +1745,8 @@ dnsmasqfull
 
 dnsmasqconfdir
 
-ensure_lan_dns_redirect
+# DNS redirect is intentionally OFF by default. It can be added later as an optional menu item.
+# ensure_lan_dns_redirect
 
 # DNSCrypt2/Stubby interactive selection was removed.
 # The script keeps the router's existing upstream DNS settings and only configures dnsmasq/nftset routing.
