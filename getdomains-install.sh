@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v26"
+PROJECT_VERSION="v27"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -101,6 +101,21 @@ ovpn_detect_dev() {
     dev=${dev:-tun0}
     [ "$dev" = "tun" ] && dev="tun0"
     echo "$dev"
+}
+
+ovpn_detect_gateway() {
+    # OpenVPN TUN often needs an explicit next-hop gateway in table vpn.
+    # We try cheap local checks only; no network probes and no heavy tools.
+    dev="$1"
+    [ -n "$dev" ] || dev="tun0"
+
+    # Best source: full-tunnel /1 routes pushed by server before we remove them.
+    ip route show 0.0.0.0/1 2>/dev/null | awk -v d="$dev" '$2=="via" && $0 ~ " dev " d "( |$)" {print $3; exit}' | grep -m1 . && return 0
+    ip route show 128.0.0.0/1 2>/dev/null | awk -v d="$dev" '$2=="via" && $0 ~ " dev " d "( |$)" {print $3; exit}' | grep -m1 . && return 0
+    ip route show default 2>/dev/null | awk -v d="$dev" '$2=="via" && $0 ~ " dev " d "( |$)" {print $3; exit}' | grep -m1 . && return 0
+
+    # topology subnet fallback: OpenVPN server is often .1 inside the TUN subnet.
+    ip -4 addr show dev "$dev" 2>/dev/null | awk '/ inet / {split($2,a,"/"); split(a[1],o,"."); if (o[1] && o[2] && o[3]) {print o[1]"."o[2]"."o[3]".1"; exit}}'
 }
 
 ovpn_harden_route_only_config() {
@@ -222,10 +237,12 @@ ovpn_prepare_route_only_existing() {
         msgc "$C_YELLOW" "OpenVPN config file was not detected automatically. Full-tunnel routes will be removed at runtime, but it is better to add route-nopull to the .ovpn config." "OpenVPN-конфиг не определён автоматически. Full-tunnel маршруты будут удалены во время работы, но лучше добавить route-nopull в .ovpn конфиг."
     fi
 
-    # Restart OpenVPN only after config patch. Then remove server-pushed /1 routes if they still appear.
+    # Restart OpenVPN only after config patch. Capture pushed gateway before removing /1 routes.
     /etc/init.d/openvpn enable >/dev/null 2>&1 || true
     /etc/init.d/openvpn restart >/dev/null 2>&1 || true
     sleep 8
+    OVPN_ROUTE_GW="$(ovpn_detect_gateway "$dev" | head -n 1)"
+    [ -n "$OVPN_ROUTE_GW" ] && msg "OpenVPN route gateway: $OVPN_ROUTE_GW" "Шлюз маршрута OpenVPN: $OVPN_ROUTE_GW"
     ovpn_remove_full_tunnel_routes "$dev"
 }
 
@@ -268,6 +285,8 @@ configure_openvpn_from_paste() {
     /etc/init.d/openvpn enable >/dev/null 2>&1 || true
     /etc/init.d/openvpn restart >/dev/null 2>&1 || true
     sleep 8
+    OVPN_ROUTE_GW="$(ovpn_detect_gateway "$OVPN_ROUTE_DEV" | head -n 1)"
+    [ -n "$OVPN_ROUTE_GW" ] && msg "OpenVPN route gateway: $OVPN_ROUTE_GW" "Шлюз маршрута OpenVPN: $OVPN_ROUTE_GW"
     ovpn_remove_full_tunnel_routes "$OVPN_ROUTE_DEV"
 
     msg "OpenVPN config saved to $OVPN_CFG" "OpenVPN-конфиг сохранён в $OVPN_CFG"
@@ -950,6 +969,7 @@ route_vpn () {
         VPN_ROUTE_UCI_INTERFACE="awg0"
     elif [ "$TUNNEL" = ovpn ]; then
         VPN_ROUTE_DEV="${OVPN_ROUTE_DEV:-tun0}"
+        VPN_ROUTE_GW="${OVPN_ROUTE_GW:-$(ovpn_detect_gateway "$VPN_ROUTE_DEV" | head -n 1)}"
         VPN_ROUTE_UCI_INTERFACE="OpenVPN"
         # Keep a visible OpenWrt interface for LuCI/firewall zone assignment.
         # Do not create the old duplicate ovpn0 interface.
@@ -984,6 +1004,9 @@ route_vpn () {
     cat << EOF > /etc/domain-routing-route.conf
 VPN_ROUTE_DEV='$VPN_ROUTE_DEV'
 EOF
+    if [ -n "${VPN_ROUTE_GW:-}" ]; then
+        echo "VPN_ROUTE_GW='$VPN_ROUTE_GW'" >> /etc/domain-routing-route.conf
+    fi
 
     cat << 'EOF' > /usr/sbin/domain-routing-route.sh
 #!/bin/sh
@@ -1029,11 +1052,34 @@ remove_openvpn_full_tunnel_routes() {
     esac
 }
 
+detect_openvpn_gateway_runtime() {
+    dev="$1"
+    [ -n "$dev" ] || return 1
+    ip route show 0.0.0.0/1 2>/dev/null | awk -v d="$dev" '$2=="via" && $0 ~ " dev " d "( |$)" {print $3; exit}' | grep -m1 . && return 0
+    ip route show 128.0.0.0/1 2>/dev/null | awk -v d="$dev" '$2=="via" && $0 ~ " dev " d "( |$)" {print $3; exit}' | grep -m1 . && return 0
+    ip route show default 2>/dev/null | awk -v d="$dev" '$2=="via" && $0 ~ " dev " d "( |$)" {print $3; exit}' | grep -m1 . && return 0
+    ip -4 addr show dev "$dev" 2>/dev/null | awk '/ inet / {split($2,a,"/"); split(a[1],o,"."); if (o[1] && o[2] && o[3]) {print o[1]"."o[2]"."o[3]".1"; exit}}'
+}
+
 use_vpn_route() {
     # Always remove the old fail-closed blackhole before installing a working VPN route.
     ip route del blackhole default table "$TABLE" metric 42767 >/dev/null 2>&1 || true
     remove_openvpn_full_tunnel_routes
-    ip route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" scope link metric 10 >/dev/null 2>&1 || return 1
+
+    case "$VPN_ROUTE_DEV" in
+        tun*)
+            GW="${VPN_ROUTE_GW:-$(detect_openvpn_gateway_runtime "$VPN_ROUTE_DEV" | head -n 1)}"
+            if [ -n "$GW" ]; then
+                ip route replace default via "$GW" dev "$VPN_ROUTE_DEV" table "$TABLE" metric 10 >/dev/null 2>&1 ||                     ip route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" scope link metric 10 >/dev/null 2>&1 || return 1
+            else
+                ip route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" scope link metric 10 >/dev/null 2>&1 || return 1
+            fi
+        ;;
+        *)
+            ip route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" scope link metric 10 >/dev/null 2>&1 || return 1
+        ;;
+    esac
+
     if [ "$IPV6_SUPPORT" = "1" ]; then
         ip -6 route del blackhole default table "$TABLE" metric 42767 >/dev/null 2>&1 || true
         ip -6 route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" metric 10 >/dev/null 2>&1 || true
@@ -1065,8 +1111,9 @@ EOF
 [ -f /etc/domain-routing-route.conf ] && . /etc/domain-routing-route.conf
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
 
-echo "=== routing-openwrt v26 status ==="
+echo "=== routing-openwrt v27 status ==="
 echo "VPN_ROUTE_DEV=${VPN_ROUTE_DEV:-not set}"
+echo "VPN_ROUTE_GW=${VPN_ROUTE_GW:-not set}"
 echo "IPV6_SUPPORT=${IPV6_SUPPORT:-0}"
 echo "DOMAINS_URL=${DOMAINS_URL:-not set}"
 echo "IPV4_URL=${IPV4_URL:-not set}"
@@ -1136,18 +1183,19 @@ esac
 ip route flush table vpn >/dev/null 2>&1 || true
 /usr/sbin/domain-routing-route.sh >/dev/null 2>&1 || true
 
-# Refresh lists from GitHub/cache. This replaces removed domains too.
-/etc/init.d/getdomains start >/dev/null 2>&1 || log "getdomains refresh failed"
-
-# dnsmasq can sometimes get stuck after many DNS requests; restart safely if test fails.
+# Keep healthcheck light for weak routers: do not download lists here.
+# Daily list refresh is handled by cron /etc/init.d/getdomains start.
+# Restart dnsmasq only if its syntax test fails or working lists are missing.
 if ! dnsmasq --test >/dev/null 2>&1; then
     log "dnsmasq test failed; restarting dnsmasq"
     /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-else
+elif [ ! -s /tmp/dnsmasq.d/domains.lst ]; then
+    log "domain list missing; refreshing lists and restarting dnsmasq"
+    /etc/init.d/getdomains start >/dev/null 2>&1 || true
     /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
 fi
 
-# Reapply route after firewall/dnsmasq changes.
+# Reapply route after possible service changes.
 /usr/sbin/domain-routing-route.sh >/dev/null 2>&1 || true
 
 # Basic AWG/WG visibility log; no blocking actions.
@@ -1745,7 +1793,7 @@ section() { printf "\n%b=== %s ===%b\n" "$BLUE" "$1" "$RESET"; }
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
 
 section "routing-openwrt diagnostics"
-echo "Version: v26"
+echo "Version: v27"
 echo "Date: $(date 2>/dev/null)"
 echo "Model: $(ubus call system board 2>/dev/null | jsonfilter -e '@.model' 2>/dev/null || cat /tmp/sysinfo/model 2>/dev/null)"
 echo "OpenWrt: $(ubus call system board 2>/dev/null | jsonfilter -e '@.release.description' 2>/dev/null)"
@@ -1865,9 +1913,13 @@ YOUTUBE_IP=$(nslookup youtube.com "$LAN_IP" 2>/tmp/routing-openwrt-youtube-nsloo
 if [ -n "$YOUTUBE_IP" ]; then
     ok "youtube.com resolved by router to $YOUTUBE_IP"
     nft list set inet fw4 vpn_domains 2>/dev/null | grep -q "$YOUTUBE_IP" && ok "youtube.com IP is in vpn_domains" || warn "youtube.com IP is not visible in vpn_domains yet"
-    echo "ip route get $YOUTUBE_IP mark 0x1:"
-    ip route get "$YOUTUBE_IP" mark 0x1 2>/dev/null || true
-    ip route get "$YOUTUBE_IP" mark 0x1 2>/dev/null | grep -q "dev ${DEV}" && ok "marked YouTube traffic would use $DEV" || warn "marked YouTube route does not show $DEV"
+    echo "table vpn route for marked traffic:"
+    ip route show table vpn 2>/dev/null || true
+    if ip route show table vpn 2>/dev/null | grep -q "dev ${DEV}"; then
+        ok "marked traffic uses table vpn through $DEV"
+    else
+        warn "table vpn does not show $DEV for marked traffic"
+    fi
 else
     bad "Could not resolve youtube.com through router DNS ($LAN_IP)"
     cat /tmp/routing-openwrt-youtube-nslookup.log 2>/dev/null
