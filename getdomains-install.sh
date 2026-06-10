@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v31"
+PROJECT_VERSION="v32"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -2489,6 +2489,37 @@ load_config() {
     IPV4_URL=${IPV4_URL:-}
     IPV6_URL=${IPV6_URL:-}
     IPV6_SUPPORT=${IPV6_SUPPORT:-0}
+}
+
+# Keep this downloader inside /etc/init.d/getdomains.
+# The init script runs later under /etc/rc.common and cannot see functions
+# from getdomains-install.sh. Older v31 generated getdomains without this
+# function, which caused: download_url_to_file: not found.
+wget_has_no_check() { wget --help 2>&1 | grep -q -- '--no-check-certificate'; }
+
+download_url_to_file() {
+    url="$1"
+    out="$2"
+    [ -n "$url" ] && [ -n "$out" ] || return 1
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -L -k -f --connect-timeout 15 --max-time 120 --retry 2 "$url" -o "$out" 2>/dev/null && return 0
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        if wget_has_no_check; then
+            wget --no-check-certificate -O "$out" "$url" && return 0
+        else
+            wget -O "$out" "$url" && return 0
+        fi
+    fi
+
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch --no-check-certificate -O "$out" "$url" 2>/dev/null && return 0
+        uclient-fetch -O "$out" "$url" && return 0
+    fi
+
+    return 1
 }
 
 restore_cache() {
