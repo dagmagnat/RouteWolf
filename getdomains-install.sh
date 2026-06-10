@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v25"
+PROJECT_VERSION="v26"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -260,9 +260,9 @@ configure_openvpn_from_paste() {
 
     uci -q delete network.ovpn0
     uci -q delete sing-box.main
-    uci set network.ovpn0='interface'
-    uci set network.ovpn0.proto='none'
-    uci set network.ovpn0.device="$OVPN_ROUTE_DEV"
+    uci set network.OpenVPN='interface'
+    uci set network.OpenVPN.proto='none'
+    uci set network.OpenVPN.device="$OVPN_ROUTE_DEV"
     uci commit network
 
     /etc/init.d/openvpn enable >/dev/null 2>&1 || true
@@ -279,13 +279,32 @@ configure_openvpn_from_paste() {
 
 detect_openvpn_candidates() {
     {
-        ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^tun[0-9]*/ { print $2 }'
-        uci show network 2>/dev/null | sed -n "s/^network\.[^.]*\.device='\(tun[^']*\)'.*/\1/p"
+        # Real kernel devices: tun0, tun1... Do not list plain "tun".
+        ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^tun[0-9]+$/ { print $2 }'
+
+        # OpenWrt network interfaces bound to tun devices.
+        uci show network 2>/dev/null | sed -n "s/^network\.[^.]*\.device='\(tun[0-9][^']*\)'.*/\1/p"
+
+        # OpenVPN configs may contain "dev tun". That is a type, not a device;
+        # route through tun0 unless a real tun device is already visible.
         uci show openvpn 2>/dev/null | sed -n "s/.*\.config='\([^']*\)'.*/\1/p" | while read -r _cfg; do
             [ -f "$_cfg" ] || continue
-            awk 'tolower($1)=="dev" && $2 ~ /^tun/ { print $2; exit }' "$_cfg"
+            _dev=$(awk '
+                /^[[:space:]]*#/ || /^[[:space:]]*;/ { next }
+                tolower($1)=="dev" { print $2; exit }
+            ' "$_cfg" 2>/dev/null)
+            case "$_dev" in
+                tun[0-9]*) echo "$_dev" ;;
+                tun|'')
+                    if ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^tun[0-9]+$/ {print $2; exit}' | grep -q .; then
+                        ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^tun[0-9]+$/ {print $2; exit}'
+                    else
+                        echo "tun0"
+                    fi
+                ;;
+            esac
         done
-    } | sed '/^$/d' | sort -u
+    } | sed '/^$/d' | sed '/^tun$/d' | sort -u
 }
 
 configure_openvpn_existing() {
@@ -345,9 +364,12 @@ configure_openvpn_existing() {
             msgc "$C_YELLOW" "Device is in config but not currently up. Routing will be configured, but OpenVPN must be started." "Интерфейс есть в конфиге, но сейчас не поднят. Маршрутизация будет настроена, но OpenVPN нужно запустить."
         fi
 
-        # Manual OpenVPN mode must not create another OpenWrt interface.
-        # If the user already has OpenVPN -> tun0 in LuCI, we only bind routing-openwrt to that tun device.
+        # Manual OpenVPN mode must not create another duplicate interface (old ovpn0).
+        # Create/update only a visible LuCI interface named OpenVPN and attach it to tun0/tun1.
         uci -q delete network.ovpn0
+        uci set network.OpenVPN='interface'
+        uci set network.OpenVPN.proto='none'
+        uci set network.OpenVPN.device="$OVPN_ROUTE_DEV"
         uci commit network >/dev/null 2>&1 || true
         ovpn_prepare_route_only_existing "$OVPN_ROUTE_DEV"
         TUNNEL="ovpn"
@@ -928,7 +950,14 @@ route_vpn () {
         VPN_ROUTE_UCI_INTERFACE="awg0"
     elif [ "$TUNNEL" = ovpn ]; then
         VPN_ROUTE_DEV="${OVPN_ROUTE_DEV:-tun0}"
-        VPN_ROUTE_UCI_INTERFACE=""
+        VPN_ROUTE_UCI_INTERFACE="OpenVPN"
+        # Keep a visible OpenWrt interface for LuCI/firewall zone assignment.
+        # Do not create the old duplicate ovpn0 interface.
+        uci -q delete network.ovpn0
+        uci set network.OpenVPN='interface'
+        uci set network.OpenVPN.proto='none'
+        uci set network.OpenVPN.device="$VPN_ROUTE_DEV"
+        uci commit network >/dev/null 2>&1 || true
     elif [ "$TUNNEL" = singbox ]; then
         VPN_ROUTE_DEV="${SINGBOX_ROUTE_DEV:-tun0}"
         VPN_ROUTE_UCI_INTERFACE=""
@@ -1036,7 +1065,7 @@ EOF
 [ -f /etc/domain-routing-route.conf ] && . /etc/domain-routing-route.conf
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
 
-echo "=== routing-openwrt v25 status ==="
+echo "=== routing-openwrt v26 status ==="
 echo "VPN_ROUTE_DEV=${VPN_ROUTE_DEV:-not set}"
 echo "IPV6_SUPPORT=${IPV6_SUPPORT:-0}"
 echo "DOMAINS_URL=${DOMAINS_URL:-not set}"
@@ -1452,100 +1481,81 @@ remove_forwarding() {
 }
 
 add_zone() {
-    if  [ "$TUNNEL" == 0 ]; then
+    if [ "$TUNNEL" = "0" ]; then
         printf "\033[32;1mZone setting skipped\033[0m\n"
-    elif uci show firewall | grep -q "@zone.*name='$TUNNEL'"; then
-        printf "\033[32;1mZone already exist\033[0m\n"
-    else
-        printf "\033[32;1mCreate zone\033[0m\n"
-
-        # Delete exists zone
-        zone_tun_id=$(uci show firewall | grep -E '@zone.*tun0' | awk -F '[][{}]' '{print $2}' | head -n 1)
-        if [ "$zone_tun_id" == 0 ] || [ "$zone_tun_id" == 1 ]; then
-            printf "\033[32;1mtun0 zone has an identifier of 0 or 1. That's not ok. Fix your firewall. lan and wan zones should have identifiers 0 and 1. \033[0m\n"
-            exit 1
-        fi
-        if [ ! -z "$zone_tun_id" ]; then
-            while uci -q delete firewall.@zone[$zone_tun_id]; do :; done
-        fi
-
-        zone_wg_id=$(uci show firewall | grep -E '@zone.*wg0' | awk -F '[][{}]' '{print $2}' | head -n 1)
-        if [ "$zone_wg_id" == 0 ] || [ "$zone_wg_id" == 1 ]; then
-            printf "\033[32;1mwg0 zone has an identifier of 0 or 1. That's not ok. Fix your firewall. lan and wan zones should have identifiers 0 and 1. \033[0m\n"
-            exit 1
-        fi
-        if [ ! -z "$zone_wg_id" ]; then
-            while uci -q delete firewall.@zone[$zone_wg_id]; do :; done
-        fi
-
-        zone_awg_id=$(uci show firewall | grep -E '@zone.*awg0' | awk -F '[][{}]' '{print $2}' | head -n 1)
-        if [ "$zone_awg_id" == 0 ] || [ "$zone_awg_id" == 1 ]; then
-            printf "\033[32;1mawg0 zone has an identifier of 0 or 1. That's not ok. Fix your firewall. lan and wan zones should have identifiers 0 and 1. \033[0m\n"
-            exit 1
-        fi
-        if [ ! -z "$zone_awg_id" ]; then
-            while uci -q delete firewall.@zone[$zone_awg_id]; do :; done
-        fi
-
-        uci add firewall zone
-        uci set firewall.@zone[-1].name="$TUNNEL"
-        if [ "$TUNNEL" == wg ]; then
-            uci set firewall.@zone[-1].network='wg0'
-        elif [ "$TUNNEL" == awg ]; then
-            uci set firewall.@zone[-1].network='awg0'
-        elif [ "$TUNNEL" == singbox ] || [ "$TUNNEL" == ovpn ] || [ "$TUNNEL" == tun2socks ]; then
-            uci set firewall.@zone[-1].device="${VPN_ROUTE_DEV:-tun0}"
-        fi
-        if [ "$TUNNEL" == wg ] || [ "$TUNNEL" == awg ] || [ "$TUNNEL" == ovpn ] || [ "$TUNNEL" == tun2socks ] || [ "$TUNNEL" == singbox ]; then
-            uci set firewall.@zone[-1].forward='REJECT'
-            uci set firewall.@zone[-1].output='ACCEPT'
-            uci set firewall.@zone[-1].input='REJECT'
-        fi
-        uci set firewall.@zone[-1].masq='1'
-        uci set firewall.@zone[-1].mtu_fix='1'
-        uci set firewall.@zone[-1].family='ipv4'
-        uci commit firewall
+        return 0
     fi
-    
-    if [ "$TUNNEL" == 0 ]; then
-        printf "\033[32;1mForwarding setting skipped\033[0m\n"
-    elif uci show firewall | grep -q "@forwarding.*name='$TUNNEL-lan'"; then
-        printf "\033[32;1mForwarding already configured\033[0m\n"
+
+    zone_name="$TUNNEL"
+    zone_network=""
+    zone_device=""
+
+    case "$TUNNEL" in
+        wg)
+            zone_network="wg0"
+        ;;
+        awg)
+            zone_network="awg0"
+        ;;
+        ovpn)
+            zone_name="ovpn"
+            zone_network="OpenVPN"
+            VPN_ROUTE_DEV="${VPN_ROUTE_DEV:-${OVPN_ROUTE_DEV:-tun0}}"
+            # Ensure LuCI shows OpenVPN as assigned to firewall zone ovpn.
+            uci -q delete network.ovpn0
+            uci set network.OpenVPN='interface'
+            uci set network.OpenVPN.proto='none'
+            uci set network.OpenVPN.device="$VPN_ROUTE_DEV"
+            uci commit network >/dev/null 2>&1 || true
+        ;;
+        singbox)
+            zone_device="${VPN_ROUTE_DEV:-${SINGBOX_ROUTE_DEV:-sbtun0}}"
+        ;;
+        *)
+            zone_device="${VPN_ROUTE_DEV:-tun0}"
+        ;;
+    esac
+
+    # Find existing zone by name, otherwise create one. Then force-correct its options.
+    zone_id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='${zone_name}'.*/\1/p" | head -n 1)
+    if [ -z "$zone_id" ]; then
+        printf "\033[32;1mCreate zone\033[0m\n"
+        uci add firewall zone >/dev/null
+        zone_ref="firewall.@zone[-1]"
     else
+        printf "\033[32;1mZone already exists, fixing options\033[0m\n"
+        zone_ref="firewall.@zone[$zone_id]"
+    fi
+
+    uci set "$zone_ref.name=$zone_name"
+    uci set "$zone_ref.forward=REJECT"
+    uci set "$zone_ref.output=ACCEPT"
+    uci set "$zone_ref.input=REJECT"
+    uci set "$zone_ref.masq=1"
+    uci set "$zone_ref.mtu_fix=1"
+    uci set "$zone_ref.family=ipv4"
+    uci -q delete "$zone_ref.network"
+    uci -q delete "$zone_ref.device"
+    if [ -n "$zone_network" ]; then
+        uci add_list "$zone_ref.network=$zone_network"
+    elif [ -n "$zone_device" ]; then
+        uci set "$zone_ref.device=$zone_device"
+    fi
+    uci commit firewall
+
+    # Keep only one forwarding for the active tunnel zone.
+    delete_uci_sections_by_name firewall forwarding "$zone_name-lan"
+    if ! uci show firewall 2>/dev/null | grep -q "\.src='lan'" || ! uci show firewall 2>/dev/null | grep -q "\.dest='${zone_name}'"; then
         printf "\033[32;1mConfigured forwarding\033[0m\n"
-        # Delete exists forwarding
-        if [[ $TUNNEL != "wg" ]]; then
-            forward_id=$(uci show firewall | grep -E "@forwarding.*dest='wg'" | awk -F '[][{}]' '{print $2}' | head -n 1)
-            remove_forwarding
-        fi
-
-        if [[ $TUNNEL != "awg" ]]; then
-            forward_id=$(uci show firewall | grep -E "@forwarding.*dest='awg'" | awk -F '[][{}]' '{print $2}' | head -n 1)
-            remove_forwarding
-        fi
-
-        if [[ $TUNNEL != "ovpn" ]]; then
-            forward_id=$(uci show firewall | grep -E "@forwarding.*dest='ovpn'" | awk -F '[][{}]' '{print $2}' | head -n 1)
-            remove_forwarding
-        fi
-
-        if [[ $TUNNEL != "singbox" ]]; then
-            forward_id=$(uci show firewall | grep -E "@forwarding.*dest='singbox'" | awk -F '[][{}]' '{print $2}' | head -n 1)
-            remove_forwarding
-        fi
-
-        if [[ $TUNNEL != "tun2socks" ]]; then
-            forward_id=$(uci show firewall | grep -E "@forwarding.*dest='tun2socks'" | awk -F '[][{}]' '{print $2}' | head -n 1)
-            remove_forwarding
-        fi
-
-        uci add firewall forwarding
+        uci add firewall forwarding >/dev/null
         uci set firewall.@forwarding[-1]=forwarding
-        uci set firewall.@forwarding[-1].name="$TUNNEL-lan"
-        uci set firewall.@forwarding[-1].dest="$TUNNEL"
+        uci set firewall.@forwarding[-1].name="$zone_name-lan"
         uci set firewall.@forwarding[-1].src='lan'
+        uci set firewall.@forwarding[-1].dest="$zone_name"
         uci set firewall.@forwarding[-1].family='ipv4'
         uci commit firewall
+    else
+        printf "\033[32;1mForwarding already configured\033[0m\n"
     fi
 }
 
@@ -1735,7 +1745,7 @@ section() { printf "\n%b=== %s ===%b\n" "$BLUE" "$1" "$RESET"; }
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
 
 section "routing-openwrt diagnostics"
-echo "Version: v25"
+echo "Version: v26"
 echo "Date: $(date 2>/dev/null)"
 echo "Model: $(ubus call system board 2>/dev/null | jsonfilter -e '@.model' 2>/dev/null || cat /tmp/sysinfo/model 2>/dev/null)"
 echo "OpenWrt: $(ubus call system board 2>/dev/null | jsonfilter -e '@.release.description' 2>/dev/null)"
@@ -1789,15 +1799,38 @@ case "$DEV" in
         ;;
 esac
 
+LAN_IP="$(uci -q get network.lan.ipaddr 2>/dev/null)"
+[ -n "$LAN_IP" ] || LAN_IP="192.168.1.1"
+
 section "Normal WAN internet"
 ip route show default 2>/dev/null || true
+case "$DEV" in
+    tun*)
+        if ip route show 2>/dev/null | grep -E "^(0\.0\.0\.0/1|128\.0\.0\.0/1).* dev ${DEV}( |$)" >/dev/null; then
+            bad "OpenVPN full-tunnel /1 routes found in main table. Add route-nopull/pull-filter or run /usr/sbin/domain-routing-route.sh"
+        else
+            ok "No OpenVPN full-tunnel /1 routes in main table"
+        fi
+    ;;
+esac
 if ping -c 2 -W 2 1.1.1.1 >/tmp/routing-openwrt-ping.log 2>&1; then ok "Ping 1.1.1.1 works"; else bad "Ping 1.1.1.1 failed"; cat /tmp/routing-openwrt-ping.log; fi
-if nslookup openwrt.org 192.168.1.1 >/tmp/routing-openwrt-nslookup-wan.log 2>&1; then ok "Router DNS works through 192.168.1.1"; else bad "Router DNS failed"; cat /tmp/routing-openwrt-nslookup-wan.log; fi
+if nslookup openwrt.org "$LAN_IP" >/tmp/routing-openwrt-nslookup-wan.log 2>&1; then ok "Router DNS works through $LAN_IP"; else bad "Router DNS failed through $LAN_IP"; cat /tmp/routing-openwrt-nslookup-wan.log; fi
 
 section "Lists and dnsmasq"
 ls -lah /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst 2>/dev/null || true
-[ -s /tmp/dnsmasq.d/domains.lst ] && ok "Domain list exists: $(wc -l < /tmp/dnsmasq.d/domains.lst) lines" || bad "Domain list is missing or empty"
-[ -s /tmp/lst/ipv4.lst ] && ok "IPv4 CIDR list exists: $(wc -l < /tmp/lst/ipv4.lst) lines" || warn "IPv4 CIDR list is missing or empty"
+if [ -s /tmp/dnsmasq.d/domains.lst ]; then
+    DOM_LINES=$(wc -l < /tmp/dnsmasq.d/domains.lst)
+    [ "$DOM_LINES" -ge 5 ] && ok "Domain list exists: $DOM_LINES lines" || bad "Domain list is too small: $DOM_LINES lines. Run /etc/init.d/getdomains start and check GitHub raw list."
+else
+    bad "Domain list is missing or empty"
+fi
+if [ -s /tmp/lst/ipv4.lst ]; then
+    IPV4_LINES=$(wc -l < /tmp/lst/ipv4.lst)
+    [ "$IPV4_LINES" -ge 5 ] && ok "IPv4 CIDR list exists: $IPV4_LINES lines" || bad "IPv4 CIDR list is too small: $IPV4_LINES lines"
+    grep -q '^203\.0\.113\.0/24$' /tmp/lst/ipv4.lst 2>/dev/null && bad "IPv4 list contains example TEST-NET 203.0.113.0/24. Replace it with real GitHub list."
+else
+    warn "IPv4 CIDR list is missing or empty"
+fi
 if dnsmasq --test >/tmp/routing-openwrt-dnsmasq-test.log 2>&1; then ok "dnsmasq syntax OK"; else bad "dnsmasq test failed"; cat /tmp/routing-openwrt-dnsmasq-test.log; fi
 uci show dhcp 2>/dev/null | grep -E "dnsmasq.d|filter_aaaa" || true
 
@@ -1828,7 +1861,7 @@ else
 fi
 
 section "YouTube route test"
-YOUTUBE_IP=$(nslookup youtube.com 192.168.1.1 2>/tmp/routing-openwrt-youtube-nslookup.log | awk '/^Address: / && $2 ~ /^[0-9.]+$/ {print $2; exit}')
+YOUTUBE_IP=$(nslookup youtube.com "$LAN_IP" 2>/tmp/routing-openwrt-youtube-nslookup.log | awk '/^Address: / && $2 ~ /^[0-9.]+$/ {print $2; exit}')
 if [ -n "$YOUTUBE_IP" ]; then
     ok "youtube.com resolved by router to $YOUTUBE_IP"
     nft list set inet fw4 vpn_domains 2>/dev/null | grep -q "$YOUTUBE_IP" && ok "youtube.com IP is in vpn_domains" || warn "youtube.com IP is not visible in vpn_domains yet"
@@ -1836,12 +1869,12 @@ if [ -n "$YOUTUBE_IP" ]; then
     ip route get "$YOUTUBE_IP" mark 0x1 2>/dev/null || true
     ip route get "$YOUTUBE_IP" mark 0x1 2>/dev/null | grep -q "dev ${DEV}" && ok "marked YouTube traffic would use $DEV" || warn "marked YouTube route does not show $DEV"
 else
-    bad "Could not resolve youtube.com through router DNS"
+    bad "Could not resolve youtube.com through router DNS ($LAN_IP)"
     cat /tmp/routing-openwrt-youtube-nslookup.log 2>/dev/null
 fi
 
 section "LAN / Wi-Fi notes"
-echo "LAN IP: $(uci -q get network.lan.ipaddr 2>/dev/null)"
+echo "LAN IP: $LAN_IP"
 echo "LAN device: $(uci -q get network.lan.device 2>/dev/null)"
 echo "Firewall LAN zone:"
 uci show firewall 2>/dev/null | grep -E "zone.*name='lan'|network='lan'|network=.*lan" | head -n 20
@@ -1922,9 +1955,29 @@ update_existing_installation() {
     install_management_commands
     add_getdomains
 
+    echo "Refreshing GitHub lists / Обновляю списки из GitHub..."
+    # Drop stale temporary files and old example caches. getdomains will download
+    # fresh lists from GitHub and then write new cache files. If GitHub is down,
+    # non-example cache can still be restored by getdomains.
+    rm -f /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst 2>/dev/null || true
+    if [ -f /etc/domain-routing/lists/domains.lst ] && [ "$(wc -l < /etc/domain-routing/lists/domains.lst 2>/dev/null)" -lt 5 ]; then
+        rm -f /etc/domain-routing/lists/domains.lst
+    fi
+    if grep -q '^203\.0\.113\.0/24$' /etc/domain-routing/lists/ipv4.lst 2>/dev/null; then
+        rm -f /etc/domain-routing/lists/ipv4.lst
+    fi
+    /etc/init.d/getdomains start || true
     /etc/init.d/firewall restart >/dev/null 2>&1 || true
     /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
     /etc/init.d/vpnroute start >/dev/null 2>&1 || true
+    /usr/sbin/domain-routing-route.sh >/dev/null 2>&1 || true
+
+    echo "List counts / Количество строк списков:"
+    [ -f /tmp/dnsmasq.d/domains.lst ] && wc -l /tmp/dnsmasq.d/domains.lst || echo "0 /tmp/dnsmasq.d/domains.lst"
+    [ -f /tmp/lst/ipv4.lst ] && wc -l /tmp/lst/ipv4.lst || echo "0 /tmp/lst/ipv4.lst"
+    if grep -q '^203\.0\.113\.0/24$' /tmp/lst/ipv4.lst 2>/dev/null; then
+        echo "ERROR: IPv4 list still contains example TEST-NET 203.0.113.0/24"
+    fi
 
     echo "Update done / Обновление завершено"
     echo "Status command / Проверка: /usr/sbin/domain-routing-status.sh"

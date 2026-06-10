@@ -39,6 +39,8 @@ wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/rou
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
 ```
 
+Обновление не только заменяет скрипты проекта, но и сразу скачивает свежие списки из GitHub, перезапускает `dnsmasq`/`firewall` и восстанавливает маршрут `table vpn`.
+
 ## Удаление
 
 ```sh

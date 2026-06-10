@@ -1,21 +1,21 @@
 # routing-openwrt
 
-Simple OpenWrt script: domains and IPv4 CIDR from lists go through the selected tunnel, normal internet stays on WAN.
+Simple OpenWrt script: domains and IPv4 CIDR from lists go through the selected tunnel, while normal internet stays on WAN.
 
-Форк и доработка оригинального проекта: https://github.com/itdoginfo/domain-routing-openwrt
+Fork and modification of the original project: https://github.com/itdoginfo/domain-routing-openwrt
 
-## Что поддерживается
+## Supported
 
 - WireGuard
 - AmneziaWG / Amnezia WireGuard
 - OpenVPN
-- Sing-box, экспериментально: VLESS Reality через `sbtun0`
+- Sing-box, experimental: VLESS Reality through `sbtun0`
 
-Безопасный режим по умолчанию: **fail-open**. Если туннель упал, обычный WAN-интернет не должен ломаться.
+Default safety mode: **fail-open**. If the tunnel fails, normal WAN internet should not break.
 
-## Списки
+## Lists
 
-По умолчанию используются списки из этого репозитория:
+By default, lists are loaded from this repository:
 
 ```text
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
@@ -23,37 +23,39 @@ https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
 https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
 ```
 
-Домены и IPv4 включены по умолчанию. IPv6 выключен по умолчанию.
+Domains and IPv4 are enabled by default. IPv6 is disabled by default.
 
-Списки обновляются каждый день в 02:00. Локальный список заменяется полностью: если домен или IP удалён на GitHub, после обновления он удалится и на роутере. Если GitHub временно недоступен, используется последний рабочий кеш.
+Lists are updated every day at 02:00. The local list is fully replaced: if a domain or IP is removed on GitHub, it will be removed on the router after update. If GitHub is temporarily unavailable, the last working cache is used.
 
-## Установка с GitHub
+## Install from GitHub
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
 ```
 
-## Обновление
+## Update
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
 ```
 
-## Удаление
+The update command updates project scripts, downloads fresh GitHub lists, restarts `dnsmasq`/`firewall`, and restores the `table vpn` route.
+
+## Uninstall
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
 ```
 
-Полная очистка конфигов проекта:
+Full project config cleanup:
 
 ```sh
 wget --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh -s -- --purge
 ```
 
-## Ручная установка ZIP
+## Manual ZIP install
 
-Загрузите архив в `/tmp` на роутер и выполните:
+Upload the archive to `/tmp` on the router and run:
 
 ```sh
 cd /tmp
@@ -64,17 +66,17 @@ chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-unin
 sh ./install.sh
 ```
 
-`/tmp` рекомендуется для ручной установки, потому что это временная папка и она не занимает постоянную flash-память после перезагрузки.
+`/tmp` is recommended for manual installation because it is temporary and does not use permanent flash after reboot.
 
-## Диагностика
+## Diagnostics
 
 ```sh
 /usr/sbin/routing-openwrt-diagnose.sh
 ```
 
-Диагностика показывает туннель, маршрут YouTube, DNS, списки, nftset, fwmark, таблицу `vpn` и основные ошибки. Вывод можно отправить разработчику для анализа.
+Diagnostics show tunnel status, YouTube route test, DNS, lists, nftset, fwmark, `vpn` table, and common errors.
 
-## Проверка
+## Check
 
 ```sh
 /usr/sbin/domain-routing-status.sh
