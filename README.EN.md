@@ -27,6 +27,39 @@ Domains and IPv4 are enabled by default. IPv6 is disabled by default.
 
 Lists are updated every day at 02:00. The local list is fully replaced: if a domain or IP is removed on GitHub, it will be removed on the router after update. If GitHub is temporarily unavailable, the last working cache is used.
 
+
+## List profiles
+
+During installation you can choose a list profile:
+
+```text
+full  — full lists from lists/domains-dnsmasq-nfset.lst and lists/ipv4.lst
+lite  — small list from lists/profiles/lite/ for weak routers
+custom — custom list URLs
+```
+
+Custom domain lists may be plain one-domain-per-line files, and IPv4 lists may be plain CIDR files. The script converts domains to `dnsmasq/nftset` format automatically.
+
+To add a new profile, create:
+
+```text
+lists/profiles/<name>/domains.lst
+lists/profiles/<name>/ipv4.lst
+lists/profiles/<name>/ipv6.lst
+```
+
+The folder name will be shown in the installer menu.
+
+## Router load
+
+The project does not run a heavy routing daemon. Routing is handled by `dnsmasq`, `nftables`, and `ip rule`. To inspect load:
+
+```sh
+/usr/sbin/routing-openwrt-load.sh
+```
+
+For weak routers, use the `lite` profile and WireGuard/AmneziaWG. Sing-box checks flash/RAM before installation and is not recommended for 16/64 MB devices.
+
 ## Install from GitHub
 
 ```sh

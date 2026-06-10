@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v27"
+PROJECT_VERSION="v28"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -13,6 +13,8 @@ DEFAULT_LISTS_BASE_URL="https://raw.githubusercontent.com/${DEFAULT_LISTS_REPO}/
 DEFAULT_DOMAIN_LIST_URL="${ROUTING_OPENWRT_DOMAINS_URL:-${DEFAULT_LISTS_BASE_URL}/domains-dnsmasq-nfset.lst}"
 DEFAULT_IPV4_LIST_URL="${ROUTING_OPENWRT_IPV4_URL:-${DEFAULT_LISTS_BASE_URL}/ipv4.lst}"
 DEFAULT_IPV6_LIST_URL="${ROUTING_OPENWRT_IPV6_URL:-${DEFAULT_LISTS_BASE_URL}/ipv6.lst}"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
+[ -d "$SCRIPT_DIR/lists" ] || SCRIPT_DIR="$(pwd)"
 
 # Safe defaults. 1 = use, 0 = skip.
 # Domain and IPv4 CIDR routing are enabled by default. IPv6, DNS redirect and blackhole are OFF by default
@@ -69,6 +71,146 @@ pause_screen() {
 }
 
 is_back() { [ "$1" = "?" ] || [ "$1" = "back" ] || [ "$1" = "назад" ]; }
+
+router_resource_summary() {
+    FLASH_TOTAL_KB=$(df -k / 2>/dev/null | awk 'NR==2 {print $2+0}')
+    FLASH_FREE_KB=$(df -k / 2>/dev/null | awk 'NR==2 {print $4+0}')
+    RAM_TOTAL_KB=$(awk '/MemTotal/ {print $2+0}' /proc/meminfo 2>/dev/null)
+    RAM_FREE_KB=$(awk '/MemAvailable/ {print $2+0}' /proc/meminfo 2>/dev/null)
+    [ -n "$RAM_FREE_KB" ] || RAM_FREE_KB=$(awk '/MemFree/ {print $2+0}' /proc/meminfo 2>/dev/null)
+    FLASH_TOTAL_MB=$((FLASH_TOTAL_KB/1024))
+    FLASH_FREE_MB=$((FLASH_FREE_KB/1024))
+    RAM_TOTAL_MB=$((RAM_TOTAL_KB/1024))
+    RAM_FREE_MB=$((RAM_FREE_KB/1024))
+    echo "Router resources / Ресурсы роутера: flash ${FLASH_TOTAL_MB}MB total, ${FLASH_FREE_MB}MB free; RAM ${RAM_TOTAL_MB}MB total, ${RAM_FREE_MB}MB available"
+}
+
+profile_local_file() {
+    profile="$1"; kind="$2"
+    case "$profile:$kind" in
+        full:domains) echo "$SCRIPT_DIR/lists/domains-dnsmasq-nfset.lst" ;;
+        full:ipv4) echo "$SCRIPT_DIR/lists/ipv4.lst" ;;
+        full:ipv6) echo "$SCRIPT_DIR/lists/ipv6.lst" ;;
+        *:domains) echo "$SCRIPT_DIR/lists/profiles/$profile/domains.lst" ;;
+        *:ipv4) echo "$SCRIPT_DIR/lists/profiles/$profile/ipv4.lst" ;;
+        *:ipv6) echo "$SCRIPT_DIR/lists/profiles/$profile/ipv6.lst" ;;
+    esac
+}
+
+profile_url() {
+    profile="$1"; kind="$2"
+    case "$profile:$kind" in
+        full:domains) echo "$DEFAULT_DOMAIN_LIST_URL" ;;
+        full:ipv4) echo "$DEFAULT_IPV4_LIST_URL" ;;
+        full:ipv6) echo "$DEFAULT_IPV6_LIST_URL" ;;
+        *:domains) echo "$DEFAULT_LISTS_BASE_URL/profiles/$profile/domains.lst" ;;
+        *:ipv4) echo "$DEFAULT_LISTS_BASE_URL/profiles/$profile/ipv4.lst" ;;
+        *:ipv6) echo "$DEFAULT_LISTS_BASE_URL/profiles/$profile/ipv6.lst" ;;
+    esac
+}
+
+profile_line_count() {
+    f="$1"
+    [ -f "$f" ] && wc -l < "$f" 2>/dev/null || echo 0
+}
+
+profile_size_kb() {
+    f="$1"
+    [ -f "$f" ] && du -k "$f" 2>/dev/null | awk '{print $1+0}' || echo 0
+}
+
+list_available_profiles() {
+    echo full
+    if [ -d "$SCRIPT_DIR/lists/profiles" ]; then
+        for d in "$SCRIPT_DIR"/lists/profiles/*; do
+            [ -d "$d" ] || continue
+            name=$(basename "$d")
+            [ -f "$d/domains.lst" ] || [ -f "$d/ipv4.lst" ] || continue
+            echo "$name"
+        done
+    fi | sort -u | sed '/^full$/d'
+}
+
+choose_list_profile() {
+    # Update mode must not ask and must not overwrite custom list URLs.
+    if [ "$1" = "update" ]; then
+        if [ -f /etc/domain-routing-user.conf ]; then
+            . /etc/domain-routing-user.conf 2>/dev/null || true
+            LIST_PROFILE=${LIST_PROFILE:-custom}
+            IPV6_SUPPORT=${IPV6_SUPPORT:-0}
+            echo "Keeping configured list profile / Сохраняю выбранный профиль списков: $LIST_PROFILE"
+            echo "Domain list: ${DOMAINS_URL:-disabled}"
+            echo "IPv4 list: ${IPV4_URL:-disabled}"
+            [ "$IPV6_SUPPORT" = "1" ] && echo "IPv6 list: ${IPV6_URL:-disabled}" || echo "IPv6 support: disabled / выключено"
+            return 0
+        fi
+        LIST_PROFILE="full"
+        DOMAINS_URL="$DEFAULT_DOMAIN_LIST_URL"
+        IPV4_URL="$DEFAULT_IPV4_LIST_URL"
+        IPV6_SUPPORT="${DEFAULT_IPV6_SUPPORT:-0}"
+        [ "$IPV6_SUPPORT" = "1" ] && IPV6_URL="$DEFAULT_IPV6_LIST_URL" || IPV6_URL=""
+        echo "No previous list config found; using full defaults / Старый конфиг списков не найден; использую full"
+        return 0
+    fi
+
+    router_resource_summary
+    echo ""
+    msgc "$C_BLUE" "Select route list profile" "Выберите профиль списков маршрутизации"
+
+    : > /tmp/routing-openwrt-profiles
+    idx=1
+    for profile in $(list_available_profiles); do
+        dfile=$(profile_local_file "$profile" domains)
+        ifile=$(profile_local_file "$profile" ipv4)
+        dlines=$(profile_line_count "$dfile")
+        ilines=$(profile_line_count "$ifile")
+        dk=$(profile_size_kb "$dfile")
+        ik=$(profile_size_kb "$ifile")
+        echo "$profile" >> /tmp/routing-openwrt-profiles
+        case "$profile" in
+            full) label="full / полный" ;;
+            lite|white|whitelist) label="lite/white / облегчённый" ;;
+            *) label="$profile" ;;
+        esac
+        printf "%s) %s  domains=%s, ipv4=%s, size≈%sKB\n" "$idx" "$label" "$dlines" "$ilines" "$((dk+ik))"
+        idx=$((idx+1))
+    done
+    echo "c) $(prompt "Custom URLs" "Свои URL списков")"
+    echo ""
+    msg "$([ "$RAM_TOTAL_MB" -lt 80 ] && echo "Weak router detected: lite/white profile is recommended." || echo "Full profile is OK for normal routers.")" "$([ "$RAM_TOTAL_MB" -lt 80 ] && echo "Слабый роутер: рекомендуется lite/white профиль." || echo "Для обычных роутеров можно full профиль.")"
+    msg "Custom lists may be plain domains/CIDR. The script converts them automatically." "Свои списки могут быть обычными доменами/CIDR. Скрипт сам конвертирует их в нужный формат."
+
+    while true; do
+        printf "%s" "$(prompt "Choice [1]: " "Выбор [1]: ")"
+        read -r LIST_CHOICE
+        LIST_CHOICE=${LIST_CHOICE:-1}
+        case "$LIST_CHOICE" in
+            c|C)
+                LIST_PROFILE="custom"
+                printf "%s" "$(prompt "Domain list URL (plain domains or dnsmasq/nftset): " "URL списка доменов (обычные домены или dnsmasq/nftset): ")"
+                read -r DOMAINS_URL
+                printf "%s" "$(prompt "IPv4 CIDR list URL [empty to disable]: " "URL IPv4 CIDR списка [пусто = выключить]: ")"
+                read -r IPV4_URL
+                IPV6_SUPPORT="0"; IPV6_URL=""
+                break
+            ;;
+            *[!0-9]*|'') msgc "$C_RED" "Wrong choice." "Неверный выбор." ;;
+            *)
+                LIST_PROFILE=$(sed -n "${LIST_CHOICE}p" /tmp/routing-openwrt-profiles)
+                [ -n "$LIST_PROFILE" ] || { msgc "$C_RED" "Wrong choice." "Неверный выбор."; continue; }
+                DOMAINS_URL=$(profile_url "$LIST_PROFILE" domains)
+                IPV4_URL=$(profile_url "$LIST_PROFILE" ipv4)
+                IPV6_SUPPORT="${DEFAULT_IPV6_SUPPORT:-0}"
+                if [ "$IPV6_SUPPORT" = "1" ]; then IPV6_URL=$(profile_url "$LIST_PROFILE" ipv6); else IPV6_URL=""; fi
+                break
+            ;;
+        esac
+    done
+
+    [ -n "$DOMAINS_URL" ] && echo "Domain list: $DOMAINS_URL" || echo "Domain list: disabled / выключен"
+    [ -n "$IPV4_URL" ] && echo "IPv4 list: $IPV4_URL" || echo "IPv4 list: disabled / выключен"
+    [ "$IPV6_SUPPORT" = "1" ] && echo "IPv6 list: $IPV6_URL" || echo "IPv6 support: disabled / выключено"
+}
 
 read_multiline_config() {
     tmp_file="$1"
@@ -208,22 +350,28 @@ ovpn_find_config_for_dev() {
     uci show openvpn 2>/dev/null | sed -n "s/.*\.config='\([^']*\)'.*/\1/p" >> "$tmp"
     ls /etc/openvpn/*.ovpn /etc/openvpn/*.conf 2>/dev/null >> "$tmp"
 
-    # Prefer a config that explicitly names the selected dev.
-    sort -u "$tmp" | while IFS= read -r cfg; do
+    cfg_match=""
+    sort -u "$tmp" 2>/dev/null | while IFS= read -r cfg; do
         [ -f "$cfg" ] || continue
         awk -v dev="$dev" '
             /^[[:space:]]*#/ || /^[[:space:]]*;/ { next }
             tolower($1)=="dev" && ($2==dev || ($2=="tun" && dev ~ /^tun/)) { found=1 }
             END { exit found ? 0 : 1 }
-        ' "$cfg" >/dev/null 2>&1 && { echo "$cfg"; rm -f "$tmp"; exit 0; }
-    done | head -n 1
+        ' "$cfg" >/dev/null 2>&1 && { echo "$cfg"; exit 0; }
+    done | head -n 1 > "$tmp.match"
+    cfg_match=$(cat "$tmp.match" 2>/dev/null)
+    if [ -n "$cfg_match" ]; then
+        rm -f "$tmp" "$tmp.match"
+        echo "$cfg_match"
+        return 0
+    fi
 
     # If no exact dev match, use the only available OpenVPN config if there is exactly one.
-    count=$(sort -u "$tmp" | while IFS= read -r cfg; do [ -f "$cfg" ] && echo "$cfg"; done | wc -l)
+    count=$(sort -u "$tmp" 2>/dev/null | while IFS= read -r cfg; do [ -f "$cfg" ] && echo "$cfg"; done | wc -l)
     if [ "$count" = "1" ]; then
-        sort -u "$tmp" | while IFS= read -r cfg; do [ -f "$cfg" ] && echo "$cfg"; done | head -n 1
+        sort -u "$tmp" 2>/dev/null | while IFS= read -r cfg; do [ -f "$cfg" ] && echo "$cfg"; done | head -n 1
     fi
-    rm -f "$tmp"
+    rm -f "$tmp" "$tmp.match"
 }
 
 ovpn_prepare_route_only_existing() {
@@ -1864,6 +2012,12 @@ esac
 if ping -c 2 -W 2 1.1.1.1 >/tmp/routing-openwrt-ping.log 2>&1; then ok "Ping 1.1.1.1 works"; else bad "Ping 1.1.1.1 failed"; cat /tmp/routing-openwrt-ping.log; fi
 if nslookup openwrt.org "$LAN_IP" >/tmp/routing-openwrt-nslookup-wan.log 2>&1; then ok "Router DNS works through $LAN_IP"; else bad "Router DNS failed through $LAN_IP"; cat /tmp/routing-openwrt-nslookup-wan.log; fi
 
+section "Router resources"
+uptime 2>/dev/null || true
+free -m 2>/dev/null || free 2>/dev/null || true
+df -h / /tmp 2>/dev/null || df -h / 2>/dev/null || true
+echo "Load command: /usr/sbin/routing-openwrt-load.sh"
+
 section "Lists and dnsmasq"
 ls -lah /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst 2>/dev/null || true
 if [ -s /tmp/dnsmasq.d/domains.lst ]; then
@@ -1972,6 +2126,48 @@ EOF
 /usr/sbin/routing-openwrt-diagnose.sh "$@"
 EOF
     chmod +x /usr/sbin/routing-openwrt-diagnose-update.sh
+
+    cat << 'EOF' > /usr/sbin/routing-openwrt-load.sh
+#!/bin/sh
+# Lightweight resource/load snapshot for weak OpenWrt routers.
+echo "=== routing-openwrt load check ==="
+date 2>/dev/null || true
+echo
+
+echo "=== uptime / load average ==="
+uptime 2>/dev/null || true
+echo
+
+echo "=== memory ==="
+free -m 2>/dev/null || free 2>/dev/null || true
+echo
+
+echo "=== flash ==="
+df -h / /tmp 2>/dev/null || df -h 2>/dev/null || true
+echo
+
+echo "=== routing-openwrt lists ==="
+wc -l /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst 2>/dev/null || true
+ls -lh /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst 2>/dev/null || true
+echo
+
+echo "=== vpn policy route ==="
+ip rule show 2>/dev/null | grep -E 'fwmark|lookup vpn' || true
+ip route show table vpn 2>/dev/null || true
+echo
+
+echo "=== nft counters ==="
+nft list ruleset 2>/dev/null | grep -E 'mark_domains|mark_subnet|vpn_domains|vpn_subnets' -n | head -n 40 || true
+echo
+
+echo "=== related processes ==="
+ps 2>/dev/null | grep -Ei 'dnsmasq|openvpn|awg|wireguard|sing-box|vpnroute|routing-openwrt|getdomains|domain-routing' | grep -v grep || true
+echo
+
+echo "=== top snapshot ==="
+(top -bn1 2>/dev/null || top -n 1 2>/dev/null) | head -n 20 || true
+EOF
+    chmod +x /usr/sbin/routing-openwrt-load.sh
 }
 
 update_existing_installation() {
@@ -2005,7 +2201,7 @@ update_existing_installation() {
     add_mark
     add_set
     install_management_commands
-    add_getdomains
+    add_getdomains update
 
     echo "Refreshing GitHub lists / Обновляю списки из GitHub..."
     # Drop stale temporary files and old example caches. getdomains will download
@@ -2033,6 +2229,7 @@ update_existing_installation() {
 
     echo "Update done / Обновление завершено"
     echo "Status command / Проверка: /usr/sbin/domain-routing-status.sh"
+    echo "Load check / Проверка нагрузки: /usr/sbin/routing-openwrt-load.sh"
 }
 
 add_getdomains() {
@@ -2040,36 +2237,13 @@ add_getdomains() {
     echo "Domain/IP lists / Списки доменов и IP"
     echo "Project / Проект: ${DEFAULT_PROJECT_REPO:-dagmagnat/routing-openwrt}"
     echo "Lists repo / Репозиторий списков: ${DEFAULT_LISTS_REPO:-dagmagnat/routing-openwrt}"
-    echo "This fork uses repository lists automatically. No manual URL input is required."
-    echo "Этот форк автоматически использует списки из папки lists/ репозитория. Ручной ввод URL не нужен."
+    echo "Profiles are read from lists/profiles/<name>/ or the default full lists."
+    echo "Профили читаются из lists/profiles/<name>/ или используются полные списки по умолчанию."
 
-    if [ "${DEFAULT_USE_DOMAIN_LIST:-1}" = "1" ]; then
-        echo "Domain list: enabled / включён"
-        echo "  $DEFAULT_DOMAIN_LIST_URL"
-        DOMAINS_URL="$DEFAULT_DOMAIN_LIST_URL"
+    if [ "$1" = "update" ] || [ "$1" = "--update" ] || [ "${ROUTING_OPENWRT_UPDATE_ONLY:-0}" = "1" ]; then
+        choose_list_profile update
     else
-        echo "Domain list: disabled / выключен"
-        DOMAINS_URL=""
-    fi
-
-    if [ "${DEFAULT_USE_IPV4_LIST:-1}" = "1" ]; then
-        echo "IPv4 CIDR list: enabled / включён"
-        echo "  $DEFAULT_IPV4_LIST_URL"
-        IPV4_URL="$DEFAULT_IPV4_LIST_URL"
-    else
-        echo "IPv4 CIDR list: disabled / выключен"
-        IPV4_URL=""
-    fi
-
-    IPV6_SUPPORT="${DEFAULT_IPV6_SUPPORT:-0}"
-    if [ "$IPV6_SUPPORT" = "1" ]; then
-        echo "IPv6 support: enabled / включено"
-        echo "IPv6 CIDR list:"
-        echo "  $DEFAULT_IPV6_LIST_URL"
-        IPV6_URL="$DEFAULT_IPV6_LIST_URL"
-    else
-        echo "IPv6 support: disabled / выключено; AAAA DNS answers will be filtered"
-        IPV6_URL=""
+        choose_list_profile install
     fi
 
     remove_firewall_section_by_name() {
@@ -2224,6 +2398,7 @@ add_getdomains() {
 
     mkdir -p /etc/domain-routing
     cat << EOF > /etc/domain-routing-user.conf
+LIST_PROFILE='$LIST_PROFILE'
 DOMAINS_URL='$DOMAINS_URL'
 IPV4_URL='$IPV4_URL'
 IPV6_URL='$IPV6_URL'
