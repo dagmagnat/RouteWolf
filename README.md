@@ -129,3 +129,20 @@ ip route show table vpn
 ip rule show | grep fwmark
 nft list set inet fw4 vpn_domains | head
 ```
+
+### Быстрые команды после установки
+
+```sh
+rwrt help
+rwrt status
+rwrt diag
+rwrt load
+rwrt lists
+rwrt repair
+rwrt dco status
+rwrt dco off
+rwrt dco on
+rwrt openvpn restart
+```
+
+По умолчанию для OpenVPN используется стабильный режим `disable-dco`. DCO можно включить командой `rwrt dco on`, если конкретная прошивка/ядро работает с ним стабильно.

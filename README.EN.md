@@ -129,3 +129,20 @@ ip route show table vpn
 ip rule show | grep fwmark
 nft list set inet fw4 vpn_domains | head
 ```
+
+### Quick commands after install
+
+```sh
+rwrt help
+rwrt status
+rwrt diag
+rwrt load
+rwrt lists
+rwrt repair
+rwrt dco status
+rwrt dco off
+rwrt dco on
+rwrt openvpn restart
+```
+
+OpenVPN uses stable `disable-dco` mode by default. You can enable DCO with `rwrt dco on` if your firmware/kernel works with it reliably.

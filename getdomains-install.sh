@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v32"
+PROJECT_VERSION="v33"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -312,6 +312,9 @@ pull-filter ignore "route 0.0.0.0"
 pull-filter ignore "route 128.0.0.0"
 pull-filter ignore "dhcp-option DNS"
 pull-filter ignore "block-outside-dns"
+# Stable default: DCO is disabled because some OpenWrt/X-WRT builds reconnect
+# endlessly with ovpn-dco. Use: rwrt dco on  (or rwrt dco off)
+disable-dco
 # routing-openwrt end
 CFG
 }
@@ -2237,7 +2240,141 @@ echo "=== top snapshot ==="
 (top -bn1 2>/dev/null || top -n 1 2>/dev/null) | head -n 20 || true
 EOF
     chmod +x /usr/sbin/routing-openwrt-load.sh
+
+    cat << 'EOF' > /usr/sbin/rwrt
+#!/bin/sh
+# Short routing-openwrt control command.
+# Usage: rwrt help | status | diag | load | lists | repair | update | dco on|off|status | openvpn restart
+
+CONF="/etc/domain-routing-route.conf"
+OVPN=""
+
+find_ovpn_config() {
+    cfg=""
+    cfg="$(uci -q show openvpn 2>/dev/null | awk -F= "/\\.enabled='1'/ {sec=\$1; sub(/\\.enabled$/,\"\",sec); enabled[sec]=1} /\\.config=/ {sec=\$1; sub(/\\.config$/,\"\",sec); gsub(\"'\",\"\",\$2); conf[sec]=\$2} END {for (s in enabled) if (conf[s] != \"\") {print conf[s]; exit}}")"
+    [ -n "$cfg" ] && [ -f "$cfg" ] && { echo "$cfg"; return 0; }
+    for f in /etc/openvpn/routing_openwrt.ovpn /etc/openvpn/VPN.ovpn /etc/openvpn/*.ovpn /etc/openvpn/*.conf; do
+        [ -f "$f" ] && { echo "$f"; return 0; }
+    done
+    return 1
 }
+
+ovpn_gateway() {
+    dev="${1:-tun0}"
+    # Prefer kernel connected route (already normalized: 10.28.4.0/22 dev tun0 ...)
+    ip -4 route show dev "$dev" scope link 2>/dev/null | awk 'NR==1 {split($1,n,"/"); split(n[1],o,"."); if (o[1]&&o[2]&&o[3]) {print o[1]"."o[2]"."o[3]"."(o[4]+1); exit}}' | grep -m1 . && return 0
+    # Fallback from interface address/mask.
+    ip -4 -o addr show dev "$dev" 2>/dev/null | awk '{print $4; exit}' | awk -F'[./]' '{a=$1;b=$2;c=$3;p=$5; if (p==22)c=int(c/4)*4; else if(p==23)c=int(c/2)*2; print a"."b"."c".1"}'
+}
+
+repair_route() {
+    [ -f "$CONF" ] && . "$CONF"
+    dev="${VPN_ROUTE_DEV:-}"
+    [ -n "$dev" ] || for d in awg0 wg0 tun0 tun1 sbtun0; do ip link show "$d" >/dev/null 2>&1 && { dev="$d"; break; }; done
+    [ -n "$dev" ] || { echo "No VPN device found"; exit 1; }
+    echo "VPN_ROUTE_DEV='$dev'" > "$CONF"
+    case "$dev" in
+        tun*)
+            gw="$(ovpn_gateway "$dev" | head -n1)"
+            [ -n "$gw" ] && echo "VPN_ROUTE_GW='$gw'" >> "$CONF"
+        ;;
+    esac
+    /usr/sbin/domain-routing-route.sh >/dev/null 2>&1 || true
+    echo "=== route conf ==="
+    cat "$CONF" 2>/dev/null
+    echo "=== table vpn ==="
+    ip route show table vpn 2>/dev/null
+}
+
+dco_status() {
+    cfg="$(find_ovpn_config)" || { echo "OpenVPN config not found"; exit 1; }
+    echo "OpenVPN config: $cfg"
+    if grep -qE '^[[:space:]]*disable-dco([[:space:]]|$)' "$cfg"; then
+        echo "DCO: off (disable-dco present)"
+    else
+        echo "DCO: on/auto (disable-dco absent)"
+    fi
+    if command -v opkg >/dev/null 2>&1; then
+        opkg list-installed 2>/dev/null | grep -E '^kmod-ovpn-dco|^kmod-ovpn-dco-v2|^openvpn' || true
+    elif command -v apk >/dev/null 2>&1; then
+        apk list -I 2>/dev/null | grep -E 'ovpn-dco|openvpn' || true
+    fi
+}
+
+dco_set() {
+    mode="$1"
+    cfg="$(find_ovpn_config)" || { echo "OpenVPN config not found"; exit 1; }
+    cp "$cfg" "/root/$(basename "$cfg").backup.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+    sed -i '/^[[:space:]]*disable-dco[[:space:]]*$/d' "$cfg"
+    if [ "$mode" = "off" ]; then
+        printf '\n# routing-openwrt stability\ndisable-dco\n' >> "$cfg"
+        echo "DCO disabled in $cfg"
+    else
+        echo "DCO enabled/auto in $cfg"
+    fi
+    /etc/init.d/openvpn restart 2>/dev/null || true
+    sleep 3
+    repair_route
+}
+
+case "$1" in
+    help|-h|--help|"")
+        cat <<'HELP'
+rwrt commands:
+  rwrt status          show short status
+  rwrt diag            run diagnostics
+  rwrt load            show router load/resources
+  rwrt lists           refresh GitHub lists + restart firewall/dnsmasq
+  rwrt repair          repair policy route/table vpn
+  rwrt update          update project from GitHub
+  rwrt dco status      show OpenVPN DCO state
+  rwrt dco off         disable OpenVPN DCO and restart OpenVPN
+  rwrt dco on          enable/auto OpenVPN DCO and restart OpenVPN
+  rwrt openvpn restart restart OpenVPN and repair route
+HELP
+    ;;
+    status)
+        echo "=== routing-openwrt status ==="
+        [ -x /usr/sbin/domain-routing-status.sh ] && /usr/sbin/domain-routing-status.sh || true
+        echo "=== table vpn ==="; ip route show table vpn 2>/dev/null || true
+        echo "=== counters ==="; nft list ruleset 2>/dev/null | grep -E 'mark_domains|mark_subnet' -n || true
+    ;;
+    diag|diagnose) /usr/sbin/routing-openwrt-diagnose.sh ;;
+    load) /usr/sbin/routing-openwrt-load.sh ;;
+    lists|refresh)
+        /etc/init.d/getdomains start || true
+        /etc/init.d/firewall restart >/dev/null 2>&1 || true
+        sleep 2
+        /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+        repair_route
+        wc -l /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst 2>/dev/null || true
+    ;;
+    repair|route) repair_route ;;
+    update)
+        if command -v curl >/dev/null 2>&1; then curl -kL https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
+        else wget -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
+        fi
+    ;;
+    dco)
+        case "$2" in
+            status|"") dco_status ;;
+            off|disable) dco_set off ;;
+            on|enable) dco_set on ;;
+            *) echo "Usage: rwrt dco on|off|status"; exit 1 ;;
+        esac
+    ;;
+    openvpn)
+        case "$2" in
+            restart) /etc/init.d/openvpn restart; sleep 5; repair_route ;;
+            *) echo "Usage: rwrt openvpn restart"; exit 1 ;;
+        esac
+    ;;
+    *) echo "Unknown command: $1"; echo "Run: rwrt help"; exit 1 ;;
+esac
+EOF
+    chmod +x /usr/sbin/rwrt
+}
+
 
 update_existing_installation() {
     clear_screen
@@ -2299,6 +2436,7 @@ update_existing_installation() {
     echo "Update done / Обновление завершено"
     echo "Status command / Проверка: /usr/sbin/domain-routing-status.sh"
     echo "Load check / Проверка нагрузки: /usr/sbin/routing-openwrt-load.sh"
+    echo "Quick command / Быстрая команда: rwrt help"
 }
 
 add_getdomains() {
