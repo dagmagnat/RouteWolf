@@ -1,4 +1,4 @@
-# routing-openwrt
+# RouteWolf
 
 Простой скрипт для OpenWrt: домены и IPv4 CIDR из списков идут через выбранный туннель, обычный интернет остаётся через WAN.
 
@@ -20,9 +20,9 @@
 По умолчанию используются списки из этого репозитория:
 
 ```text
-https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst
-https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst
-https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv6.lst
+https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/lists/domains-dnsmasq-nfset.lst
+https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/lists/ipv4.lst
+https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/lists/ipv6.lst
 ```
 
 Домены и IPv4 включены по умолчанию. IPv6 выключен по умолчанию.
@@ -57,7 +57,7 @@ lists/profiles/<name>/ipv6.lst
 Проект не запускает постоянный тяжёлый процесс для маршрутизации. Основная работа идёт через `dnsmasq`, `nftables` и `ip rule`. Для проверки нагрузки:
 
 ```sh
-/usr/sbin/routing-openwrt-load.sh
+/usr/sbin/routewolf-load.sh
 ```
 
 На слабых роутерах рекомендуется профиль `lite` и WireGuard/AmneziaWG. Sing-box проверяет flash/RAM перед установкой и не рекомендуется для 16/64 MB устройств.
@@ -65,7 +65,7 @@ lists/profiles/<name>/ipv6.lst
 ## Установка с GitHub
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
+wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
 ```
 
 Если в X-WRT/ImmortalWrt `wget` не поддерживает HTTPS, сначала поставьте `curl` через `apk`:
@@ -73,7 +73,7 @@ wget -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/insta
 ```sh
 apk update
 apk add curl ca-certificates ca-bundle unzip
-curl -kL https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/install.sh | sh
+curl -kL https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
 ```
 
 Если `curl` уже есть, достаточно последней строки.
@@ -81,7 +81,7 @@ curl -kL https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/instal
 ## Обновление
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
+wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
 ```
 
 Обновление не только заменяет скрипты проекта, но и сразу скачивает свежие списки из GitHub, перезапускает `dnsmasq`/`firewall` и восстанавливает маршрут `table vpn`.
@@ -89,13 +89,13 @@ wget -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/updat
 ## Удаление
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh
+wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
 ```
 
 Полная очистка конфигов проекта:
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh | sh -s -- --purge
+wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
 ```
 
 ## Ручная установка ZIP
@@ -104,10 +104,10 @@ wget -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/unins
 
 ```sh
 cd /tmp
-unzip -o routing-openwrt.zip -d /tmp
-mv /tmp/routing-openwrt-main /tmp/routing-openwrt 2>/dev/null || true
-cd /tmp/routing-openwrt
-chmod +x install.sh update.sh uninstall.sh getdomains-install.sh getdomains-uninstall.sh getdomains-check.sh
+unzip -o RouteWolf.zip -d /tmp
+mv /tmp/RouteWolf-main /tmp/routewolf 2>/dev/null || mv /tmp/routewolf-main /tmp/routewolf 2>/dev/null || true
+cd /tmp/routewolf
+chmod +x install.sh update.sh uninstall.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh
 sh ./install.sh
 ```
 
@@ -116,7 +116,7 @@ sh ./install.sh
 ## Диагностика
 
 ```sh
-/usr/sbin/routing-openwrt-diagnose.sh
+/usr/sbin/routewolf-diagnose.sh
 ```
 
 Диагностика показывает туннель, маршрут YouTube, DNS, списки, nftset, fwmark, таблицу `vpn` и основные ошибки. Вывод можно отправить разработчику для анализа.
@@ -124,7 +124,7 @@ sh ./install.sh
 ## Проверка
 
 ```sh
-/usr/sbin/domain-routing-status.sh
+/usr/sbin/routewolf-status.sh
 ip route show table vpn
 ip rule show | grep fwmark
 nft list set inet fw4 vpn_domains | head
@@ -133,16 +133,40 @@ nft list set inet fw4 vpn_domains | head
 ### Быстрые команды после установки
 
 ```sh
-rwrt help
-rwrt status
-rwrt diag
-rwrt load
-rwrt lists
-rwrt repair
-rwrt dco status
-rwrt dco off
-rwrt dco on
-rwrt openvpn restart
+rw help
+rw status
+rw diag
+rw load
+rw lists
+rw repair
+rw dco status
+rw dco off
+rw dco on
+rw openvpn restart
 ```
 
-По умолчанию для OpenVPN используется стабильный режим `disable-dco`. DCO можно включить командой `rwrt dco on`, если конкретная прошивка/ядро работает с ним стабильно.
+По умолчанию для OpenVPN используется стабильный режим `disable-dco`. DCO можно включить командой `rw dco on`, если конкретная прошивка/ядро работает с ним стабильно.
+
+## Sing-box: обычная ссылка и подписка
+
+RouteWolf v35 поддерживает два режима Sing-box:
+
+```text
+1. Обычная VLESS Reality ссылка — статичная, параметры не обновляются сами.
+2. Ссылка подписки или JSON URL — короткая ссылка, RouteWolf периодически скачивает актуальные параметры.
+```
+
+Секретные ссылки не выводятся в лог полностью и хранятся в `/etc/routewolf/singbox.conf` с правами `600`.
+
+Быстрые команды:
+
+```sh
+rw singbox set-link 'vless://...'
+rw singbox set-url 'https://example.com/sub-or-json' 60
+rw singbox update
+rw singbox status
+rw singbox restart
+rw singbox log
+```
+
+Для подписки/JSON URL автообновление включается через cron. Интервал по умолчанию — 60 минут. Sing-box работает в безопасном режиме: `auto_route=false`, `strict_route=false`; RouteWolf отправляет в `sbtun0` только отмеченные домены/IP через `dnsmasq -> nftset -> fwmark -> table vpn`.

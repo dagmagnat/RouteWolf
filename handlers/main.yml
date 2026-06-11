@@ -14,9 +14,9 @@
       name: firewall
       state: restarted
 
-  - name: Run getdomains script
+  - name: Run routewolf script
     service:
-      name: getdomains
+      name: routewolf
       state: restarted
 
   - name: Restart dnscrypt-proxy

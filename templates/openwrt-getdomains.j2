@@ -1,12 +1,12 @@
 #!/bin/sh /etc/rc.common
 
 START=99
-CACHE_DIR="/etc/domain-routing/lists"
+CACHE_DIR="/etc/routewolf/lists"
 TMP_DNSMASQ_DIR="/tmp/dnsmasq.d"
 TMP_LIST_DIR="/tmp/lst"
 
-DOMAINS="{{ domain_list_url | default('https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/domains-dnsmasq-nfset.lst') }}"
-IPV4="{{ ipv4_list_url | default('https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/lists/ipv4.lst') }}"
+DOMAINS="{{ domain_list_url | default('https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/lists/domains-dnsmasq-nfset.lst') }}"
+IPV4="{{ ipv4_list_url | default('https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/lists/ipv4.lst') }}"
 
 start () {
     mkdir -p "$CACHE_DIR" "$TMP_DNSMASQ_DIR" "$TMP_LIST_DIR"

@@ -84,25 +84,25 @@
 
 # Getdomains script configure
       
-  - name: getdomains script copy
+  - name: routewolf script copy
     template:
-      src: "openwrt-getdomains.j2"
-      dest: "/etc/init.d/getdomains"
+      src: "openwrt-routewolf.j2"
+      dest: "/etc/init.d/routewolf"
       mode: a+x
       trim_blocks: false
     notify:
-      - Run getdomains script
+      - Run routewolf script
 
   - name: create simplink in rc.d
     file:
-      src: "/etc/init.d/getdomains"
-      dest: "/etc/rc.d/S99getdomains"
+      src: "/etc/init.d/routewolf"
+      dest: "/etc/rc.d/S99routewolf"
       state: link
     notify:
-      - Run getdomains script
+      - Run routewolf script
 
   - name: check string in crontab
-    shell: grep "getdomains" /etc/crontabs/root
+    shell: grep "routewolf" /etc/crontabs/root
     register: check_cron
     ignore_errors: true
      
@@ -110,7 +110,7 @@
     lineinfile:
       path: /etc/crontabs/root
       create: yes
-      line: "0 4 * * * /etc/init.d/getdomains start"
+      line: "0 4 * * * /etc/init.d/routewolf start"
     when: check_cron.stdout == ""
     
   - name: enable and start crontab
@@ -123,8 +123,8 @@
 
   - name: Route for vpn table
     template:
-      src: "openwrt-30-vpnroute.j2"
-      dest: "/etc/hotplug.d/iface/30-vpnroute"
+      src: "openwrt-30-routewolf-route.j2"
+      dest: "/etc/hotplug.d/iface/30-routewolf-route"
       mode: 0644
 
   - name: Check string in rt_tables
