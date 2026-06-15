@@ -88,12 +88,12 @@ unzip -o "$ZIP_FILE" -d /tmp >/dev/null || exit 1
 
 if [ -d "/tmp/routewolf-${BRANCH}" ]; then
     mv "/tmp/routewolf-${BRANCH}" "$TMP_DIR"
-elif [ -d "/tmp/routewolf-main" ]; then
-    mv "/tmp/routewolf-main" "$TMP_DIR"
+elif [ -d "/tmp/routewolf" ]; then
+    mv "/tmp/routewolf" "$TMP_DIR"
 elif [ -d "/tmp/routewolf-${BRANCH}" ]; then
     mv "/tmp/routewolf-${BRANCH}" "$TMP_DIR"
-elif [ -d "/tmp/routewolf-main" ]; then
-    mv "/tmp/routewolf-main" "$TMP_DIR"
+elif [ -d "/tmp/routewolf" ]; then
+    mv "/tmp/routewolf" "$TMP_DIR"
 elif [ -d "/tmp/routing-openwrt-${BRANCH}" ]; then
     mv "/tmp/routing-openwrt-${BRANCH}" "$TMP_DIR"
 elif [ -d "/tmp/routing-openwrt-main" ]; then
