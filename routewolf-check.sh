@@ -371,7 +371,7 @@ if [ $WIREGUARD -eq 1 ]; then
   WG=true
 fi
 
-if [ "$WG" == true ]; then
+if [ "$WG" = true ]; then
   WG_PING=$(ping -c 1 -q -I wg0 itdog.info | grep -c "1 packets received")
   if [ $WG_PING -eq 1 ]; then
     checkpoint_true "$WIREGUARD_PROTOCOL"
@@ -407,7 +407,7 @@ if opkg list-installed | grep -q openvpn; then
 fi
 
 # Check OpenVPN
-if [ "$OVPN" == true ]; then
+if [ "$OVPN" = true ]; then
   if ping -c 1 -q -I tun0 itdog.info | grep -q "1 packets received"; then
     checkpoint_true "$OPENVPN_PROTOCOL"
   else

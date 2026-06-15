@@ -81,21 +81,37 @@ install_deps() {
 
 install_deps
 
-rm -rf "$TMP_DIR" "$ZIP_FILE" "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf-${BRANCH}"
+rm -rf "$TMP_DIR" "$ZIP_FILE"     "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf-${BRANCH}"     "/tmp/RouteWolf-main" "/tmp/routewolf-main"     "/tmp/routing-openwrt-${BRANCH}" "/tmp/routing-openwrt-main"
 
-download_to_file "$ZIP_URL" "$ZIP_FILE" || exit 1
-unzip -o "$ZIP_FILE" -d /tmp >/dev/null || exit 1
+if ! download_to_file "$ZIP_URL" "$ZIP_FILE"; then
+    echo "Error: failed to download RouteWolf archive from GitHub."
+    echo "Check internet, DNS, date/time and GitHub access on the router."
+    exit 1
+fi
+
+if ! unzip -o "$ZIP_FILE" -d /tmp >/dev/null; then
+    echo "Error: failed to unpack RouteWolf archive."
+    echo "Check free RAM/storage in /tmp and that unzip is installed."
+    exit 1
+fi
 
 if [ -d "/tmp/RouteWolf-${BRANCH}" ]; then
     mv "/tmp/RouteWolf-${BRANCH}" "$TMP_DIR"
 elif [ -d "/tmp/routewolf-${BRANCH}" ]; then
     mv "/tmp/routewolf-${BRANCH}" "$TMP_DIR"
+elif [ -d "/tmp/RouteWolf-main" ]; then
+    mv "/tmp/RouteWolf-main" "$TMP_DIR"
+elif [ -d "/tmp/routewolf-main" ]; then
+    mv "/tmp/routewolf-main" "$TMP_DIR"
 elif [ -d "/tmp/routing-openwrt-${BRANCH}" ]; then
     mv "/tmp/routing-openwrt-${BRANCH}" "$TMP_DIR"
+elif [ -d "/tmp/routing-openwrt-main" ]; then
+    mv "/tmp/routing-openwrt-main" "$TMP_DIR"
 else
     echo "Error: RouteWolf archive extracted, but source directory was not found."
-    echo "Expected: /tmp/RouteWolf-${BRANCH}"
-    ls -la /tmp | grep -i route
+    echo "Expected one of: RouteWolf-${BRANCH}, routewolf-${BRANCH}, RouteWolf-main, routewolf-main."
+    echo "Found matching entries in /tmp:"
+    ls -la /tmp | grep -i 'route\|wolf' || true
     exit 1
 fi
 

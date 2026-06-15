@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v35-singbox-subscriptions"
+PROJECT_VERSION="v36-ui-localization-fixes"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -76,6 +76,84 @@ msgc() {
 prompt() { if is_ru; then printf "%s" "$2"; else printf "%s" "$1"; fi; }
 
 
+# Compact installer UI. It is intentionally BusyBox-/ash-friendly.
+ui_label() { prompt "$1" "$2"; }
+
+ui_header() {
+    _title="$1"
+    printf "\n%b========================================%b\n" "$C_BLUE" "$C_RESET"
+    printf "%b        %s%b\n" "$C_CYAN" "$_title" "$C_RESET"
+    printf "%b========================================%b\n" "$C_BLUE" "$C_RESET"
+}
+
+ui_progress() {
+    _cur="$1"; _total="$2"; _label="$3"
+    [ -n "$_total" ] || _total=1
+    [ "$_total" -gt 0 ] 2>/dev/null || _total=1
+    _percent=$(( _cur * 100 / _total ))
+    [ "$_percent" -gt 100 ] 2>/dev/null && _percent=100
+    _filled=$(( _percent / 2 ))
+    _empty=$(( 50 - _filled ))
+    _bar=""; _i=0
+    while [ "$_i" -lt "$_filled" ]; do _bar="${_bar}#"; _i=$(( _i + 1 )); done
+    _i=0
+    while [ "$_i" -lt "$_empty" ]; do _bar="${_bar}-"; _i=$(( _i + 1 )); done
+    printf "%b[%s]%b %3d%%  %s\n" "$C_BLUE" "$_bar" "$C_RESET" "$_percent" "$_label"
+}
+
+ui_step_begin() {
+    INSTALL_STEP=$(( ${INSTALL_STEP:-0} + 1 ))
+    ui_progress "$INSTALL_STEP" "${INSTALL_TOTAL_STEPS:-1}" "$1"
+    printf " %b├─%b %s...\n" "$C_CYAN" "$C_RESET" "$1"
+}
+
+ui_step_ok() {
+    printf " %b└─ [OK]%b %s\n\n" "$C_GREEN" "$C_RESET" "$1"
+}
+
+ui_step_warn() {
+    printf " %b└─ [WARN]%b %s\n\n" "$C_YELLOW" "$C_RESET" "$1"
+}
+
+ui_step_error() {
+    _label="$1"; _rc="$2"
+    printf " %b└─ [ERROR]%b %s\n" "$C_RED" "$C_RESET" "$_label"
+    if is_ru; then
+        echo "Причина: шаг завершился с кодом $_rc. Проверьте вывод выше: обычно там виден пакет, команда или конфиг, на котором произошёл сбой."
+    else
+        echo "Reason: the step exited with code $_rc. Check the output above: it usually shows the package, command or config that failed."
+    fi
+    echo ""
+}
+
+run_step() {
+    _label="$1"; shift
+    ui_step_begin "$_label"
+    "$@"
+    _rc="$?"
+    if [ "$_rc" -eq 0 ]; then
+        ui_step_ok "$_label"
+        return 0
+    fi
+    ui_step_error "$_label" "$_rc"
+    return "$_rc"
+}
+
+
+ask_line() {
+    _en="$1"; _ru="$2"; _var="$3"
+    printf "%s\n" "$(prompt "$_en" "$_ru")"
+    read -r "$_var"
+}
+
+ask_same_line() {
+    _en="$1"; _ru="$2"; _var="$3"
+    printf "%s" "$(prompt "$_en" "$_ru")"
+    read -r "$_var"
+}
+
+
+
 migrate_legacy_paths() {
     # v34 rename: routing-openwrt/domain-routing -> RouteWolf.
     # Keep old installs working by copying old configs into new paths.
@@ -95,9 +173,10 @@ migrate_legacy_paths() {
 choose_language() {
     [ -n "${ROUTEWOLF_LANG:-}" ] && return
     clear_screen
-    printf "%bRouteWolf%b\n" "$C_BLUE" "$C_RESET"
+    ui_header "RouteWolf"
     echo "1) English"
     echo "2) Русский"
+    echo ""
     while true; do
         printf "Select language / Выберите язык [2]: "
         read -r RO_LANG_CHOICE
@@ -110,7 +189,6 @@ choose_language() {
     done
     clear_screen
 }
-
 pause_screen() {
     echo ""
     if is_ru; then read -r -p "Нажмите Enter для продолжения..." _pause; else read -r -p "Press Enter to continue..." _pause; fi
@@ -128,7 +206,11 @@ router_resource_summary() {
     FLASH_FREE_MB=$((FLASH_FREE_KB/1024))
     RAM_TOTAL_MB=$((RAM_TOTAL_KB/1024))
     RAM_FREE_MB=$((RAM_FREE_KB/1024))
-    echo "Router resources / Ресурсы роутера: flash ${FLASH_TOTAL_MB}MB total, ${FLASH_FREE_MB}MB free; RAM ${RAM_TOTAL_MB}MB total, ${RAM_FREE_MB}MB available"
+    if is_ru; then
+        echo "Ресурсы роутера: flash ${FLASH_TOTAL_MB}MB всего, ${FLASH_FREE_MB}MB свободно; RAM ${RAM_TOTAL_MB}MB всего, ${RAM_FREE_MB}MB доступно"
+    else
+        echo "Router resources: flash ${FLASH_TOTAL_MB}MB total, ${FLASH_FREE_MB}MB free; RAM ${RAM_TOTAL_MB}MB total, ${RAM_FREE_MB}MB available"
+    fi
 }
 
 profile_local_file() {
@@ -626,7 +708,11 @@ check_singbox_requirements() {
     [ -n "$DISK_FREE_MB" ] || DISK_FREE_MB=0
     [ -n "$RAM_TOTAL_MB" ] || RAM_TOTAL_MB=0
 
-    echo "Router resources / Ресурсы роутера: flash total=${DISK_TOTAL_MB}MB, free=${DISK_FREE_MB}MB, RAM=${RAM_TOTAL_MB}MB"
+    if is_ru; then
+        echo "Ресурсы роутера: flash всего=${DISK_TOTAL_MB}MB, свободно=${DISK_FREE_MB}MB, RAM=${RAM_TOTAL_MB}MB"
+    else
+        echo "Router resources: flash total=${DISK_TOTAL_MB}MB, free=${DISK_FREE_MB}MB, RAM=${RAM_TOTAL_MB}MB"
+    fi
     if [ "$DISK_TOTAL_MB" -lt 64 ] || [ "$DISK_FREE_MB" -lt 20 ] || [ "$RAM_TOTAL_MB" -lt 128 ]; then
         printf "\033[31;1mNot enough resources for Sing-box. Minimum: 64MB flash, 20MB free flash, 128MB RAM.\033[0m\n"
         printf "\033[31;1mНедостаточно памяти для Sing-box. Минимум: 64MB flash, 20MB свободно, 128MB RAM. Выберите WireGuard/AmneziaWG/OpenVPN.\033[0m\n"
@@ -1277,14 +1363,13 @@ pkg_is_installed() {
 }
 
 check_repo() {
-    printf "\033[32;1mChecking OpenWrt package repository...\033[0m\n"
+    msgc "$C_BLUE" "Checking OpenWrt package repository..." "Проверка репозитория пакетов OpenWrt..."
     if ! pkg_update; then
-        printf "\033[33;1mWarning: package repository update returned an error.\033[0m\n"
-        printf "\033[33;1mThe installer will continue and try to use already updated feeds/cache.\033[0m\n"
-        printf "\033[33;1mIf package installation fails, check internet, DNS, date/time or run: ntpd -p ptbtime1.ptb.de\033[0m\n"
+        msgc "$C_YELLOW" "Warning: package repository update returned an error." "Предупреждение: обновление репозитория пакетов завершилось с ошибкой."
+        msgc "$C_YELLOW" "The installer will continue and try to use already updated feeds/cache." "Установка продолжится и попробует использовать уже обновлённые feeds/cache."
+        msgc "$C_YELLOW" "If package installation fails, check internet, DNS, date/time or run: ntpd -p ptbtime1.ptb.de" "Если установка пакетов не пройдёт, проверьте интернет, DNS, дату/время или выполните: ntpd -p ptbtime1.ptb.de"
     fi
 }
-
 route_vpn () {
     if [ "$TUNNEL" = wg ]; then
         VPN_ROUTE_DEV="wg0"
@@ -1673,33 +1758,33 @@ add_tunnel() {
         esac
     done
 
-    if [ "$TUNNEL" == 'wg' ]; then
-        printf "\033[32;1mConfigure WireGuard\033[0m\n"
+    if [ "$TUNNEL" = 'wg' ]; then
+        msgc "$C_GREEN" "Configure WireGuard" "Настройка WireGuard"
         if pkg_is_installed wireguard-tools; then
-            echo "Wireguard already installed"
+            msgc "$C_GREEN" "WireGuard is already installed" "WireGuard уже установлен"
         else
-            echo "Installed wg..."
+            msgc "$C_BLUE" "Installing WireGuard..." "Установка WireGuard..."
             pkg_install wireguard-tools
         fi
 
         route_vpn
 
-        read -r -p "Enter the private key (from [Interface]):"$'\n' WG_PRIVATE_KEY
+        ask_line "Enter the private key (from [Interface]):" "Введите PrivateKey (из [Interface]):" WG_PRIVATE_KEY
 
         while true; do
-            read -r -p "Enter internal IP address with subnet, example 192.168.100.5/24 (from [Interface]):"$'\n' WG_IP
+            ask_line "Enter internal IP address with subnet, example 192.168.100.5/24 (from [Interface]):" "Введите внутренний IP-адрес с маской, пример 192.168.100.5/24 (из [Interface]):" WG_IP
             if echo "$WG_IP" | egrep -oq '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+$'; then
                 break
             else
-                echo "This IP is not valid. Please repeat"
+                msgc "$C_RED" "This IP is not valid. Please repeat" "IP указан неверно. Повторите ввод"
             fi
         done
 
-        read -r -p "Enter the public key (from [Peer]):"$'\n' WG_PUBLIC_KEY
-        read -r -p "If use PresharedKey, Enter this (from [Peer]). If your don't use leave blank:"$'\n' WG_PRESHARED_KEY
-        read -r -p "Enter Endpoint host without port (Domain or IP) (from [Peer]):"$'\n' WG_ENDPOINT
+        ask_line "Enter the public key (from [Peer]):" "Введите PublicKey (из [Peer]):" WG_PUBLIC_KEY
+        ask_line "If use PresharedKey, Enter this (from [Peer]). If your don't use leave blank:" "Если используется PresharedKey, введите его; иначе оставьте пустым:" WG_PRESHARED_KEY
+        ask_line "Enter Endpoint host without port (Domain or IP) (from [Peer]):" "Введите Endpoint host без порта (домен или IP) (из [Peer]):" WG_ENDPOINT
 
-        read -r -p "Enter Endpoint host port (from [Peer]) [51820]:"$'\n' WG_ENDPOINT_PORT
+        ask_line "Enter Endpoint host port (from [Peer]) [51820]:" "Введите Endpoint port (из [Peer]) [51820]:" WG_ENDPOINT_PORT
         WG_ENDPOINT_PORT=${WG_ENDPOINT_PORT:-51820}
         if [ "$WG_ENDPOINT_PORT" = '51820' ]; then
             echo $WG_ENDPOINT_PORT
@@ -1726,36 +1811,36 @@ add_tunnel() {
         uci commit
     fi
 
-    if [ "$TUNNEL" == 'ovpn' ]; then
+    if [ "$TUNNEL" = 'ovpn' ]; then
         configure_openvpn_menu || {
             msgc "$C_RED" "OpenVPN setup cancelled" "Настройка OpenVPN отменена"
             TUNNEL=0
         }
     fi
 
-    if [ "$TUNNEL" == 'singbox' ]; then
+    if [ "$TUNNEL" = 'singbox' ]; then
         configure_singbox_menu || {
             msgc "$C_RED" "Sing-box setup cancelled" "Настройка Sing-box отменена"
             TUNNEL=0
         }
     fi
 
-    if [ "$TUNNEL" == 'wgForYoutube' ]; then
+    if [ "$TUNNEL" = 'wgForYoutube' ]; then
         add_internal_wg Wireguard
     fi
 
-    if [ "$TUNNEL" == 'awgForYoutube' ]; then
+    if [ "$TUNNEL" = 'awgForYoutube' ]; then
         add_internal_wg AmneziaWG
     fi
 
-    if [ "$TUNNEL" == 'awg' ]; then
-        printf "\033[32;1mConfigure Amnezia WireGuard\033[0m\n"
+    if [ "$TUNNEL" = 'awg' ]; then
+        msgc "$C_GREEN" "Configure Amnezia WireGuard" "Настройка Amnezia WireGuard"
 
         install_awg_packages
 
         route_vpn
 
-        read -r -p "Paste full AmneziaWG config now? / Вставить полный конфиг AmneziaWG? (y/n) [y]: " PASTE_AWG_CONFIG
+        ask_same_line "Paste full AmneziaWG config now? (y/n) [y]: " "Вставить полный конфиг AmneziaWG? (y/n) [y]: " PASTE_AWG_CONFIG
         PASTE_AWG_CONFIG=${PASTE_AWG_CONFIG:-y}
         if [ "$PASTE_AWG_CONFIG" = "y" ] || [ "$PASTE_AWG_CONFIG" = "Y" ]; then
             AWG_CFG_TMP="/tmp/awg-client.conf"
@@ -1763,43 +1848,43 @@ add_tunnel() {
             parse_awg_config_file "$AWG_CFG_TMP"
             rm -f "$AWG_CFG_TMP"
         else
-            read -r -p "Enter the private key (from [Interface]):"$'\n' AWG_PRIVATE_KEY
+            ask_line "Enter the private key (from [Interface]):" "Введите PrivateKey (из [Interface]):" AWG_PRIVATE_KEY
             while true; do
-                read -r -p "Enter internal IP address with subnet, example 192.168.100.5/24 (Address from [Interface]):"$'\n' AWG_IP
-                if echo "$AWG_IP" | egrep -oq '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+$'; then break; else echo "This IP is not valid. Please repeat"; fi
+                ask_line "Enter internal IP address with subnet, example 192.168.100.5/24 (Address from [Interface]):" "Введите внутренний IP-адрес с маской, пример 192.168.100.5/24 (Address из [Interface]):" AWG_IP
+                if echo "$AWG_IP" | egrep -oq '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+$'; then break; else msgc "$C_RED" "This IP is not valid. Please repeat" "IP указан неверно. Повторите ввод"; fi
             done
-            read -r -p "Enter DNS value [optional] (from [Interface]):"$'\n' AWG_DNS
-            read -r -p "Enter Jc value (from [Interface]):"$'\n' AWG_JC
-            read -r -p "Enter Jmin value (from [Interface]):"$'\n' AWG_JMIN
-            read -r -p "Enter Jmax value (from [Interface]):"$'\n' AWG_JMAX
-            read -r -p "Enter S1 value (from [Interface]):"$'\n' AWG_S1
-            read -r -p "Enter S2 value (from [Interface]):"$'\n' AWG_S2
-            read -r -p "Enter H1 value (from [Interface]):"$'\n' AWG_H1
-            read -r -p "Enter H2 value (from [Interface]):"$'\n' AWG_H2
-            read -r -p "Enter H3 value (from [Interface]):"$'\n' AWG_H3
-            read -r -p "Enter H4 value (from [Interface]):"$'\n' AWG_H4
+            ask_line "Enter DNS value [optional] (from [Interface]):" "Введите DNS [необязательно] (из [Interface]):" AWG_DNS
+            ask_line "Enter Jc value (from [Interface]):" "Введите Jc (из [Interface]):" AWG_JC
+            ask_line "Enter Jmin value (from [Interface]):" "Введите Jmin (из [Interface]):" AWG_JMIN
+            ask_line "Enter Jmax value (from [Interface]):" "Введите Jmax (из [Interface]):" AWG_JMAX
+            ask_line "Enter S1 value (from [Interface]):" "Введите S1 (из [Interface]):" AWG_S1
+            ask_line "Enter S2 value (from [Interface]):" "Введите S2 (из [Interface]):" AWG_S2
+            ask_line "Enter H1 value (from [Interface]):" "Введите H1 (из [Interface]):" AWG_H1
+            ask_line "Enter H2 value (from [Interface]):" "Введите H2 (из [Interface]):" AWG_H2
+            ask_line "Enter H3 value (from [Interface]):" "Введите H3 (из [Interface]):" AWG_H3
+            ask_line "Enter H4 value (from [Interface]):" "Введите H4 (из [Interface]):" AWG_H4
             if [ "$AWG_VERSION" = "2.0" ]; then
-                read -r -p "Enter S3 value [optional]:"$'\n' AWG_S3
-                read -r -p "Enter S4 value [optional]:"$'\n' AWG_S4
-                read -r -p "Enter I1 value [optional]:"$'\n' AWG_I1
-                read -r -p "Enter I2 value [optional]:"$'\n' AWG_I2
-                read -r -p "Enter I3 value [optional]:"$'\n' AWG_I3
-                read -r -p "Enter I4 value [optional]:"$'\n' AWG_I4
-                read -r -p "Enter I5 value [optional]:"$'\n' AWG_I5
+                ask_line "Enter S3 value [optional]:" "Введите S3 [необязательно]:" AWG_S3
+                ask_line "Enter S4 value [optional]:" "Введите S4 [необязательно]:" AWG_S4
+                ask_line "Enter I1 value [optional]:" "Введите I1 [необязательно]:" AWG_I1
+                ask_line "Enter I2 value [optional]:" "Введите I2 [необязательно]:" AWG_I2
+                ask_line "Enter I3 value [optional]:" "Введите I3 [необязательно]:" AWG_I3
+                ask_line "Enter I4 value [optional]:" "Введите I4 [необязательно]:" AWG_I4
+                ask_line "Enter I5 value [optional]:" "Введите I5 [необязательно]:" AWG_I5
             fi
-            read -r -p "Enter the public key (from [Peer]):"$'\n' AWG_PUBLIC_KEY
-            read -r -p "If use PresharedKey, enter it; otherwise leave blank:"$'\n' AWG_PRESHARED_KEY
-            read -r -p "Enter Endpoint host without port (Domain or IP) (from [Peer]):"$'\n' AWG_ENDPOINT
-            read -r -p "Enter Endpoint host port (from [Peer]) [51820]:"$'\n' AWG_ENDPOINT_PORT
+            ask_line "Enter the public key (from [Peer]):" "Введите PublicKey (из [Peer]):" AWG_PUBLIC_KEY
+            ask_line "If use PresharedKey, enter it; otherwise leave blank:" "Если используется PresharedKey, введите его; иначе оставьте пустым:" AWG_PRESHARED_KEY
+            ask_line "Enter Endpoint host without port (Domain or IP) (from [Peer]):" "Введите Endpoint host без порта (домен или IP) (из [Peer]):" AWG_ENDPOINT
+            ask_line "Enter Endpoint host port (from [Peer]) [51820]:" "Введите Endpoint port (из [Peer]) [51820]:" AWG_ENDPOINT_PORT
             AWG_ENDPOINT_PORT=${AWG_ENDPOINT_PORT:-51820}
-            read -r -p "Enter AllowedIPs [0.0.0.0/0]:"$'\n' AWG_ALLOWED_IPS
+            ask_line "Enter AllowedIPs [0.0.0.0/0]:" "Введите AllowedIPs [0.0.0.0/0]:" AWG_ALLOWED_IPS
             AWG_ALLOWED_IPS=${AWG_ALLOWED_IPS:-0.0.0.0/0}
-            read -r -p "Enter PersistentKeepalive [25]:"$'\n' AWG_KEEPALIVE
+            ask_line "Enter PersistentKeepalive [25]:" "Введите PersistentKeepalive [25]:" AWG_KEEPALIVE
             AWG_KEEPALIVE=${AWG_KEEPALIVE:-25}
         fi
 
         if [ -z "$AWG_PRIVATE_KEY" ] || [ -z "$AWG_IP" ] || [ -z "$AWG_PUBLIC_KEY" ] || [ -z "$AWG_ENDPOINT" ]; then
-            echo "Required AmneziaWG values are missing. Check pasted config."
+            msgc "$C_RED" "Required AmneziaWG values are missing. Check pasted config." "Не хватает обязательных значений AmneziaWG. Проверьте вставленный конфиг."
             exit 1
         fi
         AWG_ALLOWED_IPS=${AWG_ALLOWED_IPS:-0.0.0.0/0}
@@ -1860,33 +1945,48 @@ add_tunnel() {
 
 dnsmasqfull() {
     if pkg_is_installed dnsmasq-full; then
-        printf "\033[32;1mdnsmasq-full already installed\033[0m\n"
+        msgc "$C_GREEN" "dnsmasq-full is already installed" "dnsmasq-full уже установлен"
     else
-        printf "\033[32;1mInstalling dnsmasq-full\033[0m\n"
+        msgc "$C_BLUE" "Installing dnsmasq-full" "Установка dnsmasq-full"
         detect_pkg_manager
         if [ "$PKG_MANAGER" = "apk" ]; then
-            # OpenWrt 25.12+ uses apk. apk resolves package replacement itself on most builds.
-            pkg_install dnsmasq-full || { pkg_remove dnsmasq; pkg_install dnsmasq-full; }
+            pkg_install dnsmasq-full || { pkg_remove dnsmasq; pkg_install dnsmasq-full; } || {
+                msgc "$C_RED" "Failed to install dnsmasq-full. Check package repository and free space." "Не удалось установить dnsmasq-full. Проверьте репозиторий пакетов и свободное место."
+                return 1
+            }
         else
-            cd /tmp/ && opkg download dnsmasq-full
-            opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/
-            [ -f /etc/config/dhcp-opkg ] && cp /etc/config/dhcp /etc/config/dhcp-old && mv /etc/config/dhcp-opkg /etc/config/dhcp
+            cd /tmp/ || return 1
+            opkg download dnsmasq-full || {
+                msgc "$C_RED" "Failed to download dnsmasq-full. Check internet, DNS and package repository." "Не удалось скачать dnsmasq-full. Проверьте интернет, DNS и репозиторий пакетов."
+                return 1
+            }
+            opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/ || {
+                msgc "$C_RED" "Failed to replace dnsmasq with dnsmasq-full." "Не удалось заменить dnsmasq на dnsmasq-full."
+                return 1
+            }
+            if [ -f /etc/config/dhcp-opkg ]; then
+                cp /etc/config/dhcp /etc/config/dhcp-old 2>/dev/null || true
+                msgc "$C_YELLOW" "New package config saved as /etc/config/dhcp-opkg; current /etc/config/dhcp was kept unchanged." "Новый конфиг пакета сохранён как /etc/config/dhcp-opkg; текущий /etc/config/dhcp оставлен без замены."
+            fi
         fi
     fi
 }
-
 dnsmasqconfdir() {
-    if [ $VERSION_ID -ge 24 ]; then
-        if uci get dhcp.@dnsmasq[0].confdir | grep -q /tmp/dnsmasq.d; then
-            printf "\033[32;1mconfdir already set\033[0m\n"
+    if [ "${VERSION_ID:-0}" -ge 24 ] 2>/dev/null; then
+        if ! uci -q show dhcp.@dnsmasq[0] >/dev/null 2>&1; then
+            msgc "$C_RED" "dnsmasq section was not found in /etc/config/dhcp" "Секция dnsmasq не найдена в /etc/config/dhcp"
+            return 1
+        fi
+
+        if uci -q get dhcp.@dnsmasq[0].confdir 2>/dev/null | grep -q /tmp/dnsmasq.d; then
+            msgc "$C_GREEN" "dnsmasq confdir is already set" "dnsmasq confdir уже настроен"
         else
-            printf "\033[32;1mSetting confdir\033[0m\n"
-            uci set dhcp.@dnsmasq[0].confdir='/tmp/dnsmasq.d'
-            uci commit dhcp
+            msgc "$C_BLUE" "Setting dnsmasq confdir" "Настройка dnsmasq confdir"
+            uci set dhcp.@dnsmasq[0].confdir='/tmp/dnsmasq.d' || return 1
+            uci commit dhcp || return 1
         fi
     fi
 }
-
 remove_forwarding() {
     if [ ! -z "$forward_id" ]; then
         while uci -q delete firewall.@forwarding[$forward_id]; do :; done
@@ -1973,10 +2073,10 @@ add_zone() {
 }
 
 show_manual() {
-    if [ "$TUNNEL" == tun2socks ]; then
+    if [ "$TUNNEL" = tun2socks ]; then
         printf "\033[42;1mZone for tun2socks configured. But you need to set up the tunnel yourself.\033[0m\n"
         echo "Use this manual: https://cli.co/VNZISEM"
-    elif [ "$TUNNEL" == ovpn ]; then
+    elif [ "$TUNNEL" = ovpn ]; then
         printf "\033[42;1mOpenVPN routing configured. If you used manual mode, make sure the OpenVPN tunnel is up.\033[0m\n"
         printf "\033[42;1mМаршрутизация OpenVPN настроена. Если был ручной режим, убедитесь, что OpenVPN-туннель поднят.\033[0m\n"
     fi
@@ -1988,8 +2088,7 @@ add_set() {
     delete_uci_sections_by_name firewall ipset vpn_domains
     delete_uci_sections_by_name firewall rule mark_domains
 
-    printf "[32;1mCreate domain nft set and mark rule[0m
-"
+    msgc "$C_GREEN" "Create domain nft set and mark rule" "Создание nft-набора доменов и правила маркировки"
     uci add firewall ipset >/dev/null
     uci set firewall.@ipset[-1].name='vpn_domains'
     uci set firewall.@ipset[-1].match='dst_net'
@@ -2043,7 +2142,7 @@ add_dns_resolver() {
         esac
     done
 
-    if [ "$DNS_RESOLVER" == 'DNSCRYPT' ]; then
+    if [ "$DNS_RESOLVER" = 'DNSCRYPT' ]; then
         if pkg_is_installed dnscrypt-proxy2; then
             printf "\033[32;1mDNSCrypt2 already installed\033[0m\n"
         else
@@ -2075,7 +2174,7 @@ add_dns_resolver() {
 
     fi
 
-    if [ "$DNS_RESOLVER" == 'STUBBY' ]; then
+    if [ "$DNS_RESOLVER" = 'STUBBY' ]; then
         printf "\033[32;1mConfigure Stubby\033[0m\n"
 
         if pkg_is_installed stubby; then
@@ -2101,16 +2200,19 @@ add_dns_resolver() {
 add_packages() {
     for package in curl nano; do
         if pkg_is_installed "$package"; then
-            printf "\033[32;1m$package already installed\033[0m\n"
+            msgc "$C_GREEN" "$package is already installed" "$package уже установлен"
         else
-            printf "\033[32;1mInstalling $package...\033[0m\n"
-            pkg_install "$package"
-            
+            msgc "$C_BLUE" "Installing $package..." "Установка $package..."
+            pkg_install "$package" || {
+                msgc "$C_RED" "Failed to install $package. Check repositories, DNS, router date/time and free space." "Не удалось установить $package. Проверьте репозитории, DNS, дату/время роутера и свободное место."
+                return 1
+            }
+
             if "$package" --version >/dev/null 2>&1; then
-                printf "\033[32;1m$package was successfully installed and available\033[0m\n"
+                msgc "$C_GREEN" "$package was successfully installed and is available" "$package успешно установлен и доступен"
             else
-                printf "\033[31;1mError: failed to install $package\033[0m\n"
-                exit 1
+                msgc "$C_RED" "Error: $package was installed but cannot be started" "Ошибка: $package установлен, но не запускается"
+                return 1
             fi
         fi
     done
@@ -3373,9 +3475,9 @@ add_internal_wg() {
         ZONE_NAME="wg_internal"
 
         if pkg_is_installed wireguard-tools; then
-            echo "Wireguard already installed"
+            msgc "$C_GREEN" "WireGuard is already installed" "WireGuard уже установлен"
         else
-            echo "Installed wg..."
+            msgc "$C_BLUE" "Installing WireGuard..." "Установка WireGuard..."
             pkg_install wireguard-tools
         fi
     fi
@@ -3389,10 +3491,10 @@ add_internal_wg() {
         install_awg_packages
     fi
 
-    read -r -p "Enter the private key (from [Interface]):"$'\n' WG_PRIVATE_KEY_INT
+    ask_line "Enter the private key (from [Interface]):" "Введите PrivateKey (из [Interface]):" WG_PRIVATE_KEY_INT
 
     while true; do
-        read -r -p "Enter internal IP address with subnet, example 192.168.100.5/24 (from [Interface]):"$'\n' WG_IP
+        ask_line "Enter internal IP address with subnet, example 192.168.100.5/24 (from [Interface]):" "Введите внутренний IP-адрес с маской, пример 192.168.100.5/24 (из [Interface]):" WG_IP
         if echo "$WG_IP" | egrep -oq '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+$'; then
             break
         else
@@ -3400,26 +3502,26 @@ add_internal_wg() {
         fi
     done
 
-    read -r -p "Enter the public key (from [Peer]):"$'\n' WG_PUBLIC_KEY_INT
-    read -r -p "If use PresharedKey, Enter this (from [Peer]). If your don't use leave blank:"$'\n' WG_PRESHARED_KEY_INT
-    read -r -p "Enter Endpoint host without port (Domain or IP) (from [Peer]):"$'\n' WG_ENDPOINT_INT
+    ask_line "Enter the public key (from [Peer]):" "Введите PublicKey (из [Peer]):" WG_PUBLIC_KEY_INT
+    ask_line "If use PresharedKey, Enter this (from [Peer]). If your don't use leave blank:" "Если используется PresharedKey, введите его; иначе оставьте пустым:" WG_PRESHARED_KEY_INT
+    ask_line "Enter Endpoint host without port (Domain or IP) (from [Peer]):" "Введите Endpoint host без порта (домен или IP) (из [Peer]):" WG_ENDPOINT_INT
 
-    read -r -p "Enter Endpoint host port (from [Peer]) [51820]:"$'\n' WG_ENDPOINT_PORT_INT
+    ask_line "Enter Endpoint host port (from [Peer]) [51820]:" "Введите Endpoint port (из [Peer]) [51820]:" WG_ENDPOINT_PORT_INT
     WG_ENDPOINT_PORT_INT=${WG_ENDPOINT_PORT_INT:-51820}
     if [ "$WG_ENDPOINT_PORT_INT" = '51820' ]; then
         echo $WG_ENDPOINT_PORT_INT
     fi
 
     if [ "$PROTOCOL_NAME" = 'AmneziaWG' ]; then
-        read -r -p "Enter Jc value (from [Interface]):"$'\n' AWG_JC
-        read -r -p "Enter Jmin value (from [Interface]):"$'\n' AWG_JMIN
-        read -r -p "Enter Jmax value (from [Interface]):"$'\n' AWG_JMAX
-        read -r -p "Enter S1 value (from [Interface]):"$'\n' AWG_S1
-        read -r -p "Enter S2 value (from [Interface]):"$'\n' AWG_S2
-        read -r -p "Enter H1 value (from [Interface]):"$'\n' AWG_H1
-        read -r -p "Enter H2 value (from [Interface]):"$'\n' AWG_H2
-        read -r -p "Enter H3 value (from [Interface]):"$'\n' AWG_H3
-        read -r -p "Enter H4 value (from [Interface]):"$'\n' AWG_H4
+        ask_line "Enter Jc value (from [Interface]):" "Введите Jc (из [Interface]):" AWG_JC
+        ask_line "Enter Jmin value (from [Interface]):" "Введите Jmin (из [Interface]):" AWG_JMIN
+        ask_line "Enter Jmax value (from [Interface]):" "Введите Jmax (из [Interface]):" AWG_JMAX
+        ask_line "Enter S1 value (from [Interface]):" "Введите S1 (из [Interface]):" AWG_S1
+        ask_line "Enter S2 value (from [Interface]):" "Введите S2 (из [Interface]):" AWG_S2
+        ask_line "Enter H1 value (from [Interface]):" "Введите H1 (из [Interface]):" AWG_H1
+        ask_line "Enter H2 value (from [Interface]):" "Введите H2 (из [Interface]):" AWG_H2
+        ask_line "Enter H3 value (from [Interface]):" "Введите H3 (из [Interface]):" AWG_H3
+        ask_line "Enter H4 value (from [Interface]):" "Введите H4 (из [Interface]):" AWG_H4
     fi
     
     uci set network.${INTERFACE_NAME}=interface
@@ -3563,12 +3665,12 @@ install_awg_packages() {
     }
 
     if awg_already_installed; then
-        echo "AmneziaWG packages already installed, skipping package installer."
+        msgc "$C_GREEN" "AmneziaWG packages are already installed, skipping package installer." "Пакеты AmneziaWG уже установлены, установщик пакетов пропускается."
         AWG_VERSION="2.0"
         return 0
     fi
 
-    echo "Installing AmneziaWG packages / Установка пакетов AmneziaWG..."
+    msgc "$C_BLUE" "Installing AmneziaWG packages..." "Установка пакетов AmneziaWG..."
     if command -v wget >/dev/null 2>&1; then
         wget -4 -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL" || wget -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL"
     else
@@ -3576,7 +3678,7 @@ install_awg_packages() {
     fi
 
     if [ ! -s "$AWG_INSTALLER" ]; then
-        echo "Error downloading AmneziaWG installer. Check internet/GitHub/date on router."
+        msgc "$C_RED" "Error downloading AmneziaWG installer. Check internet/GitHub/date on router." "Ошибка скачивания установщика AmneziaWG. Проверьте интернет, доступ к GitHub и дату на роутере."
         exit 1
     fi
 
@@ -3590,16 +3692,13 @@ install_awg_packages() {
 
     if [ "$AWG_RC" -ne 0 ]; then
         if awg_already_installed; then
-            echo "Warning: AmneziaWG installer returned error $AWG_RC, but awg command/proto exists. Continuing."
+            msgc "$C_YELLOW" "Warning: AmneziaWG installer returned error $AWG_RC, but awg command/proto exists. Continuing." "Предупреждение: установщик AmneziaWG вернул ошибку $AWG_RC, но команда/proto уже есть. Продолжаю."
         else
             echo ""
-            echo "AmneziaWG package installation failed."
-            echo "Most common reasons: OpenWrt package repository is temporarily unreachable, IPv6/DNS issue, or missing packages for this build."
-            echo "If only one kmod dependency failed to download, install it manually, then run installer again."
-            echo "Example for OpenWrt 24.10 ramips/mt7621:"
-            echo "  curl -L --retry 5 -o /tmp/kmod-crypto-lib-curve25519.ipk https://downloads.openwrt.org/releases/24.10.6/targets/ramips/mt7621/kmods/6.6.127-1-f31f6f85a36836e510d64a18a9a5f1bf/kmod-crypto-lib-curve25519_6.6.127-r1_mipsel_24kc.ipk"
-            echo "  opkg install /tmp/kmod-crypto-lib-curve25519.ipk"
-            echo "Try: opkg update; opkg install ca-certificates ca-bundle libustream-mbedtls; then run installer again."
+            msgc "$C_RED" "AmneziaWG package installation failed." "Установка пакетов AmneziaWG не удалась."
+            msg "Most common reasons: OpenWrt package repository is temporarily unreachable, IPv6/DNS issue, or missing packages for this build." "Частые причины: временно недоступен репозиторий OpenWrt, проблема IPv6/DNS или нет пакетов под эту сборку."
+            msg "If only one kmod dependency failed to download, install it manually, then run installer again." "Если не скачалась только одна kmod-зависимость, установите её вручную и запустите установку снова."
+            msg "Try: opkg update; opkg install ca-certificates ca-bundle libustream-mbedtls; then run installer again." "Попробуйте: opkg update; opkg install ca-certificates ca-bundle libustream-mbedtls; затем запустите установку снова."
             exit 1
         fi
     fi
@@ -3615,7 +3714,7 @@ install_awg_packages() {
        [ "$MAJOR_VERSION" -eq 23 -a "$MINOR_VERSION" -eq 5 -a "$PATCH_VERSION" -ge 6 ]; then
         AWG_VERSION="2.0"
     fi
-    echo "Detected AmneziaWG protocol generation: $AWG_VERSION"
+    msg "Detected AmneziaWG protocol generation: $AWG_VERSION" "Определено поколение протокола AmneziaWG: $AWG_VERSION"
 }
 
 # Choose installer language before any interactive menu.
@@ -3625,23 +3724,24 @@ if [ "$1" != "--update" ] && [ "${ROUTEWOLF_UPDATE_ONLY:-0}" != "1" ]; then
 fi
 
 # System Details
-MODEL=$(cat /tmp/sysinfo/model)
-source /etc/os-release
-printf "\033[34;1m%s\033[0m\n" "$(prompt "Model: $MODEL" "Модель: $MODEL")"
-printf "\033[34;1m%s\033[0m\n" "$(prompt "Version: $OPENWRT_RELEASE" "Версия: $OPENWRT_RELEASE")"
+MODEL=$(cat /tmp/sysinfo/model 2>/dev/null)
+. /etc/os-release
+ui_header "$(prompt "RouteWolf installer" "Установка RouteWolf")"
+printf "%b%s%b\n" "$C_BLUE" "$(prompt "Model: $MODEL" "Модель: $MODEL")" "$C_RESET"
+printf "%b%s%b\n" "$C_BLUE" "$(prompt "Version: $OPENWRT_RELEASE" "Версия: $OPENWRT_RELEASE")" "$C_RESET"
+printf "%b%s%b\n" "$C_BLUE" "$(prompt "Project version: $PROJECT_VERSION" "Версия проекта: $PROJECT_VERSION")" "$C_RESET"
+echo ""
 
 VERSION_ID=$(echo "$VERSION" | awk -F. '{print $1}')
 ID_LIKE_SAFE=" ${ID:-} ${ID_LIKE:-} ${NAME:-} ${OPENWRT_RELEASE:-} "
 
-# Accept OpenWrt-compatible forks that keep the usual OpenWrt stack: uci/netifd/procd/fw4.
-# 23/24 use opkg on most builds; 25/26 and many X-WRT snapshots use apk.
 case "$VERSION_ID" in
     23|24|25|26) ;;
     *)
         if echo "$ID_LIKE_SAFE" | grep -qiE 'openwrt|x-wrt|xwrt|immortal'; then
-            msgc "$C_YELLOW"                 "Unknown OpenWrt-compatible version ($VERSION). Continuing in experimental mode."                 "Неизвестная OpenWrt-совместимая версия ($VERSION). Продолжаю в экспериментальном режиме."
+            msgc "$C_YELLOW" "Unknown OpenWrt-compatible version ($VERSION). Continuing in experimental mode." "Неизвестная OpenWrt-совместимая версия ($VERSION). Продолжаю в экспериментальном режиме."
         else
-            msgc "$C_RED"                 "Script supports OpenWrt 23.05, 24.10 and experimental 25.x/26.x compatible builds."                 "Скрипт поддерживает OpenWrt 23.05, 24.10 и экспериментально совместимые 25.x/26.x сборки."
+            msgc "$C_RED" "Script supports OpenWrt 23.05, 24.10 and experimental 25.x/26.x compatible builds." "Скрипт поддерживает OpenWrt 23.05, 24.10 и экспериментально совместимые 25.x/26.x сборки."
             msg "For older or non-compatible systems use manual configuration." "Для более старых или несовместимых систем используйте ручную настройку."
             exit 1
         fi
@@ -3658,6 +3758,7 @@ else
 fi
 
 msgc "$C_RED" "All actions performed here cannot be rolled back automatically." "Все действия здесь нельзя автоматически откатить назад."
+echo ""
 
 migrate_legacy_paths
 
@@ -3666,36 +3767,23 @@ if [ "$1" = "--update" ] || [ "${ROUTEWOLF_UPDATE_ONLY:-0}" = "1" ]; then
     exit 0
 fi
 
-check_repo
+INSTALL_TOTAL_STEPS=12
+INSTALL_STEP=0
 
-add_packages
+run_step "$(prompt "Checking package repository" "Проверка репозитория пакетов")" check_repo || exit 1
+run_step "$(prompt "Installing basic components" "Установка базовых компонентов")" add_packages || exit 1
+run_step "$(prompt "Selecting and configuring VPN tunnel" "Выбор и настройка VPN-туннеля")" add_tunnel || exit 1
+run_step "$(prompt "Configuring policy routing mark" "Настройка правила маркировки маршрутизации")" add_mark || exit 1
+run_step "$(prompt "Configuring firewall zone" "Настройка firewall-зоны")" add_zone || exit 1
+run_step "$(prompt "Showing tunnel notes" "Показ подсказок по туннелю")" show_manual || exit 1
+run_step "$(prompt "Creating nft set and mark rule" "Создание nft-набора и правила маркировки")" add_set || exit 1
+run_step "$(prompt "Installing dnsmasq-full" "Установка dnsmasq-full")" dnsmasqfull || exit 1
+run_step "$(prompt "Configuring dnsmasq confdir" "Настройка dnsmasq confdir")" dnsmasqconfdir || exit 1
+run_step "$(prompt "Installing RouteWolf management commands" "Установка команд управления RouteWolf")" install_management_commands || exit 1
+run_step "$(prompt "Configuring lists and RouteWolf service" "Настройка списков и сервиса RouteWolf")" add_routewolf || exit 1
+run_step "$(prompt "Restarting network" "Перезапуск сети")" /etc/init.d/network restart || exit 1
 
-add_tunnel
-
-add_mark
-
-add_zone
-
-show_manual
-
-add_set
-
-dnsmasqfull
-
-dnsmasqconfdir
-
-# DNS redirect is intentionally OFF by default. It can be added later as an optional menu item.
-# ensure_lan_dns_redirect
-
-# DNSCrypt2/Stubby interactive selection was removed.
-# The script keeps the router's existing upstream DNS settings and only configures dnsmasq/nftset routing.
-# add_dns_resolver
-
-install_management_commands
-
-add_routewolf
-
-printf "\033[32;1mRestart network\033[0m\n"
-/etc/init.d/network restart
-
-printf "\033[32;1mDone\033[0m\n"
+ui_header "$(prompt "Installation completed" "Установка завершена")"
+msgc "$C_GREEN" "RouteWolf is ready." "RouteWolf готов к работе."
+msg "Status command: /usr/sbin/routewolf-status.sh" "Команда проверки: /usr/sbin/routewolf-status.sh"
+msg "Quick command: rw help" "Быстрая команда: rw help"

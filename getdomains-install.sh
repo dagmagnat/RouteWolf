@@ -1528,7 +1528,7 @@ add_tunnel() {
         esac
     done
 
-    if [ "$TUNNEL" == 'wg' ]; then
+    if [ "$TUNNEL" = 'wg' ]; then
         printf "\033[32;1mConfigure WireGuard\033[0m\n"
         if pkg_is_installed wireguard-tools; then
             echo "Wireguard already installed"
@@ -1581,29 +1581,29 @@ add_tunnel() {
         uci commit
     fi
 
-    if [ "$TUNNEL" == 'ovpn' ]; then
+    if [ "$TUNNEL" = 'ovpn' ]; then
         configure_openvpn_menu || {
             msgc "$C_RED" "OpenVPN setup cancelled" "Настройка OpenVPN отменена"
             TUNNEL=0
         }
     fi
 
-    if [ "$TUNNEL" == 'singbox' ]; then
+    if [ "$TUNNEL" = 'singbox' ]; then
         configure_singbox_menu || {
             msgc "$C_RED" "Sing-box setup cancelled" "Настройка Sing-box отменена"
             TUNNEL=0
         }
     fi
 
-    if [ "$TUNNEL" == 'wgForYoutube' ]; then
+    if [ "$TUNNEL" = 'wgForYoutube' ]; then
         add_internal_wg Wireguard
     fi
 
-    if [ "$TUNNEL" == 'awgForYoutube' ]; then
+    if [ "$TUNNEL" = 'awgForYoutube' ]; then
         add_internal_wg AmneziaWG
     fi
 
-    if [ "$TUNNEL" == 'awg' ]; then
+    if [ "$TUNNEL" = 'awg' ]; then
         printf "\033[32;1mConfigure Amnezia WireGuard\033[0m\n"
 
         install_awg_packages
@@ -1717,31 +1717,46 @@ dnsmasqfull() {
     if pkg_is_installed dnsmasq-full; then
         printf "\033[32;1mdnsmasq-full already installed\033[0m\n"
     else
-        printf "\033[32;1mInstalling dnsmasq-full\033[0m\n"
+        printf "\033[34;1mInstalling dnsmasq-full\033[0m\n"
         detect_pkg_manager
         if [ "$PKG_MANAGER" = "apk" ]; then
-            # OpenWrt 25.12+ uses apk. apk resolves package replacement itself on most builds.
-            pkg_install dnsmasq-full || { pkg_remove dnsmasq; pkg_install dnsmasq-full; }
+            pkg_install dnsmasq-full || { pkg_remove dnsmasq; pkg_install dnsmasq-full; } || {
+                printf "\033[31;1mFailed to install dnsmasq-full. Check package repository and free space.\033[0m\n"
+                return 1
+            }
         else
-            cd /tmp/ && opkg download dnsmasq-full
-            opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/
-            [ -f /etc/config/dhcp-opkg ] && cp /etc/config/dhcp /etc/config/dhcp-old && mv /etc/config/dhcp-opkg /etc/config/dhcp
+            cd /tmp/ || return 1
+            opkg download dnsmasq-full || {
+                printf "\033[31;1mFailed to download dnsmasq-full. Check internet, DNS and package repository.\033[0m\n"
+                return 1
+            }
+            opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/ || {
+                printf "\033[31;1mFailed to replace dnsmasq with dnsmasq-full.\033[0m\n"
+                return 1
+            }
+            if [ -f /etc/config/dhcp-opkg ]; then
+                cp /etc/config/dhcp /etc/config/dhcp-old 2>/dev/null || true
+                printf "\033[33;1mNew package config saved as /etc/config/dhcp-opkg; current /etc/config/dhcp was kept unchanged.\033[0m\n"
+            fi
         fi
     fi
 }
-
 dnsmasqconfdir() {
-    if [ $VERSION_ID -ge 24 ]; then
-        if uci get dhcp.@dnsmasq[0].confdir | grep -q /tmp/dnsmasq.d; then
-            printf "\033[32;1mconfdir already set\033[0m\n"
+    if [ "${VERSION_ID:-0}" -ge 24 ] 2>/dev/null; then
+        if ! uci -q show dhcp.@dnsmasq[0] >/dev/null 2>&1; then
+            printf "\033[31;1mdnsmasq section was not found in /etc/config/dhcp\033[0m\n"
+            return 1
+        fi
+
+        if uci -q get dhcp.@dnsmasq[0].confdir 2>/dev/null | grep -q /tmp/dnsmasq.d; then
+            printf "\033[32;1mdnsmasq confdir is already set\033[0m\n"
         else
-            printf "\033[32;1mSetting confdir\033[0m\n"
-            uci set dhcp.@dnsmasq[0].confdir='/tmp/dnsmasq.d'
-            uci commit dhcp
+            printf "\033[34;1mSetting dnsmasq confdir\033[0m\n"
+            uci set dhcp.@dnsmasq[0].confdir='/tmp/dnsmasq.d' || return 1
+            uci commit dhcp || return 1
         fi
     fi
 }
-
 remove_forwarding() {
     if [ ! -z "$forward_id" ]; then
         while uci -q delete firewall.@forwarding[$forward_id]; do :; done
@@ -1828,10 +1843,10 @@ add_zone() {
 }
 
 show_manual() {
-    if [ "$TUNNEL" == tun2socks ]; then
+    if [ "$TUNNEL" = tun2socks ]; then
         printf "\033[42;1mZone for tun2socks configured. But you need to set up the tunnel yourself.\033[0m\n"
         echo "Use this manual: https://cli.co/VNZISEM"
-    elif [ "$TUNNEL" == ovpn ]; then
+    elif [ "$TUNNEL" = ovpn ]; then
         printf "\033[42;1mOpenVPN routing configured. If you used manual mode, make sure the OpenVPN tunnel is up.\033[0m\n"
         printf "\033[42;1mМаршрутизация OpenVPN настроена. Если был ручной режим, убедитесь, что OpenVPN-туннель поднят.\033[0m\n"
     fi
@@ -1898,7 +1913,7 @@ add_dns_resolver() {
         esac
     done
 
-    if [ "$DNS_RESOLVER" == 'DNSCRYPT' ]; then
+    if [ "$DNS_RESOLVER" = 'DNSCRYPT' ]; then
         if pkg_is_installed dnscrypt-proxy2; then
             printf "\033[32;1mDNSCrypt2 already installed\033[0m\n"
         else
@@ -1930,7 +1945,7 @@ add_dns_resolver() {
 
     fi
 
-    if [ "$DNS_RESOLVER" == 'STUBBY' ]; then
+    if [ "$DNS_RESOLVER" = 'STUBBY' ]; then
         printf "\033[32;1mConfigure Stubby\033[0m\n"
 
         if pkg_is_installed stubby; then
