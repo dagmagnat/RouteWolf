@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v36-ui-localization-fixes"
+PROJECT_VERSION="v37-clean-ui"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -139,6 +139,22 @@ run_step() {
     return "$_rc"
 }
 
+quiet_cmd() {
+    _log="$1"; shift
+    [ -n "$_log" ] || _log="/tmp/routewolf-command.log"
+    "$@" >"$_log" 2>&1
+    _rc="$?"
+    if [ "$_rc" -ne 0 ]; then
+        if is_ru; then
+            echo "Команда завершилась ошибкой. Последние строки вывода:"
+        else
+            echo "Command failed. Last output lines:"
+        fi
+        tail -n 25 "$_log" 2>/dev/null || cat "$_log" 2>/dev/null
+    fi
+    return "$_rc"
+}
+
 
 ask_line() {
     _en="$1"; _ru="$2"; _var="$3"
@@ -266,10 +282,17 @@ choose_list_profile() {
             . /etc/routewolf/user.conf 2>/dev/null || true
             LIST_PROFILE=${LIST_PROFILE:-custom}
             IPV6_SUPPORT=${IPV6_SUPPORT:-0}
-            echo "Keeping configured list profile / Сохраняю выбранный профиль списков: $LIST_PROFILE"
-            echo "Domain list: ${DOMAINS_URL:-disabled}"
-            echo "IPv4 list: ${IPV4_URL:-disabled}"
-            [ "$IPV6_SUPPORT" = "1" ] && echo "IPv6 list: ${IPV6_URL:-disabled}" || echo "IPv6 support: disabled / выключено"
+            if is_ru; then
+                echo "Сохраняю выбранный профиль списков: $LIST_PROFILE"
+                [ -n "$DOMAINS_URL" ] && echo "Список доменов: включён" || echo "Список доменов: выключен"
+                [ -n "$IPV4_URL" ] && echo "IPv4 CIDR: включён" || echo "IPv4 CIDR: выключен"
+                [ "$IPV6_SUPPORT" = "1" ] && echo "IPv6 CIDR: включён" || echo "IPv6 CIDR: выключен"
+            else
+                echo "Keeping configured list profile: $LIST_PROFILE"
+                [ -n "$DOMAINS_URL" ] && echo "Domain list: enabled" || echo "Domain list: disabled"
+                [ -n "$IPV4_URL" ] && echo "IPv4 CIDR: enabled" || echo "IPv4 CIDR: disabled"
+                [ "$IPV6_SUPPORT" = "1" ] && echo "IPv6 CIDR: enabled" || echo "IPv6 CIDR: disabled"
+            fi
             return 0
         fi
         LIST_PROFILE="full"
@@ -277,13 +300,14 @@ choose_list_profile() {
         IPV4_URL="$DEFAULT_IPV4_LIST_URL"
         IPV6_SUPPORT="${DEFAULT_IPV6_SUPPORT:-0}"
         [ "$IPV6_SUPPORT" = "1" ] && IPV6_URL="$DEFAULT_IPV6_LIST_URL" || IPV6_URL=""
-        echo "No previous list config found; using full defaults / Старый конфиг списков не найден; использую full"
+        msg "No previous list config found; using full defaults" "Старый конфиг списков не найден; использую full"
         return 0
     fi
 
+    ui_header "$(prompt "Router resources" "Ресурсы роутера")"
     router_resource_summary
-    echo ""
-    msgc "$C_BLUE" "Select route list profile" "Выберите профиль списков маршрутизации"
+
+    ui_header "$(prompt "Select route list profile" "Выбор профиля списков маршрутизации")"
 
     : > /tmp/routewolf-profiles
     idx=1
@@ -296,17 +320,21 @@ choose_list_profile() {
         ik=$(profile_size_kb "$ifile")
         echo "$profile" >> /tmp/routewolf-profiles
         case "$profile" in
-            full) label="full / полный" ;;
-            lite|white|whitelist) label="lite/white / облегчённый" ;;
+            full) label="$(prompt "full" "полный")" ;;
+            lite|white|whitelist) label="lite/white ($(prompt "light" "облегчённый"))" ;;
             *) label="$profile" ;;
         esac
-        printf "%s) %s  domains=%s, ipv4=%s, size≈%sKB\n" "$idx" "$label" "$dlines" "$ilines" "$((dk+ik))"
+        if is_ru; then
+            printf "%s) %s  домены=%s, ipv4=%s, размер≈%sKB\n" "$idx" "$label" "$dlines" "$ilines" "$((dk+ik))"
+        else
+            printf "%s) %s  domains=%s, ipv4=%s, size≈%sKB\n" "$idx" "$label" "$dlines" "$ilines" "$((dk+ik))"
+        fi
         idx=$((idx+1))
     done
     echo "c) $(prompt "Custom URLs" "Свои URL списков")"
     echo ""
     msg "$([ "$RAM_TOTAL_MB" -lt 80 ] && echo "Weak router detected: lite/white profile is recommended." || echo "Full profile is OK for normal routers.")" "$([ "$RAM_TOTAL_MB" -lt 80 ] && echo "Слабый роутер: рекомендуется lite/white профиль." || echo "Для обычных роутеров можно full профиль.")"
-    msg "Custom lists may be plain domains/CIDR. The script converts them automatically." "Свои списки могут быть обычными доменами/CIDR. Скрипт сам конвертирует их в нужный формат."
+    msg "Custom lists may be plain domains/CIDR. RouteWolf converts them automatically." "Свои списки могут быть обычными доменами/CIDR. RouteWolf сам конвертирует их в нужный формат."
 
     while true; do
         printf "%s" "$(prompt "Choice [1]: " "Выбор [1]: ")"
@@ -335,11 +363,18 @@ choose_list_profile() {
         esac
     done
 
-    [ -n "$DOMAINS_URL" ] && echo "Domain list: $DOMAINS_URL" || echo "Domain list: disabled / выключен"
-    [ -n "$IPV4_URL" ] && echo "IPv4 list: $IPV4_URL" || echo "IPv4 list: disabled / выключен"
-    [ "$IPV6_SUPPORT" = "1" ] && echo "IPv6 list: $IPV6_URL" || echo "IPv6 support: disabled / выключено"
+    echo ""
+    msgc "$C_GREEN" "Selected profile: $LIST_PROFILE" "Выбран профиль списков: $LIST_PROFILE"
+    if is_ru; then
+        [ -n "$DOMAINS_URL" ] && echo "Список доменов: включён" || echo "Список доменов: выключен"
+        [ -n "$IPV4_URL" ] && echo "IPv4 CIDR: включён" || echo "IPv4 CIDR: выключен"
+        [ "$IPV6_SUPPORT" = "1" ] && echo "IPv6 CIDR: включён" || echo "IPv6 CIDR: выключен"
+    else
+        [ -n "$DOMAINS_URL" ] && echo "Domain list: enabled" || echo "Domain list: disabled"
+        [ -n "$IPV4_URL" ] && echo "IPv4 CIDR: enabled" || echo "IPv4 CIDR: disabled"
+        [ "$IPV6_SUPPORT" = "1" ] && echo "IPv6 CIDR: enabled" || echo "IPv6 CIDR: disabled"
+    fi
 }
-
 read_multiline_config() {
     tmp_file="$1"
     : > "$tmp_file"
@@ -732,7 +767,7 @@ url_decode_sed() {
 }
 
 json_escape() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\"/g'
 }
 
 singbox_parse_vless_url() {
@@ -1332,24 +1367,24 @@ detect_pkg_manager() {
 pkg_update() {
     detect_pkg_manager
     case "$PKG_MANAGER" in
-        apk) apk update ;;
-        opkg) opkg update ;;
+        apk) quiet_cmd /tmp/routewolf-pkg-update.log apk update ;;
+        opkg) quiet_cmd /tmp/routewolf-pkg-update.log opkg update ;;
     esac
 }
 
 pkg_install() {
     detect_pkg_manager
     case "$PKG_MANAGER" in
-        apk) apk -U add "$@" ;;
-        opkg) opkg install "$@" ;;
+        apk) quiet_cmd /tmp/routewolf-pkg-install.log apk -U add "$@" ;;
+        opkg) quiet_cmd /tmp/routewolf-pkg-install.log opkg install "$@" ;;
     esac
 }
 
 pkg_remove() {
     detect_pkg_manager
     case "$PKG_MANAGER" in
-        apk) apk del "$@" ;;
-        opkg) opkg remove "$@" ;;
+        apk) quiet_cmd /tmp/routewolf-pkg-remove.log apk del "$@" ;;
+        opkg) quiet_cmd /tmp/routewolf-pkg-remove.log opkg remove "$@" ;;
     esac
 }
 
@@ -1363,7 +1398,6 @@ pkg_is_installed() {
 }
 
 check_repo() {
-    msgc "$C_BLUE" "Checking OpenWrt package repository..." "Проверка репозитория пакетов OpenWrt..."
     if ! pkg_update; then
         msgc "$C_YELLOW" "Warning: package repository update returned an error." "Предупреждение: обновление репозитория пакетов завершилось с ошибкой."
         msgc "$C_YELLOW" "The installer will continue and try to use already updated feeds/cache." "Установка продолжится и попробует использовать уже обновлённые feeds/cache."
@@ -1956,11 +1990,11 @@ dnsmasqfull() {
             }
         else
             cd /tmp/ || return 1
-            opkg download dnsmasq-full || {
+            quiet_cmd /tmp/routewolf-dnsmasq-download.log opkg download dnsmasq-full || {
                 msgc "$C_RED" "Failed to download dnsmasq-full. Check internet, DNS and package repository." "Не удалось скачать dnsmasq-full. Проверьте интернет, DNS и репозиторий пакетов."
                 return 1
             }
-            opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/ || {
+            pkg_remove dnsmasq && pkg_install dnsmasq-full --cache /tmp/ || {
                 msgc "$C_RED" "Failed to replace dnsmasq with dnsmasq-full." "Не удалось заменить dnsmasq на dnsmasq-full."
                 return 1
             }
@@ -2530,7 +2564,7 @@ url_decode_sed() {
         -e 's/%20/ /g'
 }
 
-json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\"/g'; }
 
 parse_vless_url() {
     uri="$1"
@@ -2698,7 +2732,7 @@ OVPN=""
 
 find_ovpn_config() {
     cfg=""
-    cfg="$(uci -q show openvpn 2>/dev/null | awk -F= "/\\.enabled='1'/ {sec=\$1; sub(/\\.enabled$/,\"\",sec); enabled[sec]=1} /\\.config=/ {sec=\$1; sub(/\\.config$/,\"\",sec); gsub(\"'\",\"\",\$2); conf[sec]=\$2} END {for (s in enabled) if (conf[s] != \"\") {print conf[s]; exit}}")"
+    cfg="$(uci -q show openvpn 2>/dev/null | awk -F= "/\\.enabled='1'/ {sec=\$1; sub(/\\.enabled$/,"",sec); enabled[sec]=1} /\\.config=/ {sec=\$1; sub(/\\.config$/,"",sec); gsub("'","",\$2); conf[sec]=\$2} END {for (s in enabled) if (conf[s] != "") {print conf[s]; exit}}")"
     [ -n "$cfg" ] && [ -f "$cfg" ] && { echo "$cfg"; return 0; }
     for f in /etc/openvpn/routewolf.ovpn /etc/openvpn/routing_openwrt.ovpn /etc/openvpn/VPN.ovpn /etc/openvpn/*.ovpn /etc/openvpn/*.conf; do
         [ -f "$f" ] && { echo "$f"; return 0; }
@@ -3017,11 +3051,9 @@ update_existing_installation() {
 
 add_routewolf() {
     clear_screen
-    echo "Domain/IP lists / Списки доменов и IP"
-    echo "Project / Проект: ${DEFAULT_PROJECT_REPO:-dagmagnat/RouteWolf}"
-    echo "Lists repo / Репозиторий списков: ${DEFAULT_LISTS_REPO:-dagmagnat/RouteWolf}"
-    echo "Profiles are read from lists/profiles/<name>/ or the default full lists."
-    echo "Профили читаются из lists/profiles/<name>/ или используются полные списки по умолчанию."
+    ui_header "$(prompt "RouteWolf list setup" "Настройка списков RouteWolf")"
+    msgc "$C_GREEN" "List source: RouteWolf / Magnat" "Источник списков: RouteWolf / Магнат"
+    msg "Domain and IP lists are used only for selective routing." "Списки доменов и IP используются только для выборочной маршрутизации."
 
     if [ "$1" = "update" ] || [ "$1" = "--update" ] || [ "${ROUTEWOLF_UPDATE_ONLY:-0}" = "1" ]; then
         choose_list_profile update
@@ -3462,7 +3494,20 @@ EOF
     /etc/init.d/cron enable
     /etc/init.d/cron restart
 
-    /etc/init.d/routewolf start
+    if /etc/init.d/routewolf start >/tmp/routewolf-lists-refresh.log 2>&1; then
+        if grep -qiE 'warning|failed|invalid|error' /tmp/routewolf-lists-refresh.log 2>/dev/null; then
+            msgc "$C_YELLOW" "Lists were refreshed with warnings. Last output lines:" "Списки обновлены с предупреждениями. Последние строки вывода:"
+            tail -n 20 /tmp/routewolf-lists-refresh.log 2>/dev/null || true
+        else
+            msgc "$C_GREEN" "RouteWolf lists were downloaded and prepared" "Списки RouteWolf загружены и подготовлены"
+            [ -f /tmp/dnsmasq.d/domains.lst ] && msg "Domain entries: $(wc -l < /tmp/dnsmasq.d/domains.lst)" "Доменов в списке: $(wc -l < /tmp/dnsmasq.d/domains.lst)"
+            [ -f /tmp/lst/ipv4.lst ] && msg "IPv4 CIDR entries: $(wc -l < /tmp/lst/ipv4.lst)" "IPv4 CIDR в списке: $(wc -l < /tmp/lst/ipv4.lst)"
+        fi
+    else
+        msgc "$C_RED" "Failed to refresh RouteWolf lists. Last output lines:" "Не удалось обновить списки RouteWolf. Последние строки вывода:"
+        tail -n 30 /tmp/routewolf-lists-refresh.log 2>/dev/null || true
+        return 1
+    fi
 }
 
 add_internal_wg() {
@@ -3671,22 +3716,25 @@ install_awg_packages() {
     fi
 
     msgc "$C_BLUE" "Installing AmneziaWG packages..." "Установка пакетов AmneziaWG..."
+    AWG_DL_LOG="/tmp/routewolf-awg-download.log"
     if command -v wget >/dev/null 2>&1; then
-        wget -4 -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL" || wget -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL"
+        wget -4 -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL" >"$AWG_DL_LOG" 2>&1 || wget -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL" >>"$AWG_DL_LOG" 2>&1
     else
-        curl -L -4 -o "$AWG_INSTALLER" "$AWG_INSTALLER_URL" || curl -L -o "$AWG_INSTALLER" "$AWG_INSTALLER_URL"
+        curl -L -4 -o "$AWG_INSTALLER" "$AWG_INSTALLER_URL" >"$AWG_DL_LOG" 2>&1 || curl -L -o "$AWG_INSTALLER" "$AWG_INSTALLER_URL" >>"$AWG_DL_LOG" 2>&1
     fi
 
     if [ ! -s "$AWG_INSTALLER" ]; then
         msgc "$C_RED" "Error downloading AmneziaWG installer. Check internet/GitHub/date on router." "Ошибка скачивания установщика AmneziaWG. Проверьте интернет, доступ к GitHub и дату на роутере."
+        tail -n 25 "$AWG_DL_LOG" 2>/dev/null || true
         exit 1
     fi
 
-    sh "$AWG_INSTALLER" -en
+    AWG_INSTALL_LOG="/tmp/routewolf-awg-install.log"
+    sh "$AWG_INSTALLER" -en >"$AWG_INSTALL_LOG" 2>&1
     AWG_RC="$?"
     if [ "$AWG_RC" -ne 0 ]; then
         # Fallback for older awg-openwrt installers where -en may not exist
-        sh "$AWG_INSTALLER" -n
+        sh "$AWG_INSTALLER" -n >"$AWG_INSTALL_LOG" 2>&1
         AWG_RC="$?"
     fi
 
@@ -3696,6 +3744,8 @@ install_awg_packages() {
         else
             echo ""
             msgc "$C_RED" "AmneziaWG package installation failed." "Установка пакетов AmneziaWG не удалась."
+            msg "Last installer output lines:" "Последние строки вывода установщика:"
+            tail -n 30 "$AWG_INSTALL_LOG" 2>/dev/null || true
             msg "Most common reasons: OpenWrt package repository is temporarily unreachable, IPv6/DNS issue, or missing packages for this build." "Частые причины: временно недоступен репозиторий OpenWrt, проблема IPv6/DNS или нет пакетов под эту сборку."
             msg "If only one kmod dependency failed to download, install it manually, then run installer again." "Если не скачалась только одна kmod-зависимость, установите её вручную и запустите установку снова."
             msg "Try: opkg update; opkg install ca-certificates ca-bundle libustream-mbedtls; then run installer again." "Попробуйте: opkg update; opkg install ca-certificates ca-bundle libustream-mbedtls; затем запустите установку снова."
@@ -3728,10 +3778,7 @@ MODEL=$(cat /tmp/sysinfo/model 2>/dev/null)
 . /etc/os-release
 ui_header "$(prompt "RouteWolf installer" "Установка RouteWolf")"
 printf "%b%s%b\n" "$C_BLUE" "$(prompt "Model: $MODEL" "Модель: $MODEL")" "$C_RESET"
-printf "%b%s%b\n" "$C_BLUE" "$(prompt "Version: $OPENWRT_RELEASE" "Версия: $OPENWRT_RELEASE")" "$C_RESET"
-printf "%b%s%b\n" "$C_BLUE" "$(prompt "Project version: $PROJECT_VERSION" "Версия проекта: $PROJECT_VERSION")" "$C_RESET"
-echo ""
-
+printf "%b%s%b\n" "$C_BLUE" "$(prompt "OpenWrt: $OPENWRT_RELEASE" "OpenWrt: $OPENWRT_RELEASE")" "$C_RESET"
 VERSION_ID=$(echo "$VERSION" | awk -F. '{print $1}')
 ID_LIKE_SAFE=" ${ID:-} ${ID_LIKE:-} ${NAME:-} ${OPENWRT_RELEASE:-} "
 
@@ -3758,6 +3805,7 @@ else
 fi
 
 msgc "$C_RED" "All actions performed here cannot be rolled back automatically." "Все действия здесь нельзя автоматически откатить назад."
+printf "%b========================================%b\n" "$C_BLUE" "$C_RESET"
 echo ""
 
 migrate_legacy_paths
