@@ -81,23 +81,22 @@ install_deps() {
 
 install_deps
 
-rm -rf "$TMP_DIR" "$ZIP_FILE" "/tmp/routewolf-${BRANCH}"
+rm -rf "$TMP_DIR" "$ZIP_FILE" "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf-${BRANCH}"
 
 download_to_file "$ZIP_URL" "$ZIP_FILE" || exit 1
 unzip -o "$ZIP_FILE" -d /tmp >/dev/null || exit 1
 
-if [ -d "/tmp/routewolf-${BRANCH}" ]; then
-    mv "/tmp/routewolf-${BRANCH}" "$TMP_DIR"
-elif [ -d "/tmp/routewolf" ]; then
-    mv "/tmp/routewolf" "$TMP_DIR"
+if [ -d "/tmp/RouteWolf-${BRANCH}" ]; then
+    mv "/tmp/RouteWolf-${BRANCH}" "$TMP_DIR"
 elif [ -d "/tmp/routewolf-${BRANCH}" ]; then
     mv "/tmp/routewolf-${BRANCH}" "$TMP_DIR"
-elif [ -d "/tmp/routewolf" ]; then
-    mv "/tmp/routewolf" "$TMP_DIR"
 elif [ -d "/tmp/routing-openwrt-${BRANCH}" ]; then
     mv "/tmp/routing-openwrt-${BRANCH}" "$TMP_DIR"
-elif [ -d "/tmp/routing-openwrt-main" ]; then
-    mv "/tmp/routing-openwrt-main" "$TMP_DIR"
+else
+    echo "Error: RouteWolf archive extracted, but source directory was not found."
+    echo "Expected: /tmp/RouteWolf-${BRANCH}"
+    ls -la /tmp | grep -i route
+    exit 1
 fi
 
 cd "$TMP_DIR" || exit 1
