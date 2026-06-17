@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v37-clean-ui"
+PROJECT_VERSION="v38-awg-watchdog"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -1404,6 +1404,190 @@ check_repo() {
         msgc "$C_YELLOW" "If package installation fails, check internet, DNS, date/time or run: ntpd -p ptbtime1.ptb.de" "Если установка пакетов не пройдёт, проверьте интернет, DNS, дату/время или выполните: ntpd -p ptbtime1.ptb.de"
     fi
 }
+
+install_awg_watchdog() {
+    [ "${VPN_ROUTE_DEV:-}" = "awg0" ] || [ "${TUNNEL:-}" = "awg" ] || return 0
+
+    mkdir -p /etc/routewolf
+    cat > /etc/routewolf/awg-watchdog.conf <<'EOF'
+AWG_WATCHDOG_IFACE='awg0'
+AWG_WATCHDOG_URL='https://www.youtube.com/generate_204'
+AWG_WATCHDOG_INTERVAL_MIN='30'
+EOF
+    chmod 600 /etc/routewolf/awg-watchdog.conf 2>/dev/null || true
+
+    # Make awg0 come back after router power loss/reboot.
+    if [ "$(uci -q get network.awg0.proto 2>/dev/null)" = "amneziawg" ]; then
+        uci set network.awg0.auto='1'
+        uci commit network >/dev/null 2>&1 || true
+    fi
+
+    cat << 'EOF' > /usr/sbin/routewolf-awg-watchdog.sh
+#!/bin/sh
+
+# RouteWolf AmneziaWG self-healing watchdog.
+# Checks that awg0 is alive and that YouTube can be reached through it.
+# On failure it restarts awg0 and reapplies RouteWolf policy routing.
+
+CONF='/etc/routewolf/awg-watchdog.conf'
+[ -f "$CONF" ] && . "$CONF"
+IFACE="${AWG_WATCHDOG_IFACE:-awg0}"
+TEST_URL="${AWG_WATCHDOG_URL:-https://www.youtube.com/generate_204}"
+LOG_TAG='RouteWolf-awg-watchdog'
+LOCK='/tmp/routewolf-awg-watchdog.lock'
+
+log() { logger -t "$LOG_TAG" "$*" 2>/dev/null || echo "$LOG_TAG: $*"; }
+
+lock_or_exit() {
+    if mkdir "$LOCK" 2>/dev/null; then
+        trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+    else
+        exit 0
+    fi
+}
+
+is_awg_configured() {
+    [ "$(uci -q get network.$IFACE.proto 2>/dev/null)" = 'amneziawg' ] || return 1
+    return 0
+}
+
+iface_ipv4() {
+    ip -4 -o addr show dev "$IFACE" 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}'
+}
+
+ensure_boot_enabled() {
+    is_awg_configured || return 0
+    if [ "$(uci -q get network.$IFACE.auto 2>/dev/null)" != '1' ]; then
+        uci set network.$IFACE.auto='1'
+        uci commit network >/dev/null 2>&1 || true
+        log "$IFACE auto-start enabled"
+    fi
+}
+
+route_repair() {
+    [ -x /usr/sbin/routewolf-route.sh ] && /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
+}
+
+restart_awg() {
+    reason="$1"
+    log "$IFACE restart: $reason"
+    ensure_boot_enabled
+    ifdown "$IFACE" >/dev/null 2>&1 || true
+    sleep 3
+    ifup "$IFACE" >/dev/null 2>&1 || true
+    sleep 15
+    route_repair
+}
+
+check_iface() {
+    is_awg_configured || { log "$IFACE is not configured as amneziawg; watchdog skipped"; exit 0; }
+    ensure_boot_enabled
+    if ! ip link show dev "$IFACE" >/dev/null 2>&1; then
+        restart_awg 'interface missing'
+        return 1
+    fi
+    if ! ip link show dev "$IFACE" 2>/dev/null | grep -q 'UP'; then
+        restart_awg 'interface is down'
+        return 1
+    fi
+    return 0
+}
+
+check_youtube() {
+    ipaddr="$(iface_ipv4)"
+
+    # Best check if curl is installed: force traffic through awg0.
+    if command -v curl >/dev/null 2>&1; then
+        curl -kfsS --interface "$IFACE" --connect-timeout 8 --max-time 15 "$TEST_URL" >/dev/null 2>&1 && return 0
+    fi
+
+    # Fallback for OpenWrt wget/uclient-fetch variants: bind to awg0 source IP when possible.
+    if [ -n "$ipaddr" ] && command -v wget >/dev/null 2>&1; then
+        if wget --help 2>&1 | grep -q -- '--bind-address'; then
+            if wget --help 2>&1 | grep -q -- '--no-check-certificate'; then
+                wget --no-check-certificate --bind-address="$ipaddr" -T 15 -q -O /dev/null "$TEST_URL" >/dev/null 2>&1 && return 0
+            else
+                wget --bind-address="$ipaddr" -T 15 -q -O /dev/null "$TEST_URL" >/dev/null 2>&1 && return 0
+            fi
+        fi
+    fi
+
+    # Last fallback: prove the AWG tunnel can pass packets. Some routers do not have curl.
+    ping -I "$IFACE" -c 2 -W 4 8.8.8.8 >/dev/null 2>&1 && return 0
+    return 1
+}
+
+status() {
+    echo "=== RouteWolf AWG watchdog ==="
+    echo "interface: $IFACE"
+    echo "test_url: $TEST_URL"
+    echo "auto: $(uci -q get network.$IFACE.auto 2>/dev/null || echo unknown)"
+    echo "proto: $(uci -q get network.$IFACE.proto 2>/dev/null || echo unknown)"
+    ip addr show dev "$IFACE" 2>/dev/null || echo "$IFACE not found"
+    echo "=== vpn table ==="
+    ip route show table vpn 2>/dev/null || true
+    if command -v awg >/dev/null 2>&1; then
+        echo "=== awg show ==="
+        awg show "$IFACE" 2>/dev/null || awg show 2>/dev/null || true
+    fi
+    echo "=== last log ==="
+    logread 2>/dev/null | grep "$LOG_TAG" | tail -n 30 || true
+}
+
+run_check() {
+    lock_or_exit
+    check_iface || true
+    route_repair
+    if check_youtube; then
+        log "ok: YouTube/AWG check passed via $IFACE"
+        exit 0
+    fi
+    restart_awg 'YouTube/AWG check failed'
+    if check_youtube; then
+        log "ok: recovered after $IFACE restart"
+        exit 0
+    fi
+    log "error: still failed after $IFACE restart"
+    exit 1
+}
+
+case "$1" in
+    status) status ;;
+    restart) lock_or_exit; restart_awg 'manual restart'; status ;;
+    boot) lock_or_exit; ensure_boot_enabled; ifup "$IFACE" >/dev/null 2>&1 || true; sleep 20; route_repair; run_check ;;
+    check|test|"") run_check ;;
+    *) echo "Usage: $0 [check|status|restart|boot]"; exit 1 ;;
+esac
+EOF
+    chmod +x /usr/sbin/routewolf-awg-watchdog.sh
+
+    cat << 'EOF' > /etc/init.d/routewolf-awg-watchdog
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+start() {
+    /usr/sbin/routewolf-awg-watchdog.sh boot >/dev/null 2>&1 &
+}
+
+restart() {
+    /usr/sbin/routewolf-awg-watchdog.sh restart >/dev/null 2>&1 &
+}
+EOF
+    chmod +x /etc/init.d/routewolf-awg-watchdog
+    /etc/init.d/routewolf-awg-watchdog enable >/dev/null 2>&1 || true
+
+    touch /etc/crontabs/root 2>/dev/null || true
+    sed -i '/routewolf-awg-watchdog/d' /etc/crontabs/root 2>/dev/null || true
+    echo '*/30 * * * * /usr/sbin/routewolf-awg-watchdog.sh check >/dev/null 2>&1' >> /etc/crontabs/root
+    /etc/init.d/cron enable >/dev/null 2>&1 || true
+    /etc/init.d/cron restart >/dev/null 2>&1 || true
+
+    /etc/init.d/routewolf-awg-watchdog start >/dev/null 2>&1 || true
+    msgc "$C_GREEN" "AmneziaWG watchdog enabled: checks YouTube every 30 minutes" "Автопроверка AmneziaWG включена: проверка YouTube каждые 30 минут"
+}
+
 route_vpn () {
     if [ "$TUNNEL" = wg ]; then
         VPN_ROUTE_DEV="wg0"
@@ -1682,6 +1866,11 @@ fi
 # Reapply route after possible service changes.
 /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
 
+# If AmneziaWG is selected, run the lightweight watchdog too. It restarts awg0 only if the check fails.
+if [ "$VPN_ROUTE_DEV" = "awg0" ] && [ -x /usr/sbin/routewolf-awg-watchdog.sh ]; then
+    /usr/sbin/routewolf-awg-watchdog.sh check >/dev/null 2>&1 || true
+fi
+
 # Basic AWG/WG visibility log; no blocking actions.
 if [ -n "$VPN_ROUTE_DEV" ] && ip link show "$VPN_ROUTE_DEV" >/dev/null 2>&1; then
     log "ok: $VPN_ROUTE_DEV exists; vpn table: $(ip route show table vpn 2>/dev/null | tr '\n' ' ')"
@@ -1714,6 +1903,9 @@ EOF
     cp /etc/hotplug.d/iface/30-routewolf-route /etc/hotplug.d/net/30-routewolf-route
 
     /etc/init.d/routewolf-route start
+    if [ "${VPN_ROUTE_DEV:-}" = "awg0" ] || [ "${TUNNEL:-}" = "awg" ]; then
+        install_awg_watchdog
+    fi
 }
 
 add_mark() {
@@ -1973,6 +2165,7 @@ add_tunnel() {
         uci set network.@amneziawg_awg0[0].allowed_ips="$AWG_ALLOWED_IPS"
         uci set network.@amneziawg_awg0[0].endpoint_port="$AWG_ENDPOINT_PORT"
         uci commit
+        install_awg_watchdog
     fi
 
 }
@@ -2917,6 +3110,15 @@ HELP
             off|disable) dco_set off ;;
             on|enable) dco_set on ;;
             *) echo "Usage: rw dco on|off|status"; exit 1 ;;
+        esac
+    ;;
+    awg)
+        case "$2" in
+            status|"") [ -x /usr/sbin/routewolf-awg-watchdog.sh ] && /usr/sbin/routewolf-awg-watchdog.sh status || echo "AWG watchdog is not installed" ;;
+            check|test) [ -x /usr/sbin/routewolf-awg-watchdog.sh ] && /usr/sbin/routewolf-awg-watchdog.sh check || echo "AWG watchdog is not installed" ;;
+            restart) [ -x /usr/sbin/routewolf-awg-watchdog.sh ] && /usr/sbin/routewolf-awg-watchdog.sh restart || { ifdown awg0 2>/dev/null || true; sleep 3; ifup awg0 2>/dev/null || true; sleep 10; repair_route; } ;;
+            log|logs) logread | grep -Ei 'RouteWolf-awg-watchdog|awg0|amneziawg|error|failed' | tail -n 120 ;;
+            *) echo "Usage: rw awg status|check|restart|log"; exit 1 ;;
         esac
     ;;
     singbox)

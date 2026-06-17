@@ -10,16 +10,17 @@ echo "Выпиливаем скрипты"
 rm -f /etc/init.d/routewolf /etc/init.d/getdomains
 
 /etc/init.d/routewolf-route disable 2>/dev/null || true
+/etc/init.d/routewolf-awg-watchdog disable 2>/dev/null || true
 /etc/init.d/vpnroute disable 2>/dev/null || true
-rm -f /etc/init.d/routewolf-route /etc/init.d/vpnroute
+rm -f /etc/init.d/routewolf-route /etc/init.d/routewolf-awg-watchdog /etc/init.d/vpnroute
 rm -f /usr/sbin/rw /usr/sbin/rwrt /usr/sbin/row
-rm -f /usr/sbin/routewolf-route.sh /usr/sbin/routewolf-status.sh /usr/sbin/routewolf-update.sh /usr/sbin/routewolf-uninstall.sh /usr/sbin/routewolf-healthcheck.sh /usr/sbin/routewolf-diagnose.sh /usr/sbin/routewolf-load.sh /usr/sbin/routewolf-diagnose-update.sh /usr/sbin/routewolf-singbox-update.sh
+rm -f /usr/sbin/routewolf-route.sh /usr/sbin/routewolf-status.sh /usr/sbin/routewolf-update.sh /usr/sbin/routewolf-uninstall.sh /usr/sbin/routewolf-healthcheck.sh /usr/sbin/routewolf-awg-watchdog.sh /usr/sbin/routewolf-diagnose.sh /usr/sbin/routewolf-load.sh /usr/sbin/routewolf-diagnose-update.sh /usr/sbin/routewolf-singbox-update.sh
 rm -f /usr/sbin/domain-routing-route.sh /usr/sbin/domain-routing-status.sh /usr/sbin/routing-openwrt-diagnose.sh /usr/sbin/routing-openwrt-load.sh /usr/sbin/routing-openwrt-healthcheck.sh /usr/sbin/routing-openwrt-update.sh /usr/sbin/routing-openwrt-uninstall.sh
 rm -f /etc/routewolf/route.conf /etc/domain-routing-route.conf
 rm -f /etc/hotplug.d/iface/30-routewolf-route /etc/hotplug.d/net/30-routewolf-route /etc/hotplug.d/iface/30-vpnroute /etc/hotplug.d/net/30-vpnroute
 
 echo "Выпиливаем из crontab"
-sed -i '/routewolf start/d;/RouteWolf/d;/domain-routing/d;/routewolf-route/d;/routewolf-singbox-update/d' /etc/crontabs/root
+sed -i '/routewolf start/d;/RouteWolf/d;/domain-routing/d;/routewolf-route/d;/routewolf-awg-watchdog/d;/routewolf-singbox-update/d' /etc/crontabs/root
 /etc/init.d/cron restart 2>/dev/null || true
 
 echo "Выпиливаем домены"

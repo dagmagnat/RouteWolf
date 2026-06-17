@@ -9,11 +9,12 @@ echo "Выпиливаем скрипты"
 rm -rf /etc/init.d/getdomains
 
 /etc/init.d/vpnroute disable 2>/dev/null
-rm -f /etc/init.d/vpnroute /usr/sbin/domain-routing-route.sh /usr/sbin/domain-routing-status.sh /usr/sbin/routing-openwrt-update.sh /usr/sbin/routing-openwrt-uninstall.sh /usr/sbin/routing-openwrt-healthcheck.sh /etc/domain-routing-route.conf
+/etc/init.d/routewolf-awg-watchdog disable 2>/dev/null
+rm -f /etc/init.d/vpnroute /usr/sbin/domain-routing-route.sh /usr/sbin/domain-routing-status.sh /usr/sbin/routing-openwrt-update.sh /usr/sbin/routing-openwrt-uninstall.sh /usr/sbin/routing-openwrt-healthcheck.sh /usr/sbin/routewolf-awg-watchdog.sh /etc/domain-routing-route.conf
 rm -f /etc/hotplug.d/iface/30-vpnroute /etc/hotplug.d/net/30-vpnroute
 
 echo "Выпиливаем из crontab"
-sed -i '/getdomains start/d;/routing-openwrt/d;/domain-routing/d;/vpnroute/d' /etc/crontabs/root
+sed -i '/getdomains start/d;/routing-openwrt/d;/domain-routing/d;/vpnroute/d;/routewolf-awg-watchdog/d' /etc/crontabs/root
 /etc/init.d/cron restart 2>/dev/null || true
 
 echo "Выпиливаем домены"
