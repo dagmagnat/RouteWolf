@@ -170,3 +170,14 @@ rw singbox log
 ```
 
 For subscription/JSON URLs, cron auto-update is enabled. The default interval is 60 minutes. Sing-box stays in safe mode: `auto_route=false`, `strict_route=false`; RouteWolf sends only marked domains/IPs into `sbtun0` using `dnsmasq -> nftset -> fwmark -> table vpn`.
+
+
+## RouteWolf v39: Outline and universal watchdog
+
+- Added an experimental **Outline** client for ordinary static `ss://` keys.
+- On OpenWrt, Outline uses the official OpenWrt `sing-box-tiny` package as the Shadowsocks client engine.
+- `auto_route` is disabled: only RouteWolf-listed domains/IPs use the tunnel and the normal WAN stays the main route.
+- Dynamic Outline keys, prefixes, WebSocket and plugins are not supported yet.
+- Sing-box/Outline requires at least 64 MB flash, 40 MB free flash and 128 MB RAM. Use WireGuard/AmneziaWG/OpenVPN on 16 MB flash.
+- The universal watchdog checks the selected tunnel every 30 minutes, restarts only that tunnel after two failed checks and reapplies policy routing.
+- On router boot, the selected tunnel is forcibly recovered. Fail-open mode keeps the normal WAN available when a tunnel fails.

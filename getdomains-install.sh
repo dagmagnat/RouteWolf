@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v33"
+PROJECT_VERSION="v39-outline-universal-watchdog"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -74,6 +74,13 @@ msgc() {
     if is_ru; then printf "%b%s%b\n" "$_color" "$_ru" "$C_RESET"; else printf "%b%s%b\n" "$_color" "$_en" "$C_RESET"; fi
 }
 prompt() { if is_ru; then printf "%s" "$2"; else printf "%s" "$1"; fi; }
+
+ui_header() {
+    _title="$1"
+    printf "%b========================================%b\n" "$C_BLUE" "$C_RESET"
+    printf "%b        %s%b\n" "$C_CYAN" "$_title" "$C_RESET"
+    printf "%b========================================%b\n" "$C_BLUE" "$C_RESET"
+}
 
 choose_language() {
     [ -n "${ROUTING_OPENWRT_LANG:-}" ] && return
@@ -608,28 +615,35 @@ check_singbox_requirements() {
     [ -n "$DISK_FREE_MB" ] || DISK_FREE_MB=0
     [ -n "$RAM_TOTAL_MB" ] || RAM_TOTAL_MB=0
 
-    echo "Router resources / Ресурсы роутера: flash total=${DISK_TOTAL_MB}MB, free=${DISK_FREE_MB}MB, RAM=${RAM_TOTAL_MB}MB"
-    if [ "$DISK_TOTAL_MB" -lt 64 ] || [ "$DISK_FREE_MB" -lt 20 ] || [ "$RAM_TOTAL_MB" -lt 128 ]; then
-        printf "\033[31;1mNot enough resources for Sing-box. Minimum: 64MB flash, 20MB free flash, 128MB RAM.\033[0m\n"
-        printf "\033[31;1mНедостаточно памяти для Sing-box. Минимум: 64MB flash, 20MB свободно, 128MB RAM. Выберите WireGuard/AmneziaWG/OpenVPN.\033[0m\n"
+    if is_ru; then
+        echo "Ресурсы роутера: flash всего=${DISK_TOTAL_MB}MB, свободно=${DISK_FREE_MB}MB, RAM=${RAM_TOTAL_MB}MB"
+    else
+        echo "Router resources: flash total=${DISK_TOTAL_MB}MB, free=${DISK_FREE_MB}MB, RAM=${RAM_TOTAL_MB}MB"
+    fi
+
+    # The official sing-box-tiny package is about 10 MB compressed and much larger
+    # after installation. Keep a safety reserve for package extraction and upgrades.
+    if [ "$DISK_TOTAL_MB" -lt 64 ] || [ "$DISK_FREE_MB" -lt 40 ] || [ "$RAM_TOTAL_MB" -lt 128 ]; then
+        msgc "$C_RED" \
+            "Not enough resources for Sing-box/Outline. Required: 64MB flash, 40MB free flash and 128MB RAM." \
+            "Недостаточно памяти для Sing-box/Outline. Требуется: flash от 64MB, свободно от 40MB и RAM от 128MB."
+        msgc "$C_YELLOW" \
+            "Use WireGuard, AmneziaWG or OpenVPN on a 16MB-flash router." \
+            "На роутере с flash 16MB используйте WireGuard, AmneziaWG или OpenVPN."
         return 1
     fi
     return 0
 }
 
-
-url_decode_sed() {
-    # Minimal percent-decoder for common VLESS URL fields. BusyBox-friendly.
-    printf '%s' "$1" | sed \
-        -e 's/%2[Ff]/\//g' -e 's/%3[Aa]/:/g' -e 's/%40/@/g' \
-        -e 's/%3[Dd]/=/g' -e 's/%26/\&/g' -e 's/%23/#/g' \
-        -e 's/%2[Dd]/-/g' -e 's/%5[Ff]/_/g' -e 's/%2[Ee]/./g' \
-        -e 's/%20/ /g'
-}
-
 json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
+
+singbox_shell_quote() {
+    # Escape a value so it can be stored inside single quotes in a sourced shell config.
+    printf "%s" "$1" | sed "s/'/'\\\\''/g"
+}
+
 
 singbox_parse_vless_url() {
     uri="$1"
@@ -740,9 +754,7 @@ singbox_write_vless_config() {
       "mtu": 9000,
       "auto_route": false,
       "strict_route": false,
-      "stack": "system",
-      "sniff": true,
-      "domain_strategy": "ipv4_only"
+      "stack": "system"
     }
   ],
   "outbounds": [
@@ -785,15 +797,17 @@ EOF
 }
 
 install_singbox_packages() {
-    msgc "$C_BLUE" "Checking Sing-box requirements" "Проверка требований Sing-box"
+    msgc "$C_BLUE" "Checking Sing-box/Outline requirements" "Проверка требований Sing-box/Outline"
     check_singbox_requirements || return 1
 
-    if pkg_is_installed sing-box || command -v sing-box >/dev/null 2>&1; then
-        msgc "$C_GREEN" "Sing-box is already installed" "Sing-box уже установлен"
+    if pkg_is_installed sing-box-tiny || pkg_is_installed sing-box || command -v sing-box >/dev/null 2>&1; then
+        msgc "$C_GREEN" "Sing-box engine is already installed" "Движок Sing-box уже установлен"
     else
-        msg "Installing sing-box" "Установка sing-box"
-        pkg_install sing-box || pkg_install sing-box-tiny || {
-            msgc "$C_RED" "Failed to install sing-box. Check package repository and free space." "Не удалось установить sing-box. Проверьте репозиторий пакетов и свободное место."
+        msg "Installing sing-box-tiny from the OpenWrt package feed" "Установка sing-box-tiny из репозитория OpenWrt"
+        pkg_install sing-box-tiny || pkg_install sing-box || {
+            msgc "$C_RED" \
+                "Failed to install sing-box. Check the OpenWrt package repository and free flash space." \
+                "Не удалось установить sing-box. Проверьте репозиторий OpenWrt и свободное место во flash."
             return 1
         }
     fi
@@ -889,6 +903,248 @@ configure_singbox_menu() {
         singbox_write_vless_config
         configure_singbox_service || return 1
         msgc "$C_GREEN" "Sing-box routing is configured via sbtun0." "Маршрутизация Sing-box настроена через sbtun0."
+        return 0
+    done
+}
+
+outline_b64decode() {
+    data=$(printf '%s' "$1" | tr '_-' '/+')
+    rem=$(( ${#data} % 4 ))
+    case "$rem" in
+        0) ;;
+        2) data="${data}==" ;;
+        3) data="${data}=" ;;
+        *) return 1 ;;
+    esac
+
+    if command -v base64 >/dev/null 2>&1; then
+        printf '%s' "$data" | base64 -d 2>/dev/null && return 0
+        printf '%s' "$data" | base64 -D 2>/dev/null && return 0
+    fi
+    if command -v openssl >/dev/null 2>&1; then
+        printf '%s' "$data" | openssl base64 -d -A 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+outline_url_decode() {
+    # BusyBox-friendly decoder for characters normally found in SIP002 keys.
+    printf '%s' "$1" | sed \
+        -e 's/%25/%/g' -e 's/%2[Ff]/\//g' \
+        -e 's/%3[Aa]/:/g' -e 's/%40/@/g' -e 's/%3[Dd]/=/g' \
+        -e 's/%26/\&/g' -e 's/%23/#/g' -e 's/%2[Bb]/+/g' \
+        -e 's/%2[Dd]/-/g' -e 's/%5[Ff]/_/g' -e 's/%2[Ee]/./g' \
+        -e 's/%20/ /g'
+}
+
+outline_parse_key() {
+    OUTLINE_KEY="$1"
+    case "$OUTLINE_KEY" in
+        ss://*) ;;
+        ssconf://*|http://*|https://*)
+            msgc "$C_RED" \
+                "Dynamic Outline keys are not supported in this first version. Paste a static ss:// key." \
+                "Динамические ключи Outline пока не поддерживаются. Вставьте статический ключ ss://."
+            return 1
+        ;;
+        *) return 1 ;;
+    esac
+
+    raw="${OUTLINE_KEY#ss://}"
+    raw="${raw%%#*}"
+    query=""
+    case "$raw" in
+        *\?*) query="${raw#*\?}"; raw="${raw%%\?*}" ;;
+    esac
+    raw="${raw%/}"
+
+    case "&$query&" in
+        *'&prefix='*|*'&plugin='*|*'&transport='*)
+            msgc "$C_RED" \
+                "This Outline key uses prefix/plugin/transport extensions that the OpenWrt client mode does not support yet." \
+                "Этот ключ Outline использует prefix/plugin/transport, которые пока не поддерживаются режимом OpenWrt."
+            return 1
+        ;;
+    esac
+
+    credentials_urlencoded=0
+    case "$raw" in
+        *@*)
+            userinfo="${raw%@*}"
+            endpoint="${raw##*@}"
+            case "$userinfo" in
+                *:*) credentials="$userinfo"; credentials_urlencoded=1 ;;
+                *) credentials=$(outline_b64decode "$userinfo") || return 1 ;;
+            esac
+        ;;
+        *)
+            decoded=$(outline_b64decode "$raw") || return 1
+            case "$decoded" in *@*) ;; *) return 1 ;; esac
+            credentials="${decoded%@*}"
+            endpoint="${decoded##*@}"
+        ;;
+    esac
+
+    case "$credentials" in *:*) ;; *) return 1 ;; esac
+    OUTLINE_METHOD="${credentials%%:*}"
+    OUTLINE_PASSWORD="${credentials#*:}"
+    if [ "$credentials_urlencoded" = "1" ]; then
+        OUTLINE_METHOD=$(outline_url_decode "$OUTLINE_METHOD")
+        OUTLINE_PASSWORD=$(outline_url_decode "$OUTLINE_PASSWORD")
+    fi
+
+    endpoint=$(outline_url_decode "$endpoint")
+    case "$endpoint" in
+        \[*\]:*)
+            OUTLINE_SERVER="${endpoint#\[}"
+            OUTLINE_SERVER="${OUTLINE_SERVER%%\]*}"
+            OUTLINE_PORT="${endpoint##*:}"
+        ;;
+        *:*)
+            OUTLINE_SERVER="${endpoint%:*}"
+            OUTLINE_PORT="${endpoint##*:}"
+        ;;
+        *) return 1 ;;
+    esac
+
+    [ -n "$OUTLINE_METHOD" ] && [ -n "$OUTLINE_PASSWORD" ] && [ -n "$OUTLINE_SERVER" ] || return 1
+    case "$OUTLINE_PORT" in *[!0-9]*|'') return 1 ;; esac
+    [ "$OUTLINE_PORT" -ge 1 ] 2>/dev/null && [ "$OUTLINE_PORT" -le 65535 ] 2>/dev/null || return 1
+    return 0
+}
+
+outline_save_source() {
+    mkdir -p /etc/routewolf
+    qkey=$(singbox_shell_quote "$OUTLINE_KEY")
+    cat > /etc/routewolf/outline.conf <<EOF
+OUTLINE_ACCESS_KEY='$qkey'
+OUTLINE_ROUTE_MODE='routewolf-safe'
+OUTLINE_TUN_DEVICE='outline0'
+EOF
+    chmod 600 /etc/routewolf/outline.conf 2>/dev/null || true
+}
+
+outline_write_config() {
+    mkdir -p /etc/sing-box
+    cfg='/etc/sing-box/config.json'
+    if [ -f "$cfg" ]; then
+        cp "$cfg" "/etc/sing-box/config.json.routewolf-backup" 2>/dev/null || true
+    fi
+
+    method=$(json_escape "$OUTLINE_METHOD")
+    password=$(json_escape "$OUTLINE_PASSWORD")
+    server=$(json_escape "$OUTLINE_SERVER")
+
+    cat > "$cfg" <<EOF
+{
+  "log": {
+    "level": "warn"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "outline-tun",
+      "interface_name": "outline0",
+      "address": ["172.20.0.1/30"],
+      "mtu": 1500,
+      "auto_route": false,
+      "strict_route": false,
+      "stack": "system"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "shadowsocks",
+      "tag": "outline-proxy",
+      "server": "$server",
+      "server_port": $OUTLINE_PORT,
+      "method": "$method",
+      "password": "$password"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "outline-proxy"
+  }
+}
+EOF
+    chmod 600 "$cfg" 2>/dev/null || true
+}
+
+configure_outline_service() {
+    mkdir -p /etc/config /etc/sing-box
+
+    if ! uci -q get sing-box.main >/dev/null 2>&1; then
+        uci set sing-box.main='sing-box'
+    fi
+    uci set sing-box.main.enabled='1'
+    uci set sing-box.main.user='root'
+    uci set sing-box.main.conffile='/etc/sing-box/config.json'
+    uci set sing-box.main.workdir='/usr/share/sing-box'
+    uci commit sing-box 2>/dev/null || true
+
+    sing-box check -c /etc/sing-box/config.json >/tmp/routewolf-outline-check.log 2>&1 || {
+        msgc "$C_RED" \
+            "Outline configuration check failed. See /tmp/routewolf-outline-check.log" \
+            "Проверка конфигурации Outline не прошла. Смотрите /tmp/routewolf-outline-check.log"
+        tail -n 20 /tmp/routewolf-outline-check.log 2>/dev/null || true
+        return 1
+    }
+
+    /etc/init.d/sing-box enable >/dev/null 2>&1 || true
+    /etc/init.d/sing-box restart >/dev/null 2>&1 || /etc/init.d/sing-box start >/dev/null 2>&1 || {
+        msgc "$C_RED" "Outline client service failed to start." "Клиент Outline не запустился."
+        return 1
+    }
+
+    i=0
+    while [ "$i" -lt 25 ]; do
+        ip link show outline0 >/dev/null 2>&1 && break
+        sleep 1
+        i=$((i+1))
+    done
+    if ! ip link show outline0 >/dev/null 2>&1; then
+        msgc "$C_RED" \
+            "outline0 was not created. The ordinary WAN internet was left unchanged." \
+            "Интерфейс outline0 не создан. Обычный интернет через WAN оставлен без изменений."
+        return 1
+    fi
+
+    OUTLINE_ROUTE_DEV='outline0'
+    TUNNEL='outline'
+    route_vpn
+    return 0
+}
+
+configure_outline_menu() {
+    ui_header "$(prompt "Outline setup" "Настройка Outline")"
+    msgc "$C_YELLOW" \
+        "Initial test mode: static ss:// keys only. RouteWolf uses the OpenWrt sing-box package as a Shadowsocks client engine." \
+        "Начальный тестовый режим: только статические ключи ss://. RouteWolf использует пакет sing-box из OpenWrt как клиент Shadowsocks."
+    msgc "$C_GREEN" \
+        "Safe routing: auto_route is disabled; only domains/IPs selected by RouteWolf use Outline." \
+        "Безопасная маршрутизация: auto_route отключён; через Outline идут только выбранные RouteWolf домены/IP."
+
+    while true; do
+        printf "%s" "$(prompt "Paste Outline ss:// access key (or c to cancel): " "Вставьте ключ Outline ss:// (или c для отмены): ")"
+        read -r OUTLINE_KEY
+        case "$OUTLINE_KEY" in c|C|cancel|отмена) return 1 ;; esac
+        if ! outline_parse_key "$OUTLINE_KEY"; then
+            msgc "$C_RED" \
+                "Could not parse this Outline key. Use an ordinary static ss:// key from Outline Manager." \
+                "Не удалось разобрать ключ Outline. Используйте обычный статический ключ ss:// из Outline Manager."
+            continue
+        fi
+
+        install_singbox_packages || return 1
+        outline_write_config
+        outline_save_source
+        configure_outline_service || return 1
+        msgc "$C_GREEN" "Outline routing is configured through outline0." "Маршрутизация Outline настроена через outline0."
         return 0
     done
 }
@@ -1002,6 +1258,7 @@ detect_existing_routing_config() {
             awg0) EXISTING_TUNNEL="awg"; EXISTING_IFACE="awg0" ;;
             wg0) EXISTING_TUNNEL="wg"; EXISTING_IFACE="wg0" ;;
             sbtun0) EXISTING_TUNNEL="singbox"; EXISTING_IFACE="sbtun0" ;;
+            outline0) EXISTING_TUNNEL="outline"; EXISTING_IFACE="outline0" ;;
             tun*) EXISTING_TUNNEL="ovpn"; EXISTING_IFACE="$old_route_dev" ;;
         esac
     fi
@@ -1022,6 +1279,16 @@ detect_existing_routing_config() {
 cleanup_existing_routing_config() {
     msgc "$C_YELLOW" "Removing old project tunnel/routing config..." "Удаляю старый конфиг туннеля/маршрутизации проекта..."
 
+    # Stop the old monitor first so it cannot restart a tunnel while it is being replaced.
+    /etc/init.d/routewolf-watchdog stop >/dev/null 2>&1 || true
+    /etc/init.d/routewolf-watchdog disable >/dev/null 2>&1 || true
+    /etc/init.d/routewolf-awg-watchdog stop >/dev/null 2>&1 || true
+    /etc/init.d/routewolf-awg-watchdog disable >/dev/null 2>&1 || true
+    sed -i '/routewolf-watchdog/d;/routewolf-awg-watchdog/d' /etc/crontabs/root 2>/dev/null || true
+    rm -f /etc/init.d/routewolf-watchdog /etc/init.d/routewolf-awg-watchdog
+    rm -f /usr/sbin/routewolf-watchdog.sh /usr/sbin/routewolf-awg-watchdog.sh
+    rm -f /etc/routewolf/watchdog.conf
+
     uci -q delete network.wg0
     uci -q delete network.awg0
     uci -q delete network.ovpn0
@@ -1038,9 +1305,13 @@ cleanup_existing_routing_config() {
     delete_uci_sections_by_name firewall zone wg
     delete_uci_sections_by_name firewall zone awg
     delete_uci_sections_by_name firewall zone ovpn
+    delete_uci_sections_by_name firewall zone singbox
+    delete_uci_sections_by_name firewall zone outline
     delete_uci_sections_by_name firewall forwarding wg-lan
     delete_uci_sections_by_name firewall forwarding awg-lan
     delete_uci_sections_by_name firewall forwarding ovpn-lan
+    delete_uci_sections_by_name firewall forwarding singbox-lan
+    delete_uci_sections_by_name firewall forwarding outline-lan
     uci -q delete openvpn.routing_openwrt
     uci commit openvpn 2>/dev/null || true
     uci commit firewall 2>/dev/null || true
@@ -1072,6 +1343,7 @@ handle_existing_routing_config() {
                 [ -z "$TUNNEL" ] && TUNNEL=0
                 if [ "$TUNNEL" != "0" ]; then
                     route_vpn
+                    install_routewolf_watchdog
                 fi
                 msgc "$C_GREEN" "Tunnel setup skipped" "Настройка туннеля пропущена"
                 return 0
@@ -1145,6 +1417,267 @@ check_repo() {
     fi
 }
 
+install_routewolf_watchdog() {
+    [ "${TUNNEL:-0}" != "0" ] || return 0
+
+    WATCHDOG_TYPE="$TUNNEL"
+    WATCHDOG_DEVICE="${VPN_ROUTE_DEV:-}"
+    WATCHDOG_UCI_IFACE=""
+    WATCHDOG_SERVICE=""
+
+    case "$TUNNEL" in
+        wg)
+            WATCHDOG_DEVICE='wg0'
+            WATCHDOG_UCI_IFACE='wg0'
+            WATCHDOG_SERVICE='network'
+            uci set network.wg0.auto='1' 2>/dev/null || true
+            uci commit network >/dev/null 2>&1 || true
+        ;;
+        awg)
+            WATCHDOG_DEVICE='awg0'
+            WATCHDOG_UCI_IFACE='awg0'
+            WATCHDOG_SERVICE='network'
+            uci set network.awg0.auto='1' 2>/dev/null || true
+            uci commit network >/dev/null 2>&1 || true
+        ;;
+        ovpn)
+            WATCHDOG_DEVICE="${OVPN_ROUTE_DEV:-${VPN_ROUTE_DEV:-tun0}}"
+            WATCHDOG_UCI_IFACE='OpenVPN'
+            WATCHDOG_SERVICE='openvpn'
+            /etc/init.d/openvpn enable >/dev/null 2>&1 || true
+        ;;
+        singbox)
+            WATCHDOG_DEVICE="${SINGBOX_ROUTE_DEV:-sbtun0}"
+            WATCHDOG_SERVICE='sing-box'
+            /etc/init.d/sing-box enable >/dev/null 2>&1 || true
+        ;;
+        outline)
+            WATCHDOG_DEVICE="${OUTLINE_ROUTE_DEV:-outline0}"
+            WATCHDOG_SERVICE='sing-box'
+            /etc/init.d/sing-box enable >/dev/null 2>&1 || true
+        ;;
+        *) return 0 ;;
+    esac
+
+    mkdir -p /etc/routewolf
+    cat > /etc/routewolf/watchdog.conf <<EOF
+WATCHDOG_TYPE='$WATCHDOG_TYPE'
+WATCHDOG_DEVICE='$WATCHDOG_DEVICE'
+WATCHDOG_UCI_IFACE='$WATCHDOG_UCI_IFACE'
+WATCHDOG_SERVICE='$WATCHDOG_SERVICE'
+WATCHDOG_URL='https://www.youtube.com/generate_204'
+WATCHDOG_INTERVAL_MIN='30'
+EOF
+    chmod 600 /etc/routewolf/watchdog.conf 2>/dev/null || true
+
+    cat << 'EOF' > /usr/sbin/routewolf-watchdog.sh
+#!/bin/sh
+
+CONF='/etc/routewolf/watchdog.conf'
+[ -f "$CONF" ] && . "$CONF"
+TYPE="${WATCHDOG_TYPE:-unknown}"
+DEV="${WATCHDOG_DEVICE:-}"
+UCI_IFACE="${WATCHDOG_UCI_IFACE:-}"
+SERVICE="${WATCHDOG_SERVICE:-}"
+TEST_URL="${WATCHDOG_URL:-https://www.youtube.com/generate_204}"
+LOG_TAG='RouteWolf-watchdog'
+LOCK='/tmp/routewolf-watchdog.lock'
+
+log() { logger -t "$LOG_TAG" "$*" 2>/dev/null || echo "$LOG_TAG: $*"; }
+
+lock_or_exit() {
+    if mkdir "$LOCK" 2>/dev/null; then
+        trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM
+    else
+        exit 0
+    fi
+}
+
+fail_open_cleanup() {
+    # Never change the main WAN default route. Only clear RouteWolf's policy table.
+    ip route del blackhole default table vpn metric 42767 >/dev/null 2>&1 || true
+    ip -6 route del blackhole default table vpn metric 42767 >/dev/null 2>&1 || true
+    ip route flush table vpn >/dev/null 2>&1 || true
+}
+
+route_repair() {
+    [ -x /usr/sbin/routewolf-route.sh ] && /usr/sbin/routewolf-route.sh >/dev/null 2>&1 && return 0
+    [ -x /usr/sbin/domain-routing-route.sh ] && /usr/sbin/domain-routing-route.sh >/dev/null 2>&1 && return 0
+    return 0
+}
+
+ensure_boot_enabled() {
+    case "$TYPE" in
+        wg|awg)
+            [ -n "$UCI_IFACE" ] || return 0
+            uci set network.$UCI_IFACE.auto='1' 2>/dev/null || true
+            uci commit network >/dev/null 2>&1 || true
+        ;;
+        ovpn) /etc/init.d/openvpn enable >/dev/null 2>&1 || true ;;
+        singbox|outline) /etc/init.d/sing-box enable >/dev/null 2>&1 || true ;;
+    esac
+}
+
+restart_selected() {
+    reason="$1"
+    log "restart $TYPE/$DEV: $reason"
+    fail_open_cleanup
+    ensure_boot_enabled
+
+    case "$TYPE" in
+        wg|awg)
+            ifdown "$UCI_IFACE" >/dev/null 2>&1 || true
+            sleep 3
+            ifup "$UCI_IFACE" >/dev/null 2>&1 || true
+        ;;
+        ovpn)
+            /etc/init.d/openvpn restart >/dev/null 2>&1 || /etc/init.d/openvpn start >/dev/null 2>&1 || true
+        ;;
+        singbox|outline)
+            /etc/init.d/sing-box restart >/dev/null 2>&1 || /etc/init.d/sing-box start >/dev/null 2>&1 || true
+        ;;
+    esac
+
+    i=0
+    while [ "$i" -lt 25 ]; do
+        ip link show dev "$DEV" >/dev/null 2>&1 && ip link show dev "$DEV" 2>/dev/null | grep -q 'UP' && break
+        sleep 1
+        i=$((i+1))
+    done
+    route_repair
+}
+
+iface_ipv4() {
+    ip -4 -o addr show dev "$DEV" 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}'
+}
+
+check_device() {
+    [ -n "$DEV" ] || return 1
+    ip link show dev "$DEV" >/dev/null 2>&1 || return 1
+    ip link show dev "$DEV" 2>/dev/null | grep -q 'UP' || return 1
+    return 0
+}
+
+check_connectivity() {
+    check_device || return 1
+    src="$(iface_ipv4)"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -kfsS --interface "$DEV" --connect-timeout 8 --max-time 15 "$TEST_URL" >/dev/null 2>&1 && return 0
+    fi
+
+    if [ -n "$src" ] && command -v wget >/dev/null 2>&1 && wget --help 2>&1 | grep -q -- '--bind-address'; then
+        if wget --help 2>&1 | grep -q -- '--no-check-certificate'; then
+            wget --no-check-certificate --bind-address="$src" -T 15 -q -O /dev/null "$TEST_URL" >/dev/null 2>&1 && return 0
+        else
+            wget --bind-address="$src" -T 15 -q -O /dev/null "$TEST_URL" >/dev/null 2>&1 && return 0
+        fi
+    fi
+
+    ping -I "$DEV" -c 2 -W 4 1.1.1.1 >/dev/null 2>&1 && return 0
+    return 1
+}
+
+status() {
+    echo "=== RouteWolf universal watchdog ==="
+    echo "type: $TYPE"
+    echo "device: $DEV"
+    echo "service: $SERVICE"
+    echo "test: $TEST_URL"
+    echo "boot service: enabled by installer"
+    echo "schedule: every ${WATCHDOG_INTERVAL_MIN:-30} minutes"
+    echo "=== interface ==="
+    ip addr show dev "$DEV" 2>/dev/null || echo "$DEV not found"
+    echo "=== main WAN default (must remain available) ==="
+    ip route show default 2>/dev/null || true
+    echo "=== RouteWolf vpn table ==="
+    ip route show table vpn 2>/dev/null || true
+    echo "=== last watchdog log ==="
+    logread 2>/dev/null | grep "$LOG_TAG" | tail -n 40 || true
+}
+
+run_check() {
+    lock_or_exit
+    ensure_boot_enabled
+    route_repair
+
+    check_connectivity && exit 0
+    sleep 10
+    check_connectivity && exit 0
+
+    restart_selected 'two connectivity checks failed'
+    if check_connectivity; then
+        log "recovered: $TYPE/$DEV works after restart"
+        exit 0
+    fi
+
+    fail_open_cleanup
+    route_repair
+    log "error: $TYPE/$DEV still unavailable after restart; WAN left in fail-open mode"
+    exit 1
+}
+
+case "$1" in
+    status) status ;;
+    restart)
+        lock_or_exit
+        restart_selected 'manual request'
+        status
+    ;;
+    boot)
+        lock_or_exit
+        ensure_boot_enabled
+        sleep 30
+        restart_selected 'router boot recovery'
+        check_connectivity || log "boot recovery finished but tunnel test still fails; WAN remains fail-open"
+    ;;
+    check|test|"") run_check ;;
+    *) echo "Usage: $0 [check|status|restart|boot]"; exit 1 ;;
+esac
+EOF
+    chmod +x /usr/sbin/routewolf-watchdog.sh
+
+    cat << 'EOF' > /etc/init.d/routewolf-watchdog
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+
+start() {
+    /usr/sbin/routewolf-watchdog.sh boot >/dev/null 2>&1 &
+}
+
+restart() {
+    /usr/sbin/routewolf-watchdog.sh restart >/dev/null 2>&1 &
+}
+EOF
+    chmod +x /etc/init.d/routewolf-watchdog
+
+    # Remove the old AWG-only service to avoid two watchdogs fighting each other.
+    /etc/init.d/routewolf-awg-watchdog stop >/dev/null 2>&1 || true
+    /etc/init.d/routewolf-awg-watchdog disable >/dev/null 2>&1 || true
+    rm -f /etc/init.d/routewolf-awg-watchdog
+
+    cat << 'EOF' > /usr/sbin/routewolf-awg-watchdog.sh
+#!/bin/sh
+# Compatibility alias for older RouteWolf commands.
+exec /usr/sbin/routewolf-watchdog.sh "$@"
+EOF
+    chmod +x /usr/sbin/routewolf-awg-watchdog.sh
+
+    /etc/init.d/routewolf-watchdog enable >/dev/null 2>&1 || true
+    touch /etc/crontabs/root 2>/dev/null || true
+    sed -i '/routewolf-awg-watchdog/d;/routewolf-watchdog/d' /etc/crontabs/root 2>/dev/null || true
+    echo '*/30 * * * * /usr/sbin/routewolf-watchdog.sh check >/dev/null 2>&1' >> /etc/crontabs/root
+    /etc/init.d/cron enable >/dev/null 2>&1 || true
+    /etc/init.d/cron restart >/dev/null 2>&1 || true
+    /etc/init.d/routewolf-watchdog restart >/dev/null 2>&1 || true
+
+    msgc "$C_GREEN" \
+        "Tunnel watchdog enabled: boot recovery and a check every 30 minutes" \
+        "Автоконтроль туннеля включён: восстановление после загрузки и проверка каждые 30 минут"
+}
+
 route_vpn () {
     if [ "$TUNNEL" = wg ]; then
         VPN_ROUTE_DEV="wg0"
@@ -1164,7 +1697,10 @@ route_vpn () {
         uci set network.OpenVPN.device="$VPN_ROUTE_DEV"
         uci commit network >/dev/null 2>&1 || true
     elif [ "$TUNNEL" = singbox ]; then
-        VPN_ROUTE_DEV="${SINGBOX_ROUTE_DEV:-tun0}"
+        VPN_ROUTE_DEV="${SINGBOX_ROUTE_DEV:-sbtun0}"
+        VPN_ROUTE_UCI_INTERFACE=""
+    elif [ "$TUNNEL" = outline ]; then
+        VPN_ROUTE_DEV="${OUTLINE_ROUTE_DEV:-outline0}"
         VPN_ROUTE_UCI_INTERFACE=""
     elif [ "$TUNNEL" = tun2socks ]; then
         VPN_ROUTE_DEV="${TUN2SOCKS_ROUTE_DEV:-tun0}"
@@ -1480,51 +2016,38 @@ add_tunnel() {
         return
     fi
     clear_screen
-    msgc "$C_BLUE" "Select a tunnel" "Выберите туннель"
+    ui_header "$(prompt "Select a tunnel" "Выберите туннель")"
     if is_ru; then
-        printf "1) %bWireGuard%b                         %b[работает]%b
-" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
-        printf "2) %bOpenVPN%b                           %b[работает]%b
-" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
-        printf "3) %bSing-box%b                          %b[экспериментально, VLESS Reality]%b
-" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
-        printf "4) %bAmneziaWG / Amnezia WireGuard%b     %b[работает]%b
-" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
-        printf "5) %bОтмена / выход%b
-" "$C_RED" "$C_RESET"
-        printf "6) %bПропустить настройку туннеля%b
-" "$C_YELLOW" "$C_RESET"
-        echo
-        echo "Диагностика доступна в начальном меню существующей конфигурации и командой: /usr/sbin/routing-openwrt-diagnose.sh"
+        printf "1) %bAmneziaWG / Amnezia WireGuard%b     %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        printf "2) %bWireGuard%b                         %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        printf "3) %bOpenVPN%b                           %b[тестируется]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "4) %bSing-box%b                          %b[экспериментально, VLESS Reality]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "5) %bOutline%b                           %b[тестовый режим, статический ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "6) %bОтмена / выход%b\n" "$C_RED" "$C_RESET"
+        printf "7) %bПропустить настройку туннеля%b\n" "$C_YELLOW" "$C_RESET"
     else
-        printf "1) %bWireGuard%b                         %b[active]%b
-" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
-        printf "2) %bOpenVPN%b                           %b[active]%b
-" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
-        printf "3) %bSing-box%b                          %b[experimental, VLESS Reality]%b
-" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
-        printf "4) %bAmneziaWG / Amnezia WireGuard%b     %b[active]%b
-" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
-        printf "5) %bCancel / exit%b
-" "$C_RED" "$C_RESET"
-        printf "6) %bSkip tunnel setup%b
-" "$C_YELLOW" "$C_RESET"
-        echo
-        echo "Diagnostics are available from the existing-config start menu and by command: /usr/sbin/routing-openwrt-diagnose.sh"
+        printf "1) %bAmneziaWG / Amnezia WireGuard%b     %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        printf "2) %bWireGuard%b                         %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
+        printf "3) %bOpenVPN%b                           %b[testing]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "4) %bSing-box%b                          %b[experimental, VLESS Reality]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "5) %bOutline%b                           %b[test mode, static ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "6) %bCancel / exit%b\n" "$C_RED" "$C_RESET"
+        printf "7) %bSkip tunnel setup%b\n" "$C_YELLOW" "$C_RESET"
     fi
 
     while true; do
-        printf "%s" "$(prompt "Choice [4]: " "Выбор [4]: ")"
+        printf "%s" "$(prompt "Choice [1]: " "Выбор [1]: ")"
         read -r TUNNEL
-        TUNNEL=${TUNNEL:-4}
-        case $TUNNEL in
-        1) TUNNEL=wg; break ;;
-        2) TUNNEL=ovpn; break ;;
-        3) TUNNEL=singbox; break ;;
-        4) TUNNEL=awg; break ;;
-        5) msgc "$C_RED" "Cancelled" "Отменено"; exit 1 ;;
-        6) msgc "$C_YELLOW" "Skip tunnel setup" "Настройка туннеля пропущена"; TUNNEL=0; break ;;
-        *) msgc "$C_RED" "Choose 1, 2, 3, 4, 5 or 6." "Выберите 1, 2, 3, 4, 5 или 6." ;;
+        TUNNEL=${TUNNEL:-1}
+        case "$TUNNEL" in
+            1) TUNNEL=awg; break ;;
+            2) TUNNEL=wg; break ;;
+            3) TUNNEL=ovpn; break ;;
+            4) TUNNEL=singbox; break ;;
+            5) TUNNEL=outline; break ;;
+            6) msgc "$C_RED" "Cancelled" "Отменено"; exit 1 ;;
+            7) msgc "$C_YELLOW" "Skip tunnel setup" "Настройка туннеля пропущена"; TUNNEL=0; break ;;
+            *) msgc "$C_RED" "Choose 1, 2, 3, 4, 5, 6 or 7." "Выберите 1, 2, 3, 4, 5, 6 или 7." ;;
         esac
     done
 
@@ -1591,6 +2114,13 @@ add_tunnel() {
     if [ "$TUNNEL" = 'singbox' ]; then
         configure_singbox_menu || {
             msgc "$C_RED" "Sing-box setup cancelled" "Настройка Sing-box отменена"
+            TUNNEL=0
+        }
+    fi
+
+    if [ "$TUNNEL" = 'outline' ]; then
+        configure_outline_menu || {
+            msgc "$C_RED" "Outline setup cancelled" "Настройка Outline отменена"
             TUNNEL=0
         }
     fi
@@ -1711,6 +2241,10 @@ add_tunnel() {
         uci commit
     fi
 
+    if [ "${TUNNEL:-0}" != "0" ]; then
+        install_routewolf_watchdog
+    fi
+
 }
 
 dnsmasqfull() {
@@ -1794,6 +2328,10 @@ add_zone() {
         singbox)
             zone_device="${VPN_ROUTE_DEV:-${SINGBOX_ROUTE_DEV:-sbtun0}}"
         ;;
+        outline)
+            zone_name="outline"
+            zone_device="${VPN_ROUTE_DEV:-${OUTLINE_ROUTE_DEV:-outline0}}"
+        ;;
         *)
             zone_device="${VPN_ROUTE_DEV:-tun0}"
         ;;
@@ -1849,6 +2387,8 @@ show_manual() {
     elif [ "$TUNNEL" = ovpn ]; then
         printf "\033[42;1mOpenVPN routing configured. If you used manual mode, make sure the OpenVPN tunnel is up.\033[0m\n"
         printf "\033[42;1mМаршрутизация OpenVPN настроена. Если был ручной режим, убедитесь, что OpenVPN-туннель поднят.\033[0m\n"
+    elif [ "$TUNNEL" = outline ]; then
+        msgc "$C_GREEN"             "Outline is running as a Shadowsocks client through outline0; only RouteWolf lists use it."             "Outline работает как клиент Shadowsocks через outline0; через него идут только списки RouteWolf."
     fi
 }
 
@@ -2410,10 +2950,15 @@ update_existing_installation() {
             awg0) TUNNEL="awg"; route_vpn ;;
             wg0) TUNNEL="wg"; route_vpn ;;
             sbtun0) TUNNEL="singbox"; SINGBOX_ROUTE_DEV="sbtun0"; route_vpn ;;
+            outline0) TUNNEL="outline"; OUTLINE_ROUTE_DEV="outline0"; route_vpn ;;
             tun*) TUNNEL="ovpn"; OVPN_ROUTE_DEV="$VPN_ROUTE_DEV"; route_vpn ;;
         esac
     else
         echo "Warning: no existing awg0/wg0/tun0 route config found. Lists/firewall will be updated, but tunnel route may need reinstall."
+    fi
+
+    if [ -n "${TUNNEL:-}" ] && [ "$TUNNEL" != "0" ]; then
+        install_routewolf_watchdog
     fi
 
     dnsmasqfull
@@ -2456,11 +3001,9 @@ update_existing_installation() {
 
 add_getdomains() {
     clear_screen
-    echo "Domain/IP lists / Списки доменов и IP"
-    echo "Project / Проект: ${DEFAULT_PROJECT_REPO:-dagmagnat/routing-openwrt}"
-    echo "Lists repo / Репозиторий списков: ${DEFAULT_LISTS_REPO:-dagmagnat/routing-openwrt}"
-    echo "Profiles are read from lists/profiles/<name>/ or the default full lists."
-    echo "Профили читаются из lists/profiles/<name>/ или используются полные списки по умолчанию."
+    ui_header "$(prompt "RouteWolf list setup" "Настройка списков RouteWolf")"
+    msgc "$C_GREEN" "List source: RouteWolf / Magnat" "Источник списков: RouteWolf / Магнат"
+    msg "Domain and IP lists are used only for selective routing." "Списки доменов и IP используются только для выборочной маршрутизации."
 
     if [ "$1" = "update" ] || [ "$1" = "--update" ] || [ "${ROUTING_OPENWRT_UPDATE_ONLY:-0}" = "1" ]; then
         choose_list_profile update
