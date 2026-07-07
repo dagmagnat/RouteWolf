@@ -223,3 +223,11 @@ rw singbox log
 ### OpenWrt 25.12 и APK
 
 RouteWolf не устанавливает пакет `wget`/`wget-nossl`, потому что он может перекрыть системный `uclient-fetch` и сломать HTTPS-загрузки `apk`. Если системный `wget` уже неисправен, установщик временно подставляет `/bin/uclient-fetch` или `curl` только для своих команд APK, не изменяя системные файлы.
+
+
+## RouteWolf v43: отдельная установка AmneziaWG для APK и IPK
+
+- OpenWrt 25.12 и новее с `apk`: RouteWolf подключает официальный подписанный APK-feed `Slava-Shchipunov/awg-openwrt` для точной версии и пары `target/subtarget`, затем ставит `amneziawg-tools`, `kmod-amneziawg` и `luci-proto-amneziawg` через `apk`.
+- OpenWrt 24.10/23.05 с `opkg`: RouteWolf запускает официальный установщик GitHub Releases и устанавливает `.ipk` для точной версии и платформы.
+- Сломанный `wget` без HTTPS больше не передаётся во внешний установщик: для IPK временно используется `/bin/uclient-fetch` или `curl`, а для APK — безопасный `apk_run`.
+- Сообщения об ошибках теперь соответствуют пакетному менеджеру: на APK не предлагаются команды `opkg`.

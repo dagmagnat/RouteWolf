@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v42-universal-https-bootstrap"
+PROJECT_VERSION="v43-dual-awg-packages"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -2735,7 +2735,7 @@ section() { printf "\n%b=== %s ===%b\n" "$BLUE" "$1" "$RESET"; }
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
 
 section "routing-openwrt diagnostics"
-echo "Version: v42-universal-https-bootstrap"
+echo "Version: v43-dual-awg-packages"
 echo "Date: $(date 2>/dev/null)"
 echo "Model: $(ubus call system board 2>/dev/null | jsonfilter -e '@.model' 2>/dev/null || cat /tmp/sysinfo/model 2>/dev/null)"
 echo "OpenWrt: $(ubus call system board 2>/dev/null | jsonfilter -e '@.release.description' 2>/dev/null)"
@@ -3918,63 +3918,297 @@ add_internal_wg() {
 install_awg_packages() {
     AWG_INSTALLER_URL="https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/refs/heads/master/amneziawg-install.sh"
     AWG_INSTALLER="/tmp/amneziawg-install.sh"
+    AWG_FEED_ROOT="https://slava-shchipunov.github.io/awg-openwrt"
+    AWG_FEED_KEY_URL="${AWG_FEED_ROOT}/keys/awg-openwrt-feed.pem"
+    AWG_LOG="/tmp/routewolf-awg-install.log"
+
+    detect_pkg_manager
+
+    awg_openwrt_version() {
+        _v="$(ubus call system board 2>/dev/null | jsonfilter -e '@.release.version' 2>/dev/null)"
+        [ -n "$_v" ] || _v="$(sed -n "s/^DISTRIB_RELEASE='\([^']*\)'.*/\1/p" /etc/openwrt_release 2>/dev/null)"
+        _v="${_v%%-*}"
+        printf '%s\n' "$_v"
+    }
+
+    awg_openwrt_target() {
+        _t="$(ubus call system board 2>/dev/null | jsonfilter -e '@.release.target' 2>/dev/null)"
+        [ -n "$_t" ] || _t="$(sed -n "s/^DISTRIB_TARGET='\([^']*\)'.*/\1/p" /etc/openwrt_release 2>/dev/null)"
+        printf '%s\n' "$_t"
+    }
 
     awg_already_installed() {
-        command -v awg >/dev/null 2>&1 && {
-            [ -f /lib/netifd/proto/amneziawg.sh ] || [ -f /lib/netifd/proto/awg.sh ] || opkg list-installed 2>/dev/null | grep -qiE 'luci-proto-amneziawg|amneziawg';
-        }
+        if command -v awg >/dev/null 2>&1 && \
+           { [ -f /lib/netifd/proto/amneziawg.sh ] || [ -f /lib/netifd/proto/awg.sh ]; }; then
+            return 0
+        fi
+        if pkg_is_installed amneziawg-tools && pkg_is_installed kmod-amneziawg && \
+           { [ -f /lib/netifd/proto/amneziawg.sh ] || [ -f /lib/netifd/proto/awg.sh ] || pkg_is_installed luci-proto-amneziawg; }; then
+            return 0
+        fi
+        return 1
+    }
+
+    awg_verify_install() {
+        command -v awg >/dev/null 2>&1 || return 1
+        pkg_is_installed amneziawg-tools || return 1
+        pkg_is_installed kmod-amneziawg || return 1
+        [ -f /lib/netifd/proto/amneziawg.sh ] || \
+        [ -f /lib/netifd/proto/awg.sh ] || \
+        pkg_is_installed luci-proto-amneziawg || return 1
+        return 0
+    }
+
+    awg_restore_apk_repo() {
+        if [ "${AWG_REPO_EXISTED:-0}" = "1" ] && [ -f "${AWG_REPO_BACKUP:-}" ]; then
+            cp "$AWG_REPO_BACKUP" "$AWG_REPO_FILE" 2>/dev/null || true
+        elif [ "${AWG_REPO_EXISTED:-0}" = "0" ]; then
+            rm -f "$AWG_REPO_FILE"
+        fi
+    }
+
+    install_awg_with_apk_feed() {
+        AWG_OWRT_VERSION="$(awg_openwrt_version)"
+        AWG_OWRT_TARGET="$(awg_openwrt_target)"
+
+        if [ -z "$AWG_OWRT_VERSION" ] || [ -z "$AWG_OWRT_TARGET" ]; then
+            msgc "$C_RED" \
+                "Cannot determine the exact OpenWrt version or target/subtarget." \
+                "Не удалось определить точную версию OpenWrt или target/subtarget."
+            return 1
+        fi
+
+        case "$AWG_OWRT_TARGET" in
+            */*) ;;
+            *)
+                msgc "$C_RED" \
+                    "Unexpected OpenWrt target: $AWG_OWRT_TARGET" \
+                    "Некорректный target OpenWrt: $AWG_OWRT_TARGET"
+                return 1
+                ;;
+        esac
+
+        AWG_FEED_URL="${AWG_FEED_ROOT}/${AWG_OWRT_VERSION}/${AWG_OWRT_TARGET}/packages.adb"
+        AWG_TMP_KEY="/tmp/awg-openwrt-feed.pem"
+        AWG_TMP_INDEX="/tmp/awg-openwrt-packages.adb"
+        rm -f "$AWG_TMP_KEY" "$AWG_TMP_INDEX"
+
+        msgc "$C_BLUE" \
+            "OpenWrt $AWG_OWRT_VERSION uses APK. Checking the official AmneziaWG APK feed..." \
+            "OpenWrt $AWG_OWRT_VERSION использует APK. Проверка официального APK-репозитория AmneziaWG..."
+
+        if ! download_url_to_file "$AWG_FEED_KEY_URL" "$AWG_TMP_KEY" || [ ! -s "$AWG_TMP_KEY" ]; then
+            msgc "$C_RED" \
+                "Failed to download the official AmneziaWG APK signing key." \
+                "Не удалось скачать официальный ключ подписи APK AmneziaWG."
+            return 1
+        fi
+
+        if ! download_url_to_file "$AWG_FEED_URL" "$AWG_TMP_INDEX" || [ ! -s "$AWG_TMP_INDEX" ]; then
+            msgc "$C_RED" \
+                "No official AmneziaWG APK feed was found for $AWG_OWRT_VERSION / $AWG_OWRT_TARGET." \
+                "Официальный APK-репозиторий AmneziaWG для $AWG_OWRT_VERSION / $AWG_OWRT_TARGET не найден."
+            msg "Feed checked: $AWG_FEED_URL" "Проверенный репозиторий: $AWG_FEED_URL"
+            return 1
+        fi
+
+        mkdir -p /etc/apk/keys /etc/apk/repositories.d || return 1
+        cp "$AWG_TMP_KEY" /etc/apk/keys/awg-openwrt-feed.pem || return 1
+        chmod 644 /etc/apk/keys/awg-openwrt-feed.pem 2>/dev/null || true
+
+        AWG_REPO_FILE="/etc/apk/repositories.d/customfeeds.list"
+        AWG_REPO_BACKUP="/tmp/routewolf-awg-customfeeds.list.backup.$$"
+        AWG_REPO_EXISTED=0
+        if [ -f "$AWG_REPO_FILE" ]; then
+            AWG_REPO_EXISTED=1
+            cp "$AWG_REPO_FILE" "$AWG_REPO_BACKUP" || return 1
+        fi
+
+        AWG_REPO_TMP="/tmp/routewolf-awg-customfeeds.list.$$"
+        if [ -f "$AWG_REPO_FILE" ]; then
+            grep -v 'slava-shchipunov.github.io/awg-openwrt/' "$AWG_REPO_FILE" > "$AWG_REPO_TMP" 2>/dev/null || true
+        else
+            : > "$AWG_REPO_TMP"
+        fi
+        printf '%s\n' "$AWG_FEED_URL" >> "$AWG_REPO_TMP"
+        mv "$AWG_REPO_TMP" "$AWG_REPO_FILE" || return 1
+
+        : > "$AWG_LOG"
+        if ! apk_run update >>"$AWG_LOG" 2>&1; then
+            awg_restore_apk_repo
+            msgc "$C_RED" \
+                "APK could not update the official AmneziaWG feed." \
+                "APK не смог обновить официальный репозиторий AmneziaWG."
+            tail -n 30 "$AWG_LOG" 2>/dev/null || true
+            return 1
+        fi
+
+        if ! apk_run add amneziawg-tools kmod-amneziawg luci-proto-amneziawg >>"$AWG_LOG" 2>&1; then
+            awg_restore_apk_repo
+            msgc "$C_RED" \
+                "Installation of AmneziaWG APK packages failed." \
+                "Установка APK-пакетов AmneziaWG завершилась ошибкой."
+            tail -n 30 "$AWG_LOG" 2>/dev/null || true
+            return 1
+        fi
+
+        if is_ru; then
+            apk_run add luci-i18n-amneziawg-ru >>"$AWG_LOG" 2>&1 || true
+        fi
+
+        if ! awg_verify_install; then
+            msgc "$C_RED" \
+                "APK finished, but the AmneziaWG command/module/protocol was not detected." \
+                "APK завершил работу, но команда, модуль или протокол AmneziaWG не обнаружены."
+            tail -n 30 "$AWG_LOG" 2>/dev/null || true
+            return 1
+        fi
+
+        mkdir -p /etc/routewolf
+        printf '%s\n' "apk-feed $AWG_OWRT_VERSION $AWG_OWRT_TARGET" > /etc/routewolf/awg-package-source
+        rm -f "$AWG_TMP_KEY" "$AWG_TMP_INDEX" "$AWG_REPO_BACKUP"
+        return 0
+    }
+
+    create_awg_curl_wget_wrapper() {
+        mkdir -p /tmp/routewolf-awg-bin || return 1
+        cat > /tmp/routewolf-awg-bin/wget <<'ROUTEWOLF_AWG_WGET_EOF'
+#!/bin/sh
+out="-"
+timeout="180"
+insecure="0"
+url=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -O) shift; out="$1" ;;
+        -T) shift; timeout="$1" ;;
+        -q|--quiet) ;;
+        --no-check-certificate) insecure="1" ;;
+        --timeout=*) timeout="${1#*=}" ;;
+        --) shift; url="$1"; break ;;
+        -*) ;;
+        *) url="$1" ;;
+    esac
+    shift
+done
+[ -n "$url" ] || exit 2
+set -- -fL --connect-timeout "$timeout" --max-time "$timeout" --retry 2
+[ "$insecure" = "1" ] && set -- "$@" -k
+if [ "$out" = "-" ]; then
+    exec curl "$@" "$url"
+else
+    exec curl "$@" -o "$out" "$url"
+fi
+ROUTEWOLF_AWG_WGET_EOF
+        chmod 755 /tmp/routewolf-awg-bin/wget
+    }
+
+    prepare_awg_ipk_downloader() {
+        AWG_SAFE_PATH="$PATH"
+        rm -rf /tmp/routewolf-awg-bin
+        mkdir -p /tmp/routewolf-awg-bin || return 1
+
+        if [ -x /bin/uclient-fetch ]; then
+            ln -sf /bin/uclient-fetch /tmp/routewolf-awg-bin/wget || return 1
+            AWG_SAFE_PATH="/tmp/routewolf-awg-bin:$PATH"
+            return 0
+        fi
+        if command -v uclient-fetch >/dev/null 2>&1; then
+            ln -sf "$(command -v uclient-fetch)" /tmp/routewolf-awg-bin/wget || return 1
+            AWG_SAFE_PATH="/tmp/routewolf-awg-bin:$PATH"
+            return 0
+        fi
+        if command -v curl >/dev/null 2>&1; then
+            create_awg_curl_wget_wrapper || return 1
+            AWG_SAFE_PATH="/tmp/routewolf-awg-bin:$PATH"
+            return 0
+        fi
+        if command -v wget >/dev/null 2>&1; then
+            return 0
+        fi
+        return 1
+    }
+
+    install_awg_with_ipk_release() {
+        AWG_OWRT_VERSION="$(awg_openwrt_version)"
+        AWG_OWRT_TARGET="$(awg_openwrt_target)"
+        msgc "$C_BLUE" \
+            "OpenWrt $AWG_OWRT_VERSION uses OPKG. Installing official IPK packages for $AWG_OWRT_TARGET..." \
+            "OpenWrt $AWG_OWRT_VERSION использует OPKG. Установка официальных IPK-пакетов для $AWG_OWRT_TARGET..."
+
+        if ! download_url_to_file "$AWG_INSTALLER_URL" "$AWG_INSTALLER" || [ ! -s "$AWG_INSTALLER" ]; then
+            msgc "$C_RED" \
+                "Failed to download the official AmneziaWG IPK installer." \
+                "Не удалось скачать официальный установщик IPK AmneziaWG."
+            return 1
+        fi
+
+        if ! prepare_awg_ipk_downloader; then
+            msgc "$C_RED" \
+                "No HTTPS-capable downloader is available for the official IPK installer." \
+                "Нет HTTPS-загрузчика для официального установщика IPK."
+            return 1
+        fi
+
+        : > "$AWG_LOG"
+        env PATH="$AWG_SAFE_PATH" sh "$AWG_INSTALLER" -en >"$AWG_LOG" 2>&1
+        AWG_RC="$?"
+        if [ "$AWG_RC" -ne 0 ]; then
+            env PATH="$AWG_SAFE_PATH" sh "$AWG_INSTALLER" -n >"$AWG_LOG" 2>&1
+            AWG_RC="$?"
+        fi
+
+        if [ "$AWG_RC" -ne 0 ] || ! awg_verify_install; then
+            msgc "$C_RED" \
+                "Installation of official AmneziaWG IPK packages failed." \
+                "Установка официальных IPK-пакетов AmneziaWG завершилась ошибкой."
+            tail -n 30 "$AWG_LOG" 2>/dev/null || true
+            msg \
+                "The exact OpenWrt release and target must have matching packages in the official awg-openwrt GitHub release." \
+                "Для точной версии OpenWrt и target должны существовать соответствующие пакеты в официальном релизе awg-openwrt."
+            return 1
+        fi
+
+        mkdir -p /etc/routewolf
+        printf '%s\n' "ipk-release $AWG_OWRT_VERSION $AWG_OWRT_TARGET" > /etc/routewolf/awg-package-source
+        return 0
     }
 
     if awg_already_installed; then
-        echo "AmneziaWG packages already installed, skipping package installer."
+        msgc "$C_GREEN" \
+            "AmneziaWG packages are already installed; package installation is skipped." \
+            "Пакеты AmneziaWG уже установлены; установка пакетов пропускается."
         AWG_VERSION="2.0"
         return 0
     fi
 
-    echo "Installing AmneziaWG packages / Установка пакетов AmneziaWG..."
-    download_url_to_file "$AWG_INSTALLER_URL" "$AWG_INSTALLER" || true
+    msgc "$C_BLUE" "Installing AmneziaWG packages..." "Установка пакетов AmneziaWG..."
 
-    if [ ! -s "$AWG_INSTALLER" ]; then
-        echo "Error downloading AmneziaWG installer. Check internet/GitHub/date on router."
-        exit 1
-    fi
+    case "$PKG_MANAGER" in
+        apk)
+            install_awg_with_apk_feed || return 1
+            ;;
+        opkg)
+            install_awg_with_ipk_release || return 1
+            ;;
+        *)
+            msgc "$C_RED" "Unsupported package manager: $PKG_MANAGER" "Неподдерживаемый пакетный менеджер: $PKG_MANAGER"
+            return 1
+            ;;
+    esac
 
-    sh "$AWG_INSTALLER" -en
-    AWG_RC="$?"
-    if [ "$AWG_RC" -ne 0 ]; then
-        # Fallback for older awg-openwrt installers where -en may not exist
-        sh "$AWG_INSTALLER" -n
-        AWG_RC="$?"
-    fi
-
-    if [ "$AWG_RC" -ne 0 ]; then
-        if awg_already_installed; then
-            echo "Warning: AmneziaWG installer returned error $AWG_RC, but awg command/proto exists. Continuing."
-        else
-            echo ""
-            echo "AmneziaWG package installation failed."
-            echo "Most common reasons: OpenWrt package repository is temporarily unreachable, IPv6/DNS issue, or missing packages for this build."
-            echo "If only one kmod dependency failed to download, install it manually, then run installer again."
-            echo "Example for OpenWrt 24.10 ramips/mt7621:"
-            echo "  curl -L --retry 5 -o /tmp/kmod-crypto-lib-curve25519.ipk https://downloads.openwrt.org/releases/24.10.6/targets/ramips/mt7621/kmods/6.6.127-1-f31f6f85a36836e510d64a18a9a5f1bf/kmod-crypto-lib-curve25519_6.6.127-r1_mipsel_24kc.ipk"
-            echo "  opkg install /tmp/kmod-crypto-lib-curve25519.ipk"
-            echo "Try: opkg update; opkg install ca-certificates ca-bundle libustream-mbedtls; then run installer again."
-            exit 1
-        fi
-    fi
-
-    VERSION=$(ubus call system board | jsonfilter -e '@.release.version')
-    MAJOR_VERSION=$(echo "$VERSION" | cut -d '.' -f 1)
-    MINOR_VERSION=$(echo "$VERSION" | cut -d '.' -f 2)
-    PATCH_VERSION=$(echo "$VERSION" | cut -d '.' -f 3)
+    VERSION="$(awg_openwrt_version)"
+    MAJOR_VERSION="$(echo "$VERSION" | cut -d '.' -f 1)"
+    MINOR_VERSION="$(echo "$VERSION" | cut -d '.' -f 2)"
+    PATCH_VERSION="$(echo "$VERSION" | cut -d '.' -f 3)"
     AWG_VERSION="1.0"
-    if [ "$MAJOR_VERSION" -gt 24 ] || \
-       [ "$MAJOR_VERSION" -eq 24 -a "$MINOR_VERSION" -gt 10 ] || \
-       [ "$MAJOR_VERSION" -eq 24 -a "$MINOR_VERSION" -eq 10 -a "$PATCH_VERSION" -ge 3 ] || \
-       [ "$MAJOR_VERSION" -eq 23 -a "$MINOR_VERSION" -eq 5 -a "$PATCH_VERSION" -ge 6 ]; then
+    if [ "$MAJOR_VERSION" -gt 24 ] 2>/dev/null || \
+       { [ "$MAJOR_VERSION" -eq 24 ] 2>/dev/null && [ "$MINOR_VERSION" -gt 10 ] 2>/dev/null; } || \
+       { [ "$MAJOR_VERSION" -eq 24 ] 2>/dev/null && [ "$MINOR_VERSION" -eq 10 ] 2>/dev/null && [ "$PATCH_VERSION" -ge 3 ] 2>/dev/null; } || \
+       { [ "$MAJOR_VERSION" -eq 23 ] 2>/dev/null && [ "$MINOR_VERSION" -eq 5 ] 2>/dev/null && [ "$PATCH_VERSION" -ge 6 ] 2>/dev/null; }; then
         AWG_VERSION="2.0"
     fi
-    echo "Detected AmneziaWG protocol generation: $AWG_VERSION"
+    msg "Detected AmneziaWG protocol generation: $AWG_VERSION" "Определено поколение протокола AmneziaWG: $AWG_VERSION"
 }
 
 # Choose installer language before any interactive menu.

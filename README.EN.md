@@ -223,3 +223,11 @@ For subscription/JSON URLs, cron auto-update is enabled. The default interval is
 ### OpenWrt 25.12 and APK
 
 RouteWolf does not install the generic `wget`/`wget-nossl` package because it can shadow the built-in `uclient-fetch` and break APK HTTPS downloads. If the system wget is already broken, the installer temporarily uses `/bin/uclient-fetch` or `curl` for its own APK commands without changing system files.
+
+
+## RouteWolf v43: separate AmneziaWG paths for APK and IPK
+
+- OpenWrt 25.12 and newer with `apk`: RouteWolf adds the official signed `Slava-Shchipunov/awg-openwrt` APK feed for the exact release and `target/subtarget`, then installs `amneziawg-tools`, `kmod-amneziawg` and `luci-proto-amneziawg` with `apk`.
+- OpenWrt 24.10/23.05 with `opkg`: RouteWolf runs the official GitHub Releases installer and installs matching `.ipk` packages.
+- A broken HTTPS-less `wget` is no longer passed to the external installer: the IPK path temporarily uses `/bin/uclient-fetch` or `curl`, while APK uses RouteWolf's safe `apk_run` wrapper.
+- Error hints now match the active package manager; APK failures no longer suggest `opkg` commands.
