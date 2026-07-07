@@ -13,7 +13,7 @@
 
   tunnel: wg
   dns_encrypt: false
-  nano: true
+  nano: false
   wg_access: false
 
   wg_listen_port: 51820

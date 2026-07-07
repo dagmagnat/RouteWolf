@@ -64,36 +64,18 @@ lists/profiles/<name>/ipv6.lst
 
 ## Установка с GitHub
 
-Универсальная команда: сначала используется штатный `/bin/uclient-fetch`, затем `curl`, затем `wget`:
+Короткая команда для штатного OpenWrt:
 
 ```sh
-URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh'
-OUT='/tmp/routewolf-install.sh'
-rm -f "$OUT"
-if [ -x /bin/uclient-fetch ]; then
-    /bin/uclient-fetch -O "$OUT" "$URL"
-elif command -v curl >/dev/null 2>&1; then
-    curl -kfsSL "$URL" -o "$OUT"
-else
-    wget -O "$OUT" "$URL"
-fi && sh "$OUT"
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
 ```
 
-Обычная команда `wget ... | sh` не может работать на прошивке, где сам `wget` собран без HTTPS. Это ограничение локального загрузчика, а не установщика RouteWolf.
+Она работает и тогда, когда установленный `wget` собран без HTTPS. Сам bootstrap внутри дополнительно умеет использовать `uclient-fetch`, `curl` или рабочий `wget`.
 
 ## Обновление
 
 ```sh
-URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh'
-OUT='/tmp/routewolf-update.sh'
-rm -f "$OUT"
-if [ -x /bin/uclient-fetch ]; then
-    /bin/uclient-fetch -O "$OUT" "$URL"
-elif command -v curl >/dev/null 2>&1; then
-    curl -kfsSL "$URL" -o "$OUT"
-else
-    wget -O "$OUT" "$URL"
-fi && sh "$OUT"
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
 ```
 
 Обновление сохраняет текущую конфигурацию туннеля, обновляет списки и восстанавливает маршрутизацию.
@@ -101,32 +83,33 @@ fi && sh "$OUT"
 ## Удаление
 
 ```sh
-URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh'
-OUT='/tmp/routewolf-uninstall.sh'
-rm -f "$OUT"
-if [ -x /bin/uclient-fetch ]; then
-    /bin/uclient-fetch -O "$OUT" "$URL"
-elif command -v curl >/dev/null 2>&1; then
-    curl -kfsSL "$URL" -o "$OUT"
-else
-    wget -O "$OUT" "$URL"
-fi && sh "$OUT"
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
 ```
 
 Полная очистка конфигов проекта:
 
 ```sh
-URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh'
-OUT='/tmp/routewolf-uninstall.sh'
-rm -f "$OUT"
-if [ -x /bin/uclient-fetch ]; then
-    /bin/uclient-fetch -O "$OUT" "$URL"
-elif command -v curl >/dev/null 2>&1; then
-    curl -kfsSL "$URL" -o "$OUT"
-else
-    wget -O "$OUT" "$URL"
-fi && sh "$OUT" --purge
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
 ```
+
+
+## Безопасная установка на 16 МБ flash
+
+RouteWolf больше не устанавливает `nano`, `curl`, `terminfo` или `libncurses` как обязательные компоненты. APK-пакеты AmneziaWG ставятся по одному, после каждой операции очищается кэш. Если от старой неудачной установки в `/etc/apk/world` остался `nano`, установщик предложит безопасную очистку до изменения системы.
+
+Ручная очистка после установленного RouteWolf:
+
+```sh
+rw cleanup
+```
+
+Если установка раньше оборвалась и команды `rw` ещё нет:
+
+```sh
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/cleanup.sh | sh
+```
+
+Если после очистки в `overlay` остаётся меньше 1,5 МБ, установка останавливается без продолжения настройки туннеля.
 
 ## Ручная установка ZIP
 
@@ -137,7 +120,7 @@ cd /tmp
 unzip -o RouteWolf.zip -d /tmp
 mv /tmp/RouteWolf-main /tmp/routewolf 2>/dev/null || mv /tmp/routewolf-main /tmp/routewolf 2>/dev/null || true
 cd /tmp/routewolf
-chmod +x install.sh update.sh uninstall.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh
+chmod +x install.sh update.sh uninstall.sh cleanup.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh
 sh ./install.sh
 ```
 

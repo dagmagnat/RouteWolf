@@ -79,9 +79,8 @@ rm -rf "$TMP_DIR" "$ARCHIVE_FILE"     "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf
 
 if ! fetch_to_file "$ARCHIVE_URL" "$ARCHIVE_FILE"; then
     echo "Error: no working HTTPS downloader could fetch RouteWolf."
-    echo "Try the absolute OpenWrt client:"
-    echo "  /bin/uclient-fetch -O /tmp/routewolf-update.sh https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh"
-    echo "  sh /tmp/routewolf-update.sh"
+    echo "Try the short OpenWrt command:"
+    echo "  /bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh"
     echo "If /bin/uclient-fetch is missing, install/use curl or upload the ZIP manually."
     exit 1
 fi
@@ -91,6 +90,7 @@ if ! extract_archive "$ARCHIVE_FILE"; then
     echo "BusyBox tar with gzip support is required; it is present in normal OpenWrt images."
     exit 1
 fi
+rm -f "$ARCHIVE_FILE" 2>/dev/null || true
 
 if [ -d "/tmp/RouteWolf-${BRANCH}" ]; then
     mv "/tmp/RouteWolf-${BRANCH}" "$TMP_DIR"
@@ -111,5 +111,9 @@ else
 fi
 
 cd "$TMP_DIR" || exit 1
-chmod +x install.sh update.sh uninstall.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh 2>/dev/null || true
-exec sh ./routewolf-install.sh --update
+chmod +x install.sh update.sh uninstall.sh cleanup.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh 2>/dev/null || true
+sh ./routewolf-install.sh --update
+RC="$?"
+cd / >/dev/null 2>&1 || true
+rm -rf "$TMP_DIR" "$ARCHIVE_FILE" "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf-${BRANCH}" 2>/dev/null || true
+exit "$RC"

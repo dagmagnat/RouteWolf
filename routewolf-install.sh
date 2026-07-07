@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v43-dual-awg-packages"
+PROJECT_VERSION="v44-low-flash-safe"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -1770,7 +1770,7 @@ pkg_update() {
 pkg_install() {
     detect_pkg_manager
     case "$PKG_MANAGER" in
-        apk) quiet_cmd /tmp/routewolf-pkg-install.log apk_run -U add "$@" ;;
+        apk) quiet_cmd /tmp/routewolf-pkg-install.log apk_run add "$@" ;;
         opkg) quiet_cmd /tmp/routewolf-pkg-install.log opkg install "$@" ;;
     esac
 }
@@ -1792,7 +1792,135 @@ pkg_is_installed() {
     esac
 }
 
+
+routewolf_overlay_path() {
+    if [ -d /overlay ]; then printf '%s\n' /overlay; else printf '%s\n' /; fi
+}
+
+routewolf_free_kb() {
+    _rw_mnt="$(routewolf_overlay_path)"
+    df -Pk "$_rw_mnt" 2>/dev/null | awk 'NR==2 {print $4+0}'
+}
+
+routewolf_total_kb() {
+    _rw_mnt="$(routewolf_overlay_path)"
+    df -Pk "$_rw_mnt" 2>/dev/null | awk 'NR==2 {print $2+0}'
+}
+
+routewolf_tmp_free_kb() {
+    df -Pk /tmp 2>/dev/null | awk 'NR==2 {print $4+0}'
+}
+
+routewolf_apk_world_has() {
+    _rw_pkg="$1"
+    [ -f /etc/apk/world ] || return 1
+    grep -Eq "^${_rw_pkg}([<>=~].*)?$" /etc/apk/world 2>/dev/null
+}
+
+routewolf_apk_world_remove() {
+    _rw_pkg="$1"
+    [ -f /etc/apk/world ] || return 0
+    _rw_tmp="/tmp/routewolf-world.$$"
+    cp /etc/apk/world "/tmp/routewolf-world.backup.$$" 2>/dev/null || true
+    grep -Ev "^${_rw_pkg}([<>=~].*)?$" /etc/apk/world > "$_rw_tmp" 2>/dev/null || : > "$_rw_tmp"
+    cat "$_rw_tmp" > /etc/apk/world || { rm -f "$_rw_tmp"; return 1; }
+    rm -f "$_rw_tmp"
+}
+
+routewolf_clean_download_cache() {
+    rm -rf /tmp/amneziawg /tmp/routewolf-awg-bin /tmp/routewolf-awg-customfeeds.list.* \
+        /tmp/awg-openwrt-feed.pem /tmp/awg-openwrt-packages.adb \
+        /tmp/routewolf-install.tar.gz /tmp/routewolf.zip 2>/dev/null || true
+    rm -f /tmp/amneziawg-install.sh /tmp/routewolf-awg-install.log 2>/dev/null || true
+    if [ "${PKG_MANAGER:-}" = "apk" ] || command -v apk >/dev/null 2>&1; then
+        apk cache clean >/dev/null 2>&1 || true
+    fi
+}
+
+routewolf_safe_cleanup() {
+    detect_pkg_manager
+    routewolf_clean_download_cache
+
+    if [ "$PKG_MANAGER" = "apk" ]; then
+        # Older RouteWolf builds added nano as a base component. If its install
+        # failed, nano can remain in /etc/apk/world and every later `apk add`
+        # tries to install it again, filling a small overlay.
+        if routewolf_apk_world_has nano || pkg_is_installed nano; then
+            msgc "$C_YELLOW" \
+                "Removing legacy nano request left by an older RouteWolf installation..." \
+                "Удаление старого запроса nano, оставленного предыдущей версией RouteWolf..."
+            if ! apk del nano >/tmp/routewolf-cleanup.log 2>&1; then
+                routewolf_apk_world_remove nano || return 1
+            fi
+        fi
+
+        # Remove an unregistered file left by an interrupted extraction only.
+        if [ -e /usr/bin/nano ] && ! pkg_is_installed nano; then
+            rm -f /usr/bin/nano 2>/dev/null || true
+        fi
+        apk cache clean >/dev/null 2>&1 || true
+    fi
+
+    sync 2>/dev/null || true
+    return 0
+}
+
+prepare_install_storage() {
+    [ "${ROUTEWOLF_STORAGE_READY:-0}" = "1" ] && return 0
+    detect_pkg_manager
+    routewolf_clean_download_cache
+    _rw_free="$(routewolf_free_kb)"
+    _rw_total="$(routewolf_total_kb)"
+    _rw_tmp="$(routewolf_tmp_free_kb)"
+    [ -n "$_rw_free" ] || _rw_free=0
+    [ -n "$_rw_total" ] || _rw_total=0
+    [ -n "$_rw_tmp" ] || _rw_tmp=0
+
+    _rw_need_offer=0
+    [ "$_rw_free" -lt 3072 ] 2>/dev/null && _rw_need_offer=1
+    if [ "$PKG_MANAGER" = "apk" ] && routewolf_apk_world_has nano; then
+        _rw_need_offer=1
+    fi
+
+    if [ "$_rw_need_offer" = "1" ]; then
+        ui_header "$(prompt "Storage preparation" "Подготовка памяти")"
+        msg "Overlay free: $((_rw_free/1024)) MB; /tmp free: $((_rw_tmp/1024)) MB" \
+            "Свободно в overlay: $((_rw_free/1024)) МБ; свободно в /tmp: $((_rw_tmp/1024)) МБ"
+        msg "Old or interrupted package files may cause the next installation to fill the flash." \
+            "Старые или прерванные установки пакетов могут снова заполнить flash-память."
+        echo "1) $(prompt "Safely clean RouteWolf/package leftovers [default]" "Безопасно очистить остатки RouteWolf/пакетов [по умолчанию]")"
+        echo "2) $(prompt "Continue without cleanup" "Продолжить без очистки")"
+        echo "3) $(prompt "Exit" "Выйти")"
+        ask_same_line "Choice [1]: " "Выбор [1]: " _rw_choice
+        _rw_choice=${_rw_choice:-1}
+        case "$_rw_choice" in
+            1) routewolf_safe_cleanup || return 1 ;;
+            2) : ;;
+            *) return 1 ;;
+        esac
+    fi
+
+    _rw_free="$(routewolf_free_kb)"
+    [ -n "$_rw_free" ] || _rw_free=0
+    if [ "$_rw_free" -lt 1536 ] 2>/dev/null; then
+        msgc "$C_RED" \
+            "Less than 1.5 MB remains in overlay. Installation is stopped before changing the system." \
+            "В overlay осталось меньше 1,5 МБ. Установка остановлена до изменения системы."
+        msg "Use: rw cleanup, remove unused packages, or reinstall a clean OpenWrt image." \
+            "Используйте: rw cleanup, удалите ненужные пакеты или переустановите чистый образ OpenWrt."
+        return 1
+    fi
+
+    msgc "$C_GREEN" \
+        "Storage is ready: $((_rw_free/1024)) MB free in overlay." \
+        "Память подготовлена: в overlay свободно $((_rw_free/1024)) МБ."
+    ROUTEWOLF_STORAGE_READY=1
+    export ROUTEWOLF_STORAGE_READY
+    return 0
+}
+
 check_repo() {
+    prepare_install_storage || return 1
     if ! pkg_update; then
         msgc "$C_RED" "Package repository update failed. Installation cannot safely continue." "Обновление репозитория пакетов не выполнено. Безопасно продолжить установку нельзя."
         msgc "$C_YELLOW" "For OpenWrt 25.12 check: command -v wget; readlink -f $(command -v wget); apk info -e wget-nossl" "Для OpenWrt 25.12 проверьте: command -v wget; readlink -f $(command -v wget); apk info -e wget-nossl"
@@ -2400,30 +2528,30 @@ EOF
 }
 
 add_mark() {
-    # OpenWrt netifd accepts a numeric table ID or a symbolic alias.  Use the
-    # numeric ID in UCI to avoid parser differences between OpenWrt builds.
+    # Policy routing is restored by /usr/sbin/routewolf-route.sh at boot and
+    # on interface hotplug. Do not create a UCI `config rule` here: several
+    # OpenWrt 24/25 builds reject that section with `uci: Invalid argument`.
     grep -qE '^[[:space:]]*99[[:space:]]+vpn([[:space:]]|$)' /etc/iproute2/rt_tables 2>/dev/null ||         echo '99 vpn' >> /etc/iproute2/rt_tables
 
-    # Remove the legacy anonymous rule that produced "uci: Invalid argument"
-    # on some 24.10 builds, then create one deterministic named section.
+    # Remove obsolete UCI rules from older releases so netifd cannot create a
+    # duplicate rule with another priority.
     delete_uci_sections_by_name network rule mark0x1
     uci -q delete network.mark0x1
     uci -q delete network.routewolf_mark
+    uci commit network >/dev/null 2>&1 || true
 
-    printf "\033[32;1mConfigure RouteWolf policy rule\033[0m\n"
-    uci set network.routewolf_mark='rule' || return 1
-    uci set network.routewolf_mark.mark='0x1/0x1' || return 1
-    uci set network.routewolf_mark.priority='100' || return 1
-    uci set network.routewolf_mark.lookup='99' || return 1
-    uci commit network || return 1
+    printf "\033[32;1mConfigure RouteWolf runtime policy rule\033[0m\n"
+    if [ -x /usr/sbin/routewolf-route.sh ]; then
+        /usr/sbin/routewolf-route.sh >/tmp/routewolf-mark.log 2>&1 || {
+            tail -n 20 /tmp/routewolf-mark.log 2>/dev/null || true
+            return 1
+        }
+    else
+        ip rule del fwmark 0x1/0x1 table 99 priority 100 >/dev/null 2>&1 || true
+        ip rule add fwmark 0x1/0x1 table 99 priority 100 >/dev/null 2>&1 || return 1
+    fi
 
-    # Do not report success unless the persistent UCI rule is complete.
-    [ "$(uci -q get network.routewolf_mark)" = 'rule' ] || return 1
-    [ "$(uci -q get network.routewolf_mark.mark)" = '0x1/0x1' ] || return 1
-    [ "$(uci -q get network.routewolf_mark.priority)" = '100' ] || return 1
-    [ "$(uci -q get network.routewolf_mark.lookup)" = '99' ] || return 1
-
-    # Default safety mode is fail-open. Never leave an old blackhole route.
+    ip rule show 2>/dev/null | grep -Eq '^100:.*fwmark 0x1(/0x1)?.*lookup (vpn|99)' || return 1
     ip route del blackhole default table vpn metric 42767 >/dev/null 2>&1 || true
     return 0
 }
@@ -2557,7 +2685,7 @@ add_tunnel() {
     if [ "$TUNNEL" = 'awg' ]; then
         msgc "$C_GREEN" "Configure Amnezia WireGuard" "Настройка Amnezia WireGuard"
 
-        install_awg_packages
+        install_awg_packages || return 1
 
         route_vpn
 
@@ -2930,26 +3058,19 @@ add_dns_resolver() {
 }
 
 add_packages() {
-    for package in curl; do
-        if pkg_is_installed "$package"; then
-            msgc "$C_GREEN" "$package is already installed" "$package уже установлен"
-        else
-            msgc "$C_BLUE" "Installing $package..." "Установка $package..."
-            pkg_install "$package" || {
-                msgc "$C_RED" "Failed to install $package. Check repositories, DNS, router date/time and free space." "Не удалось установить $package. Проверьте репозитории, DNS, дату/время роутера и свободное место."
-                return 1
-            }
+    # RouteWolf no longer installs editors or download utilities as mandatory
+    # components. Normal OpenWrt images already provide the shell tools needed
+    # by the installer, and extra packages can exhaust a 16 MB flash.
+    prepare_install_storage || return 1
 
-            if "$package" --version >/dev/null 2>&1; then
-                msgc "$C_GREEN" "$package was successfully installed and is available" "$package успешно установлен и доступен"
-            else
-                msgc "$C_RED" "Error: $package was installed but cannot be started" "Ошибка: $package установлен, но не запускается"
-                return 1
-            fi
-        fi
-    done
+    if [ -x /bin/uclient-fetch ] || command -v uclient-fetch >/dev/null 2>&1 ||        command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+        msgc "$C_GREEN"             "No additional base packages are required."             "Дополнительные базовые пакеты не требуются."
+        return 0
+    fi
+
+    msgc "$C_RED"         "No downloader is available. A standard OpenWrt uclient-fetch installation is required."         "Не найден загрузчик. Требуется штатный uclient-fetch из OpenWrt."
+    return 1
 }
-
 
 
 ensure_lan_dns_redirect() {
@@ -2992,7 +3113,7 @@ section() { printf "\n%b=== %s ===%b\n" "$BLUE" "$1" "$RESET"; }
 [ -f /etc/routewolf/user.conf ] && . /etc/routewolf/user.conf
 
 section "RouteWolf diagnostics"
-echo "Version: v43-dual-awg-packages"
+echo "Version: v44-low-flash-safe"
 echo "Date: $(date 2>/dev/null)"
 echo "Model: $(ubus call system board 2>/dev/null | jsonfilter -e '@.model' 2>/dev/null || cat /tmp/sysinfo/model 2>/dev/null)"
 echo "OpenWrt: $(ubus call system board 2>/dev/null | jsonfilter -e '@.release.description' 2>/dev/null)"
@@ -3088,10 +3209,10 @@ if dnsmasq --test >/tmp/routewolf-dnsmasq-test.log 2>&1; then ok "dnsmasq syntax
 uci show dhcp 2>/dev/null | grep -E "dnsmasq.d|filter_aaaa" || true
 
 section "Policy routing"
-if [ "$(uci -q get network.routewolf_mark 2>/dev/null)" = "rule" ] &&    [ "$(uci -q get network.routewolf_mark.mark 2>/dev/null)" = "0x1/0x1" ] &&    [ "$(uci -q get network.routewolf_mark.priority 2>/dev/null)" = "100" ] &&    [ "$(uci -q get network.routewolf_mark.lookup 2>/dev/null)" = "99" ]; then
-    ok "Persistent UCI rule network.routewolf_mark is valid"
+if [ -x /etc/init.d/routewolf-route ] && [ -x /usr/sbin/routewolf-route.sh ]; then
+    ok "Policy rule persistence is provided by RouteWolf init/hotplug"
 else
-    bad "Persistent UCI policy rule is missing or invalid; run: rw repair"
+    bad "RouteWolf route restore service is missing; run: rw repair"
 fi
 ip rule show 2>/dev/null | grep -Eq '^100:.*fwmark 0x1(/0x1)?.*lookup (vpn|99)' &&     ok "Runtime fwmark rule is present at priority 100" || bad "Runtime fwmark rule is missing or has a stale priority"
 ip rule show 2>/dev/null | grep -E 'fwmark 0x1|lookup vpn' || true
@@ -3543,21 +3664,20 @@ ovpn_gateway() {
 
 ensure_policy_rule_config() {
     grep -qE '^[[:space:]]*99[[:space:]]+vpn([[:space:]]|$)' /etc/iproute2/rt_tables 2>/dev/null || echo '99 vpn' >> /etc/iproute2/rt_tables
+    # Remove legacy UCI rules. The init/hotplug helper owns persistence.
     while true; do
         idx="$(uci show network 2>/dev/null | sed -n "s/^network\.@rule\[\([0-9]*\)\]\.name='mark0x1'.*/\1/p" | head -n 1)"
         [ -n "$idx" ] || break
         uci -q delete "network.@rule[$idx]" || break
     done
     uci -q delete network.mark0x1
-    uci set network.routewolf_mark='rule' || return 1
-    uci set network.routewolf_mark.mark='0x1/0x1' || return 1
-    uci set network.routewolf_mark.priority='100' || return 1
-    uci set network.routewolf_mark.lookup='99' || return 1
-    uci commit network || return 1
+    uci -q delete network.routewolf_mark
+    uci commit network >/dev/null 2>&1 || true
+    return 0
 }
 
 repair_route() {
-    ensure_policy_rule_config || { echo "Failed to repair persistent RouteWolf policy rule"; exit 1; }
+    ensure_policy_rule_config || { echo "Failed to prepare RouteWolf policy routing"; exit 1; }
     [ ! -f "$CONF" ] && [ -f /etc/domain-routing-route.conf ] && { mkdir -p /etc/routewolf; cp /etc/domain-routing-route.conf "$CONF" 2>/dev/null || true; }
     [ -f "$CONF" ] && . "$CONF"
     dev="${VPN_ROUTE_DEV:-}"
@@ -3721,6 +3841,30 @@ singbox_status() {
     echo "=== table vpn ==="; ip route show table vpn 2>/dev/null || true
 }
 
+
+cleanup_storage() {
+    echo "=== RouteWolf safe cleanup ==="
+    rm -rf /tmp/amneziawg /tmp/routewolf-awg-bin /tmp/routewolf-apk-bin         /tmp/routewolf-awg-customfeeds.list.* 2>/dev/null || true
+    rm -f /tmp/amneziawg-install.sh /tmp/awg-openwrt-feed.pem         /tmp/awg-openwrt-packages.adb /tmp/routewolf-awg-install.log 2>/dev/null || true
+
+    if command -v apk >/dev/null 2>&1; then
+        if [ -f /etc/apk/world ] && grep -Eq '^nano([<>=~].*)?$' /etc/apk/world 2>/dev/null; then
+            echo "Removing legacy nano request from APK world..."
+            if ! apk del nano >/tmp/routewolf-cleanup.log 2>&1; then
+                tmp="/tmp/routewolf-world.$$"
+                grep -Ev '^nano([<>=~].*)?$' /etc/apk/world > "$tmp" 2>/dev/null || : > "$tmp"
+                cat "$tmp" > /etc/apk/world && rm -f "$tmp"
+            fi
+        fi
+        if [ -e /usr/bin/nano ] && ! apk info -e nano >/dev/null 2>&1; then
+            rm -f /usr/bin/nano 2>/dev/null || true
+        fi
+        apk cache clean >/dev/null 2>&1 || true
+    fi
+    sync 2>/dev/null || true
+    df -h /overlay /tmp 2>/dev/null || df -h / /tmp 2>/dev/null || true
+}
+
 case "$1" in
     help|-h|--help|"")
         cat <<'HELP'
@@ -3730,6 +3874,7 @@ rw commands:
   rw load            show router load/resources
   rw lists           refresh GitHub lists + restart firewall/dnsmasq
   rw repair          repair policy route/table vpn
+  rw cleanup         clean interrupted RouteWolf/APK temporary files
   rw update          update project from GitHub
   rw dco status      show OpenVPN DCO state
   rw dco off         disable OpenVPN DCO and restart OpenVPN
@@ -3767,6 +3912,7 @@ HELP
         wc -l /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst 2>/dev/null || true
     ;;
     repair|route) repair_route ;;
+    cleanup) cleanup_storage ;;
     update)
         /usr/sbin/routewolf-update.sh
     ;;
@@ -4452,7 +4598,7 @@ add_internal_wg() {
         PROTO="amneziawg"
         ZONE_NAME="awg_internal"
 
-        install_awg_packages
+        install_awg_packages || return 1
     fi
 
     ask_line "Enter the private key (from [Interface]):" "Введите PrivateKey (из [Interface]):" WG_PRIVATE_KEY_INT
@@ -4672,6 +4818,7 @@ install_awg_packages() {
     }
 
     install_awg_with_apk_feed() {
+        prepare_install_storage || return 1
         AWG_OWRT_VERSION="$(awg_openwrt_version)"
         AWG_OWRT_TARGET="$(awg_openwrt_target)"
 
@@ -4747,17 +4894,54 @@ install_awg_packages() {
             return 1
         fi
 
-        if ! apk_run add amneziawg-tools kmod-amneziawg luci-proto-amneziawg >>"$AWG_LOG" 2>&1; then
-            awg_restore_apk_repo
-            msgc "$C_RED" \
-                "Installation of AmneziaWG APK packages failed." \
-                "Установка APK-пакетов AmneziaWG завершилась ошибкой."
-            tail -n 30 "$AWG_LOG" 2>/dev/null || true
-            return 1
-        fi
+        # Install the required packages one by one. This keeps each transaction
+        # small and avoids a large temporary extraction on 16 MB devices.
+        # A stale nano entry from an older failed RouteWolf run is removed by
+        # prepare_install_storage before the first APK transaction.
+        for AWG_PKG in kmod-amneziawg amneziawg-tools luci-proto-amneziawg; do
+            if pkg_is_installed "$AWG_PKG"; then
+                msgc "$C_GREEN" "$AWG_PKG is already installed" "$AWG_PKG уже установлен"
+                continue
+            fi
 
-        if is_ru; then
+            AWG_FREE_KB="$(routewolf_free_kb)"
+            [ -n "$AWG_FREE_KB" ] || AWG_FREE_KB=0
+            if [ "$AWG_FREE_KB" -lt 1024 ] 2>/dev/null; then
+                awg_restore_apk_repo
+                msgc "$C_RED" \
+                    "Less than 1 MB remains before installing $AWG_PKG. Installation stopped safely." \
+                    "Перед установкой $AWG_PKG осталось меньше 1 МБ. Установка безопасно остановлена."
+                return 1
+            fi
+
+            msgc "$C_BLUE" "Installing $AWG_PKG..." "Установка $AWG_PKG..."
+            if ! apk_run add "$AWG_PKG" >>"$AWG_LOG" 2>&1; then
+                awg_restore_apk_repo
+                msgc "$C_RED" \
+                    "Installation of $AWG_PKG failed." \
+                    "Установка $AWG_PKG завершилась ошибкой."
+                tail -n 30 "$AWG_LOG" 2>/dev/null || true
+                msg \
+                    "Choose the safe cleanup option on the next run if the error mentions no space or an old package such as nano." \
+                    "При следующем запуске выберите безопасную очистку, если ошибка связана с нехваткой места или старым пакетом nano."
+                return 1
+            fi
+            apk_run cache clean >/dev/null 2>&1 || true
+        done
+
+        # Translation is optional and is skipped on small flash. The RouteWolf
+        # installer itself remains fully translated regardless of this package.
+        AWG_TOTAL_KB="$(routewolf_total_kb)"
+        AWG_FREE_KB="$(routewolf_free_kb)"
+        [ -n "$AWG_TOTAL_KB" ] || AWG_TOTAL_KB=0
+        [ -n "$AWG_FREE_KB" ] || AWG_FREE_KB=0
+        if is_ru && [ "$AWG_TOTAL_KB" -gt 32768 ] 2>/dev/null && [ "$AWG_FREE_KB" -gt 4096 ] 2>/dev/null; then
             apk_run add luci-i18n-amneziawg-ru >>"$AWG_LOG" 2>&1 || true
+            apk_run cache clean >/dev/null 2>&1 || true
+        elif is_ru; then
+            msgc "$C_YELLOW" \
+                "The optional LuCI Russian translation was skipped to preserve flash space." \
+                "Необязательный русский перевод LuCI пропущен для экономии flash-памяти."
         fi
 
         if ! awg_verify_install; then
@@ -4940,12 +5124,6 @@ validate_routewolf_installation() {
         tail -n 20 /tmp/routewolf-final-route.log 2>/dev/null || true
         return 1
     }
-
-    if [ "$(uci -q get network.routewolf_mark 2>/dev/null)" != "rule" ] ||        [ "$(uci -q get network.routewolf_mark.mark 2>/dev/null)" != "0x1/0x1" ] ||        [ "$(uci -q get network.routewolf_mark.priority 2>/dev/null)" != "100" ] ||        [ "$(uci -q get network.routewolf_mark.lookup 2>/dev/null)" != "99" ]; then
-        msgc "$C_RED" "Persistent policy rule validation failed" "Не прошла проверка постоянного правила маршрутизации"
-        uci show network.routewolf_mark 2>/dev/null || true
-        return 1
-    fi
 
     if ! ip rule show 2>/dev/null | grep -Eq '^100:.*fwmark 0x1(/0x1)?.*lookup (vpn|99)'; then
         msgc "$C_RED" "Runtime fwmark rule is missing" "В работающей системе отсутствует правило fwmark"

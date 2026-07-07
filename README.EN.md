@@ -64,36 +64,18 @@ For weak routers, use the `lite` profile and WireGuard/AmneziaWG. Sing-box check
 
 ## Install from GitHub
 
-Universal command: it tries native `/bin/uclient-fetch`, then `curl`, then `wget`:
+Short command for standard OpenWrt:
 
 ```sh
-URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh'
-OUT='/tmp/routewolf-install.sh'
-rm -f "$OUT"
-if [ -x /bin/uclient-fetch ]; then
-    /bin/uclient-fetch -O "$OUT" "$URL"
-elif command -v curl >/dev/null 2>&1; then
-    curl -kfsSL "$URL" -o "$OUT"
-else
-    wget -O "$OUT" "$URL"
-fi && sh "$OUT"
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
 ```
 
-The usual `wget ... | sh` command cannot work when the local `wget` binary itself was built without HTTPS support. That is a downloader limitation, not a RouteWolf installer error.
+It also works when an installed `wget` binary has no HTTPS support. The bootstrap itself can fall back between `uclient-fetch`, `curl`, and a working `wget`.
 
 ## Update
 
 ```sh
-URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh'
-OUT='/tmp/routewolf-update.sh'
-rm -f "$OUT"
-if [ -x /bin/uclient-fetch ]; then
-    /bin/uclient-fetch -O "$OUT" "$URL"
-elif command -v curl >/dev/null 2>&1; then
-    curl -kfsSL "$URL" -o "$OUT"
-else
-    wget -O "$OUT" "$URL"
-fi && sh "$OUT"
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
 ```
 
 The update keeps the current tunnel configuration, refreshes lists and restores policy routing.
@@ -101,32 +83,33 @@ The update keeps the current tunnel configuration, refreshes lists and restores 
 ## Uninstall
 
 ```sh
-URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh'
-OUT='/tmp/routewolf-uninstall.sh'
-rm -f "$OUT"
-if [ -x /bin/uclient-fetch ]; then
-    /bin/uclient-fetch -O "$OUT" "$URL"
-elif command -v curl >/dev/null 2>&1; then
-    curl -kfsSL "$URL" -o "$OUT"
-else
-    wget -O "$OUT" "$URL"
-fi && sh "$OUT"
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
 ```
 
 Full project configuration cleanup:
 
 ```sh
-URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh'
-OUT='/tmp/routewolf-uninstall.sh'
-rm -f "$OUT"
-if [ -x /bin/uclient-fetch ]; then
-    /bin/uclient-fetch -O "$OUT" "$URL"
-elif command -v curl >/dev/null 2>&1; then
-    curl -kfsSL "$URL" -o "$OUT"
-else
-    wget -O "$OUT" "$URL"
-fi && sh "$OUT" --purge
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
 ```
+
+
+## Safe installation on 16 MB flash
+
+RouteWolf no longer installs `nano`, `curl`, `terminfo`, or `libncurses` as mandatory components. AmneziaWG APK packages are installed one at a time and the cache is cleaned after each transaction. If an older failed run left `nano` in `/etc/apk/world`, the installer offers a safe cleanup before changing the system.
+
+Manual cleanup after RouteWolf is installed:
+
+```sh
+rw cleanup
+```
+
+If a previous installation stopped before the `rw` command was created:
+
+```sh
+/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/cleanup.sh | sh
+```
+
+If less than 1.5 MB remains in `overlay` after cleanup, setup stops before configuring the tunnel.
 
 ## Manual ZIP install
 
@@ -137,7 +120,7 @@ cd /tmp
 unzip -o RouteWolf.zip -d /tmp
 mv /tmp/RouteWolf-main /tmp/routewolf 2>/dev/null || mv /tmp/routewolf-main /tmp/routewolf 2>/dev/null || true
 cd /tmp/routewolf
-chmod +x install.sh update.sh uninstall.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh
+chmod +x install.sh update.sh uninstall.sh cleanup.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh
 sh ./install.sh
 ```
 

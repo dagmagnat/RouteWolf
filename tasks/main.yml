@@ -46,21 +46,6 @@
         - sing-box
     when: tunnel == "singbox" and ansible_distribution_major_version >= "23"
 
-  - name: install curl
-    opkg:
-      name: "{{ item }}"
-      state: present
-    loop:
-        - curl
-
-  - name: install nano
-    opkg:
-      name: "{{ item }}"
-      state: present
-    loop:
-        - nano
-    when: nano
-
   - name: install ipset
     opkg:
       name: ipset
@@ -68,7 +53,7 @@
     when: ansible_distribution_major_version < "22"
 
   - name: install dnsmasq-full (23)
-    shell: opkg update && cd /tmp/ && opkg download dnsmasq-full && opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/ && [ -f /etc/config/dhcp-opkg ] && cp etc/config/dhcp /etc/config/dhcp-old && mv /etc/config/dhcp-opkg /etc/config/dhcp
+    shell: opkg update && cd /tmp/ && opkg download dnsmasq-full && opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/ && { [ ! -f /etc/config/dhcp-opkg ] || cp /etc/config/dhcp /etc/config/dhcp-old; }
     when: ansible_distribution_major_version >= "23" and list_domains and not dnsmasqfull_version.stdout
     ignore_errors: true
 
@@ -674,7 +659,7 @@
     notify:
       - Restart firewall
 
-    - name: uci commit dhcp
+  - name: uci commit dhcp
     uci:
       command: commit
       config: dhcp
