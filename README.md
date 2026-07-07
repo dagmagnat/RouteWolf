@@ -6,7 +6,7 @@
 
 ## Что поддерживается
 
-Система: OpenWrt 23.05/24.10, экспериментально OpenWrt/X-WRT/ImmortalWrt 25.x и 26.x при наличии `uci`, `netifd`, `procd`, `fw4/nftables`, `opkg` или `apk`.
+Система: OpenWrt 23.05/24.10 с `opkg` и OpenWrt 25.12+ с `apk`; также совместимые X-WRT/ImmortalWrt при наличии `uci`, `netifd`, `procd` и `fw4/nftables`.
 
 - WireGuard
 - AmneziaWG / Amnezia WireGuard
@@ -64,38 +64,68 @@ lists/profiles/<name>/ipv6.lst
 
 ## Установка с GitHub
 
-```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
-```
-
-Если в X-WRT/ImmortalWrt `wget` не поддерживает HTTPS, сначала поставьте `curl` через `apk`:
+Универсальная команда: сначала используется штатный `/bin/uclient-fetch`, затем `curl`, затем `wget`:
 
 ```sh
-apk update
-apk add curl ca-certificates ca-bundle unzip
-curl -kL https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
+URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh'
+OUT='/tmp/routewolf-install.sh'
+rm -f "$OUT"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch -O "$OUT" "$URL"
+elif command -v curl >/dev/null 2>&1; then
+    curl -kfsSL "$URL" -o "$OUT"
+else
+    wget -O "$OUT" "$URL"
+fi && sh "$OUT"
 ```
 
-Если `curl` уже есть, достаточно последней строки.
+Обычная команда `wget ... | sh` не может работать на прошивке, где сам `wget` собран без HTTPS. Это ограничение локального загрузчика, а не установщика RouteWolf.
 
 ## Обновление
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
+URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh'
+OUT='/tmp/routewolf-update.sh'
+rm -f "$OUT"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch -O "$OUT" "$URL"
+elif command -v curl >/dev/null 2>&1; then
+    curl -kfsSL "$URL" -o "$OUT"
+else
+    wget -O "$OUT" "$URL"
+fi && sh "$OUT"
 ```
 
-Обновление не только заменяет скрипты проекта, но и сразу скачивает свежие списки из GitHub, перезапускает `dnsmasq`/`firewall` и восстанавливает маршрут `table vpn`.
+Обновление сохраняет текущую конфигурацию туннеля, обновляет списки и восстанавливает маршрутизацию.
 
 ## Удаление
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
+URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh'
+OUT='/tmp/routewolf-uninstall.sh'
+rm -f "$OUT"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch -O "$OUT" "$URL"
+elif command -v curl >/dev/null 2>&1; then
+    curl -kfsSL "$URL" -o "$OUT"
+else
+    wget -O "$OUT" "$URL"
+fi && sh "$OUT"
 ```
 
 Полная очистка конфигов проекта:
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
+URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh'
+OUT='/tmp/routewolf-uninstall.sh'
+rm -f "$OUT"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch -O "$OUT" "$URL"
+elif command -v curl >/dev/null 2>&1; then
+    curl -kfsSL "$URL" -o "$OUT"
+else
+    wget -O "$OUT" "$URL"
+fi && sh "$OUT" --purge
 ```
 
 ## Ручная установка ZIP
@@ -149,7 +179,7 @@ rw openvpn restart
 
 ## Sing-box: обычная ссылка и подписка
 
-RouteWolf v35 поддерживает два режима Sing-box:
+RouteWolf поддерживает два режима Sing-box:
 
 ```text
 1. Обычная VLESS Reality ссылка — статичная, параметры не обновляются сами.

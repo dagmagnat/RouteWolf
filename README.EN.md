@@ -64,38 +64,68 @@ For weak routers, use the `lite` profile and WireGuard/AmneziaWG. Sing-box check
 
 ## Install from GitHub
 
-```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
-```
-
-If `wget` has no HTTPS support on X-WRT/ImmortalWrt, install `curl` with `apk` first:
+Universal command: it tries native `/bin/uclient-fetch`, then `curl`, then `wget`:
 
 ```sh
-apk update
-apk add curl ca-certificates ca-bundle unzip
-curl -kL https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
+URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh'
+OUT='/tmp/routewolf-install.sh'
+rm -f "$OUT"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch -O "$OUT" "$URL"
+elif command -v curl >/dev/null 2>&1; then
+    curl -kfsSL "$URL" -o "$OUT"
+else
+    wget -O "$OUT" "$URL"
+fi && sh "$OUT"
 ```
 
-If `curl` is already installed, only the last line is needed.
+The usual `wget ... | sh` command cannot work when the local `wget` binary itself was built without HTTPS support. That is a downloader limitation, not a RouteWolf installer error.
 
 ## Update
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
+URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh'
+OUT='/tmp/routewolf-update.sh'
+rm -f "$OUT"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch -O "$OUT" "$URL"
+elif command -v curl >/dev/null 2>&1; then
+    curl -kfsSL "$URL" -o "$OUT"
+else
+    wget -O "$OUT" "$URL"
+fi && sh "$OUT"
 ```
 
-The update command updates project scripts, downloads fresh GitHub lists, restarts `dnsmasq`/`firewall`, and restores the `table vpn` route.
+The update keeps the current tunnel configuration, refreshes lists and restores policy routing.
 
 ## Uninstall
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
+URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh'
+OUT='/tmp/routewolf-uninstall.sh'
+rm -f "$OUT"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch -O "$OUT" "$URL"
+elif command -v curl >/dev/null 2>&1; then
+    curl -kfsSL "$URL" -o "$OUT"
+else
+    wget -O "$OUT" "$URL"
+fi && sh "$OUT"
 ```
 
-Full project config cleanup:
+Full project configuration cleanup:
 
 ```sh
-wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
+URL='https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh'
+OUT='/tmp/routewolf-uninstall.sh'
+rm -f "$OUT"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch -O "$OUT" "$URL"
+elif command -v curl >/dev/null 2>&1; then
+    curl -kfsSL "$URL" -o "$OUT"
+else
+    wget -O "$OUT" "$URL"
+fi && sh "$OUT" --purge
 ```
 
 ## Manual ZIP install

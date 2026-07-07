@@ -1,106 +1,94 @@
 #!/bin/sh
-# RouteWolf uninstall/bootstrapper. Supports opkg and apk-based OpenWrt. Uses codeload.github.com directly to avoid GitHub redirect issues on some routers.
-# Usage:
-#   wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
+# RouteWolf universal bootstrapper for OpenWrt.
+# It deliberately prefers /bin/uclient-fetch over a package named wget,
+# because wget-nossl on some apk-based builds cannot download HTTPS.
 
+ACTION="uninstall"
 REPO="dagmagnat/RouteWolf"
 BRANCH="${ROUTEWOLF_BRANCH:-main}"
 TMP_DIR="/tmp/routewolf-uninstall"
-ZIP_FILE="/tmp/routewolf-uninstall.zip"
-ZIP_URL="https://codeload.github.com/${REPO}/zip/refs/heads/${BRANCH}"
+[ "$ACTION" = "install" ] && TMP_DIR="/tmp/routewolf"
+ARCHIVE_FILE="/tmp/routewolf-uninstall.tar.gz"
+[ "$ACTION" = "install" ] && ARCHIVE_FILE="/tmp/routewolf.tar.gz"
+ARCHIVE_URL="https://codeload.github.com/${REPO}/tar.gz/refs/heads/${BRANCH}"
 
 SELF_NAME="$(basename "$0" 2>/dev/null)"
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 
+# Local mode: run directly from an unpacked repository without downloading anything.
 if [ "$SELF_NAME" = "uninstall.sh" ] && [ -f "$DIR/routewolf-uninstall.sh" ]; then
     chmod +x "$DIR/routewolf-uninstall.sh" 2>/dev/null || true
     exec sh "$DIR/routewolf-uninstall.sh" "$@"
 fi
 
-echo "RouteWolf: downloading uninstaller ${REPO}@${BRANCH}..."
+fetch_to_file() {
+    _url="$1"
+    _out="$2"
+    rm -f "$_out"
 
-have_downloader() {
-    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || command -v uclient-fetch >/dev/null 2>&1
-}
-
-wget_has_no_check() {
-    wget --help 2>&1 | grep -q -- '--no-check-certificate'
-}
-
-download_to_file() {
-    url="$1"
-    out="$2"
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -L -k --connect-timeout 15 --max-time 120 -o "$out" "$url" 2>/dev/null && return 0
-    fi
-
-    if command -v wget >/dev/null 2>&1; then
-        if wget_has_no_check; then
-            wget --no-check-certificate -O "$out" "$url" && return 0
-        else
-            wget -O "$out" "$url" && return 0
-        fi
+    # OpenWrt's native HTTPS client. Calling the absolute path bypasses
+    # a broken /usr/bin/wget alternative such as wget-nossl.
+    if [ -x /bin/uclient-fetch ]; then
+        /bin/uclient-fetch --no-check-certificate -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
+        rm -f "$_out"
+        /bin/uclient-fetch -O "$_out" "$_url" && [ -s "$_out" ] && return 0
+        rm -f "$_out"
     fi
 
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$out" "$url" 2>/dev/null && return 0
-        uclient-fetch -O "$out" "$url" && return 0
+        uclient-fetch --no-check-certificate -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
+        rm -f "$_out"
+        uclient-fetch -O "$_out" "$_url" && [ -s "$_out" ] && return 0
+        rm -f "$_out"
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$_url" -o "$_out" && [ -s "$_out" ] && return 0
+        rm -f "$_out"
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        if wget --help 2>&1 | grep -q -- '--no-check-certificate'; then
+            wget --no-check-certificate -O "$_out" "$_url" && [ -s "$_out" ] && return 0
+        else
+            wget -O "$_out" "$_url" && [ -s "$_out" ] && return 0
+        fi
+        rm -f "$_out"
     fi
 
     return 1
 }
 
-install_deps() {
-    if command -v unzip >/dev/null 2>&1 && have_downloader; then
-        return 0
+extract_archive() {
+    _archive="$1"
+    if command -v tar >/dev/null 2>&1; then
+        tar -xzf "$_archive" -C /tmp >/dev/null 2>&1 && return 0
     fi
-
-    if command -v apk >/dev/null 2>&1; then
-        # OpenWrt 25.12 apk invokes a command named wget. A separately installed
-        # wget/wget-nossl may shadow uclient-fetch and break every HTTPS feed.
-        # Use a private, temporary wget shim and never install the generic wget package.
-        APK_BOOT_PATH="$PATH"
-        if [ -x /bin/uclient-fetch ]; then
-            mkdir -p /tmp/routewolf-apk-bin
-            ln -sf /bin/uclient-fetch /tmp/routewolf-apk-bin/wget
-            APK_BOOT_PATH="/tmp/routewolf-apk-bin:$PATH"
-        fi
-        env PATH="$APK_BOOT_PATH" apk update
-        env PATH="$APK_BOOT_PATH" apk -U add unzip curl ca-certificates ca-bundle libustream-mbedtls 2>/dev/null || \
-        env PATH="$APK_BOOT_PATH" apk -U add unzip curl ca-certificates 2>/dev/null || \
-        env PATH="$APK_BOOT_PATH" apk -U add unzip ca-certificates 2>/dev/null || true
-    elif command -v opkg >/dev/null 2>&1; then
-        opkg update
-        opkg install unzip wget curl ca-certificates ca-bundle libustream-mbedtls 2>/dev/null ||         opkg install unzip wget curl ca-certificates 2>/dev/null ||         opkg install unzip wget ca-certificates 2>/dev/null || true
-    else
-        echo "Error: neither apk nor opkg was found on this OpenWrt system."
-        exit 1
+    if command -v busybox >/dev/null 2>&1; then
+        busybox tar -xzf "$_archive" -C /tmp >/dev/null 2>&1 && return 0
     fi
-
-    if ! command -v unzip >/dev/null 2>&1; then
-        echo "Error: unzip is not installed."
-        exit 1
+    if command -v gzip >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
+        gzip -dc "$_archive" | tar -xf - -C /tmp >/dev/null 2>&1 && return 0
     fi
-    if ! have_downloader; then
-        echo "Error: no downloader found: need curl, wget or uclient-fetch."
-        exit 1
-    fi
+    return 1
 }
 
-install_deps
+echo "RouteWolf: downloading ${REPO}@${BRANCH}..."
 
-rm -rf "$TMP_DIR" "$ZIP_FILE"     "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf-${BRANCH}"     "/tmp/RouteWolf-main" "/tmp/routewolf-main"     "/tmp/routing-openwrt-${BRANCH}" "/tmp/routing-openwrt-main"
+rm -rf "$TMP_DIR" "$ARCHIVE_FILE"     "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf-${BRANCH}"     "/tmp/RouteWolf-main" "/tmp/routewolf-main"     "/tmp/routing-openwrt-${BRANCH}" "/tmp/routing-openwrt-main"
 
-if ! download_to_file "$ZIP_URL" "$ZIP_FILE"; then
-    echo "Error: failed to download RouteWolf archive from GitHub."
-    echo "Check internet, DNS, date/time and GitHub access on the router."
+if ! fetch_to_file "$ARCHIVE_URL" "$ARCHIVE_FILE"; then
+    echo "Error: no working HTTPS downloader could fetch RouteWolf."
+    echo "Try the absolute OpenWrt client:"
+    echo "  /bin/uclient-fetch -O /tmp/routewolf-uninstall.sh https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh"
+    echo "  sh /tmp/routewolf-uninstall.sh"
+    echo "If /bin/uclient-fetch is missing, install/use curl or upload the ZIP manually."
     exit 1
 fi
 
-if ! unzip -o "$ZIP_FILE" -d /tmp >/dev/null; then
-    echo "Error: failed to unpack RouteWolf archive."
-    echo "Check free RAM/storage in /tmp and that unzip is installed."
+if ! extract_archive "$ARCHIVE_FILE"; then
+    echo "Error: failed to unpack the RouteWolf tar.gz archive."
+    echo "BusyBox tar with gzip support is required; it is present in normal OpenWrt images."
     exit 1
 fi
 
@@ -117,13 +105,11 @@ elif [ -d "/tmp/routing-openwrt-${BRANCH}" ]; then
 elif [ -d "/tmp/routing-openwrt-main" ]; then
     mv "/tmp/routing-openwrt-main" "$TMP_DIR"
 else
-    echo "Error: RouteWolf archive extracted, but source directory was not found."
-    echo "Expected one of: RouteWolf-${BRANCH}, routewolf-${BRANCH}, RouteWolf-main, routewolf-main."
-    echo "Found matching entries in /tmp:"
+    echo "Error: archive was unpacked, but the RouteWolf source directory was not found."
     ls -la /tmp | grep -i 'route\|wolf' || true
     exit 1
 fi
 
 cd "$TMP_DIR" || exit 1
-chmod +x routewolf-uninstall.sh 2>/dev/null || true
+chmod +x install.sh update.sh uninstall.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh 2>/dev/null || true
 exec sh ./routewolf-uninstall.sh "$@"

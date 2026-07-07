@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v41-apk-fetch-fix"
+PROJECT_VERSION="v42-universal-https-bootstrap"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -28,29 +28,41 @@ FORCE_REINSTALL="0"
 [ "$1" = "--reinstall" ] && FORCE_REINSTALL="1"
 
 # Universal downloader for OpenWrt/X-WRT/ImmortalWrt builds.
-# Some builds ship wget without --no-check-certificate, so detect tools/options first.
+# Prefer the native client by absolute path so wget-nossl cannot shadow it.
 wget_has_no_check() { wget --help 2>&1 | grep -q -- '--no-check-certificate'; }
 
 download_url_to_file() {
-    _url="$1"
-    _out="$2"
-    [ -n "$_url" ] && [ -n "$_out" ] || return 1
+    url="$1"
+    out="$2"
+    [ -n "$url" ] && [ -n "$out" ] || return 1
+    rm -f "$out"
+
+    if [ -x /bin/uclient-fetch ]; then
+        /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
+    fi
+
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
+    fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -L -k -f --connect-timeout 15 --max-time 120 --retry 2 "$_url" -o "$_out" 2>/dev/null && return 0
+        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
+        rm -f "$out"
     fi
 
     if command -v wget >/dev/null 2>&1; then
         if wget_has_no_check; then
-            wget --no-check-certificate -O "$_out" "$_url" && return 0
+            wget --no-check-certificate -O "$out" "$url" && [ -s "$out" ] && return 0
         else
-            wget -O "$_out" "$_url" && return 0
+            wget -O "$out" "$url" && [ -s "$out" ] && return 0
         fi
-    fi
-
-    if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$_out" "$_url" 2>/dev/null && return 0
-        uclient-fetch -O "$_out" "$_url" && return 0
+        rm -f "$out"
     fi
 
     return 1
@@ -2980,7 +2992,7 @@ section() { printf "\n%b=== %s ===%b\n" "$BLUE" "$1" "$RESET"; }
 [ -f /etc/routewolf/user.conf ] && . /etc/routewolf/user.conf
 
 section "RouteWolf diagnostics"
-echo "Version: v41-apk-fetch-fix"
+echo "Version: v42-universal-https-bootstrap"
 echo "Date: $(date 2>/dev/null)"
 echo "Model: $(ubus call system board 2>/dev/null | jsonfilter -e '@.model' 2>/dev/null || cat /tmp/sysinfo/model 2>/dev/null)"
 echo "OpenWrt: $(ubus call system board 2>/dev/null | jsonfilter -e '@.release.description' 2>/dev/null)"
@@ -3176,17 +3188,61 @@ run_diagnostics_now() {
 install_management_commands() {
     mkdir -p /usr/sbin
     install_diagnostics_script
+
+    cat << 'EOF' > /usr/sbin/routewolf-fetch.sh
+#!/bin/sh
+# Download one HTTPS URL to a file on old and new OpenWrt builds.
+url="$1"
+out="$2"
+[ -n "$url" ] && [ -n "$out" ] || { echo "Usage: $0 URL OUTPUT" >&2; exit 2; }
+rm -f "$out"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && exit 0
+    rm -f "$out"
+    /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && exit 0
+    rm -f "$out"
+fi
+if command -v uclient-fetch >/dev/null 2>&1; then
+    uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && exit 0
+    rm -f "$out"
+    uclient-fetch -O "$out" "$url" && [ -s "$out" ] && exit 0
+    rm -f "$out"
+fi
+if command -v curl >/dev/null 2>&1; then
+    curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" && [ -s "$out" ] && exit 0
+    rm -f "$out"
+fi
+if command -v wget >/dev/null 2>&1; then
+    if wget --help 2>&1 | grep -q -- '--no-check-certificate'; then
+        wget --no-check-certificate -O "$out" "$url"
+    else
+        wget -O "$out" "$url"
+    fi
+    [ -s "$out" ] && exit 0
+fi
+rm -f "$out"
+echo "No working HTTPS downloader: tried /bin/uclient-fetch, uclient-fetch, curl and wget." >&2
+exit 1
+EOF
+    chmod +x /usr/sbin/routewolf-fetch.sh
+
     cat << 'EOF' > /usr/sbin/routewolf-update.sh
 #!/bin/sh
 # Update RouteWolf from GitHub without deleting the current tunnel config.
-cd /tmp && wget -O /tmp/routewolf-update.sh https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh && sh /tmp/routewolf-update.sh
+set -e
+cd /tmp
+/usr/sbin/routewolf-fetch.sh https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh /tmp/routewolf-update.sh
+exec sh /tmp/routewolf-update.sh
 EOF
     chmod +x /usr/sbin/routewolf-update.sh
 
     cat << 'EOF' > /usr/sbin/routewolf-uninstall.sh
 #!/bin/sh
 # Remove RouteWolf rules, lists, cron and helper scripts.
-cd /tmp && wget -O /tmp/routewolf-uninstall.sh https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh && sh /tmp/routewolf-uninstall.sh
+set -e
+cd /tmp
+/usr/sbin/routewolf-fetch.sh https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh /tmp/routewolf-uninstall.sh
+exec sh /tmp/routewolf-uninstall.sh "$@"
 EOF
     chmod +x /usr/sbin/routewolf-uninstall.sh
 
@@ -3258,17 +3314,39 @@ mask_secret() {
 wget_has_no_check() { wget --help 2>&1 | grep -q -- '--no-check-certificate'; }
 
 download_url_to_file() {
-    url="$1"; out="$2"
-    if command -v curl >/dev/null 2>&1; then
-        curl -L -k -f --connect-timeout 15 --max-time 120 --retry 2 "$url" -o "$out" 2>/dev/null && return 0
+    url="$1"
+    out="$2"
+    [ -n "$url" ] && [ -n "$out" ] || return 1
+    rm -f "$out"
+
+    if [ -x /bin/uclient-fetch ]; then
+        /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
     fi
-    if command -v wget >/dev/null 2>&1; then
-        if wget_has_no_check; then wget --no-check-certificate -O "$out" "$url" && return 0; else wget -O "$out" "$url" && return 0; fi
-    fi
+
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$out" "$url" 2>/dev/null && return 0
-        uclient-fetch -O "$out" "$url" && return 0
+        uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
     fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
+        rm -f "$out"
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        if wget_has_no_check; then
+            wget --no-check-certificate -O "$out" "$url" && [ -s "$out" ] && return 0
+        else
+            wget -O "$out" "$url" && [ -s "$out" ] && return 0
+        fi
+        rm -f "$out"
+    fi
+
     return 1
 }
 
@@ -3690,9 +3768,7 @@ HELP
     ;;
     repair|route) repair_route ;;
     update)
-        if command -v curl >/dev/null 2>&1; then curl -kL https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
-        else wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
-        fi
+        /usr/sbin/routewolf-update.sh
     ;;
     dns)
         case "$2" in
@@ -4078,22 +4154,34 @@ download_url_to_file() {
     url="$1"
     out="$2"
     [ -n "$url" ] && [ -n "$out" ] || return 1
+    rm -f "$out"
+
+    if [ -x /bin/uclient-fetch ]; then
+        /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
+    fi
+
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
+    fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -L -k -f --connect-timeout 15 --max-time 120 --retry 2 "$url" -o "$out" 2>/dev/null && return 0
+        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
+        rm -f "$out"
     fi
 
     if command -v wget >/dev/null 2>&1; then
         if wget_has_no_check; then
-            wget --no-check-certificate -O "$out" "$url" && return 0
+            wget --no-check-certificate -O "$out" "$url" && [ -s "$out" ] && return 0
         else
-            wget -O "$out" "$url" && return 0
+            wget -O "$out" "$url" && [ -s "$out" ] && return 0
         fi
-    fi
-
-    if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$out" "$url" 2>/dev/null && return 0
-        uclient-fetch -O "$out" "$url" && return 0
+        rm -f "$out"
     fi
 
     return 1
@@ -4549,11 +4637,7 @@ install_awg_packages() {
 
     msgc "$C_BLUE" "Installing AmneziaWG packages..." "Установка пакетов AmneziaWG..."
     AWG_DL_LOG="/tmp/routewolf-awg-download.log"
-    if command -v wget >/dev/null 2>&1; then
-        wget -4 -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL" >"$AWG_DL_LOG" 2>&1 || wget -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL" >>"$AWG_DL_LOG" 2>&1
-    else
-        curl -L -4 -o "$AWG_INSTALLER" "$AWG_INSTALLER_URL" >"$AWG_DL_LOG" 2>&1 || curl -L -o "$AWG_INSTALLER" "$AWG_INSTALLER_URL" >>"$AWG_DL_LOG" 2>&1
-    fi
+    download_url_to_file "$AWG_INSTALLER_URL" "$AWG_INSTALLER" >"$AWG_DL_LOG" 2>&1 || true
 
     if [ ! -s "$AWG_INSTALLER" ]; then
         msgc "$C_RED" "Error downloading AmneziaWG installer. Check internet/GitHub/date on router." "Ошибка скачивания установщика AmneziaWG. Проверьте интернет, доступ к GitHub и дату на роутере."

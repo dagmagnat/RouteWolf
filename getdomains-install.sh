@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v41-apk-fetch-fix"
+PROJECT_VERSION="v42-universal-https-bootstrap"
 
 # Project defaults for dagmagnat/routing-openwrt.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -28,29 +28,41 @@ FORCE_REINSTALL="0"
 [ "$1" = "--reinstall" ] && FORCE_REINSTALL="1"
 
 # Universal downloader for OpenWrt/X-WRT/ImmortalWrt builds.
-# Some builds ship wget without --no-check-certificate, so detect tools/options first.
+# Prefer the native client by absolute path so wget-nossl cannot shadow it.
 wget_has_no_check() { wget --help 2>&1 | grep -q -- '--no-check-certificate'; }
 
 download_url_to_file() {
-    _url="$1"
-    _out="$2"
-    [ -n "$_url" ] && [ -n "$_out" ] || return 1
+    url="$1"
+    out="$2"
+    [ -n "$url" ] && [ -n "$out" ] || return 1
+    rm -f "$out"
+
+    if [ -x /bin/uclient-fetch ]; then
+        /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
+    fi
+
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
+    fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -L -k -f --connect-timeout 15 --max-time 120 --retry 2 "$_url" -o "$_out" 2>/dev/null && return 0
+        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
+        rm -f "$out"
     fi
 
     if command -v wget >/dev/null 2>&1; then
         if wget_has_no_check; then
-            wget --no-check-certificate -O "$_out" "$_url" && return 0
+            wget --no-check-certificate -O "$out" "$url" && [ -s "$out" ] && return 0
         else
-            wget -O "$_out" "$_url" && return 0
+            wget -O "$out" "$url" && [ -s "$out" ] && return 0
         fi
-    fi
-
-    if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$_out" "$_url" 2>/dev/null && return 0
-        uclient-fetch -O "$_out" "$_url" && return 0
+        rm -f "$out"
     fi
 
     return 1
@@ -2723,7 +2735,7 @@ section() { printf "\n%b=== %s ===%b\n" "$BLUE" "$1" "$RESET"; }
 [ -f /etc/domain-routing-user.conf ] && . /etc/domain-routing-user.conf
 
 section "routing-openwrt diagnostics"
-echo "Version: v41-apk-fetch-fix"
+echo "Version: v42-universal-https-bootstrap"
 echo "Date: $(date 2>/dev/null)"
 echo "Model: $(ubus call system board 2>/dev/null | jsonfilter -e '@.model' 2>/dev/null || cat /tmp/sysinfo/model 2>/dev/null)"
 echo "OpenWrt: $(ubus call system board 2>/dev/null | jsonfilter -e '@.release.description' 2>/dev/null)"
@@ -2919,17 +2931,39 @@ run_diagnostics_now() {
 install_management_commands() {
     mkdir -p /usr/sbin
     install_diagnostics_script
+    cat << 'EOF' > /usr/sbin/routing-openwrt-fetch.sh
+#!/bin/sh
+url="$1"; out="$2"
+[ -n "$url" ] && [ -n "$out" ] || exit 2
+rm -f "$out"
+if [ -x /bin/uclient-fetch ]; then
+    /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && exit 0
+fi
+if command -v curl >/dev/null 2>&1; then
+    curl -kfsSL "$url" -o "$out" && [ -s "$out" ] && exit 0
+fi
+if command -v wget >/dev/null 2>&1; then
+    wget -O "$out" "$url" && [ -s "$out" ] && exit 0
+fi
+exit 1
+EOF
+    chmod +x /usr/sbin/routing-openwrt-fetch.sh
+
     cat << 'EOF' > /usr/sbin/routing-openwrt-update.sh
 #!/bin/sh
-# Update routing-openwrt from GitHub without deleting the current tunnel config.
-cd /tmp && wget -O /tmp/routing-openwrt-update.sh https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh && sh /tmp/routing-openwrt-update.sh
+set -e
+cd /tmp
+/usr/sbin/routing-openwrt-fetch.sh https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh /tmp/routing-openwrt-update.sh
+exec sh /tmp/routing-openwrt-update.sh
 EOF
     chmod +x /usr/sbin/routing-openwrt-update.sh
 
     cat << 'EOF' > /usr/sbin/routing-openwrt-uninstall.sh
 #!/bin/sh
-# Remove routing-openwrt rules, lists, cron and helper scripts.
-cd /tmp && wget -O /tmp/routing-openwrt-uninstall.sh https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh && sh /tmp/routing-openwrt-uninstall.sh
+set -e
+cd /tmp
+/usr/sbin/routing-openwrt-fetch.sh https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/uninstall.sh /tmp/routing-openwrt-uninstall.sh
+exec sh /tmp/routing-openwrt-uninstall.sh "$@"
 EOF
     chmod +x /usr/sbin/routing-openwrt-uninstall.sh
 
@@ -3151,8 +3185,12 @@ HELP
     ;;
     repair|route) repair_route ;;
     update)
-        if command -v curl >/dev/null 2>&1; then curl -kL https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
-        else wget -O - https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh | sh
+        _rw_tmp="/tmp/routing-openwrt-update.sh"
+        if download_url_to_file "https://raw.githubusercontent.com/dagmagnat/routing-openwrt/main/update.sh" "$_rw_tmp"; then
+            sh "$_rw_tmp"
+        else
+            echo "Failed to download update script over HTTPS." >&2
+            return 1
         fi
     ;;
     dns)
@@ -3453,22 +3491,34 @@ download_url_to_file() {
     url="$1"
     out="$2"
     [ -n "$url" ] && [ -n "$out" ] || return 1
+    rm -f "$out"
+
+    if [ -x /bin/uclient-fetch ]; then
+        /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
+    fi
+
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        rm -f "$out"
+        uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
+        rm -f "$out"
+    fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -L -k -f --connect-timeout 15 --max-time 120 --retry 2 "$url" -o "$out" 2>/dev/null && return 0
+        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
+        rm -f "$out"
     fi
 
     if command -v wget >/dev/null 2>&1; then
         if wget_has_no_check; then
-            wget --no-check-certificate -O "$out" "$url" && return 0
+            wget --no-check-certificate -O "$out" "$url" && [ -s "$out" ] && return 0
         else
-            wget -O "$out" "$url" && return 0
+            wget -O "$out" "$url" && [ -s "$out" ] && return 0
         fi
-    fi
-
-    if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$out" "$url" 2>/dev/null && return 0
-        uclient-fetch -O "$out" "$url" && return 0
+        rm -f "$out"
     fi
 
     return 1
@@ -3882,11 +3932,7 @@ install_awg_packages() {
     fi
 
     echo "Installing AmneziaWG packages / Установка пакетов AmneziaWG..."
-    if command -v wget >/dev/null 2>&1; then
-        wget -4 -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL" || wget -O "$AWG_INSTALLER" "$AWG_INSTALLER_URL"
-    else
-        curl -L -4 -o "$AWG_INSTALLER" "$AWG_INSTALLER_URL" || curl -L -o "$AWG_INSTALLER" "$AWG_INSTALLER_URL"
-    fi
+    download_url_to_file "$AWG_INSTALLER_URL" "$AWG_INSTALLER" || true
 
     if [ ! -s "$AWG_INSTALLER" ]; then
         echo "Error downloading AmneziaWG installer. Check internet/GitHub/date on router."
