@@ -59,8 +59,19 @@ install_deps() {
     fi
 
     if command -v apk >/dev/null 2>&1; then
-        apk update
-        apk -U add unzip wget curl ca-certificates ca-bundle libustream-mbedtls 2>/dev/null ||         apk -U add unzip wget curl ca-certificates 2>/dev/null ||         apk -U add unzip wget ca-certificates 2>/dev/null || true
+        # OpenWrt 25.12 apk invokes a command named wget. A separately installed
+        # wget/wget-nossl may shadow uclient-fetch and break every HTTPS feed.
+        # Use a private, temporary wget shim and never install the generic wget package.
+        APK_BOOT_PATH="$PATH"
+        if [ -x /bin/uclient-fetch ]; then
+            mkdir -p /tmp/routewolf-apk-bin
+            ln -sf /bin/uclient-fetch /tmp/routewolf-apk-bin/wget
+            APK_BOOT_PATH="/tmp/routewolf-apk-bin:$PATH"
+        fi
+        env PATH="$APK_BOOT_PATH" apk update
+        env PATH="$APK_BOOT_PATH" apk -U add unzip curl ca-certificates ca-bundle libustream-mbedtls 2>/dev/null || \
+        env PATH="$APK_BOOT_PATH" apk -U add unzip curl ca-certificates 2>/dev/null || \
+        env PATH="$APK_BOOT_PATH" apk -U add unzip ca-certificates 2>/dev/null || true
     elif command -v opkg >/dev/null 2>&1; then
         opkg update
         opkg install unzip wget curl ca-certificates ca-bundle libustream-mbedtls 2>/dev/null ||         opkg install unzip wget curl ca-certificates 2>/dev/null ||         opkg install unzip wget ca-certificates 2>/dev/null || true

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v39-outline-universal-watchdog"
+PROJECT_VERSION="v41-apk-fetch-fix"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -1543,6 +1543,9 @@ cleanup_existing_routing_config() {
     delete_uci_sections_by_type network wireguard_wg0
     delete_uci_sections_by_type network amneziawg_awg0
     delete_uci_sections_by_name network rule mark0x1
+    uci -q delete network.mark0x1
+    uci -q delete network.routewolf_mark
+    uci -q delete network.routewolf_internal_mark
     uci commit network 2>/dev/null || true
 
     delete_uci_sections_by_name firewall zone wg
@@ -1619,10 +1622,135 @@ detect_pkg_manager() {
     fi
 }
 
+
+APK_FETCH_READY=0
+APK_SAFE_PATH=""
+APK_FETCH_MODE=""
+
+apk_first_repo_url() {
+    for _repo_file in /etc/apk/repositories.d/distfeeds.list /etc/apk/repositories; do
+        [ -f "$_repo_file" ] || continue
+        awk 'BEGIN { FS="[[:space:]]+" } /^[[:space:]]*#/ { next } { for (i=1; i<=NF; i++) if ($i ~ /^https?:\/\//) { print $i; exit } }' "$_repo_file"
+        return 0
+    done
+    return 1
+}
+
+apk_fetch_test() {
+    _fetcher="$1"
+    _url="$2"
+    _tmp="/tmp/routewolf-apk-fetch-test.$$"
+    rm -f "$_tmp"
+    case "$_fetcher" in
+        native)
+            wget -q -T 30 -O "$_tmp" "$_url" >/dev/null 2>&1
+            ;;
+        uclient)
+            /bin/uclient-fetch -q -T 30 -O "$_tmp" "$_url" >/dev/null 2>&1
+            ;;
+        curl)
+            curl -fsSL --connect-timeout 15 --max-time 45 -o "$_tmp" "$_url" >/dev/null 2>&1
+            ;;
+        *) return 1 ;;
+    esac
+    _rc=$?
+    [ "$_rc" -eq 0 ] && [ -s "$_tmp" ]
+    _rc=$?
+    rm -f "$_tmp"
+    return "$_rc"
+}
+
+create_curl_wget_wrapper() {
+    mkdir -p /tmp/routewolf-apk-bin || return 1
+    cat > /tmp/routewolf-apk-bin/wget <<'ROUTEWOLF_WGET_EOF'
+#!/bin/sh
+out="-"
+timeout="60"
+insecure="0"
+url=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -O) shift; out="$1" ;;
+        -T) shift; timeout="$1" ;;
+        -q|--quiet) ;;
+        --no-check-certificate) insecure="1" ;;
+        --timeout=*) timeout="${1#*=}" ;;
+        --) shift; url="$1"; break ;;
+        -*) ;;
+        *) url="$1" ;;
+    esac
+    shift
+done
+[ -n "$url" ] || exit 2
+set -- -fL --connect-timeout "$timeout" --max-time "$timeout"
+[ "$insecure" = "1" ] && set -- "$@" -k
+if [ "$out" = "-" ]; then
+    exec curl "$@" "$url"
+else
+    exec curl "$@" -o "$out" "$url"
+fi
+ROUTEWOLF_WGET_EOF
+    chmod 755 /tmp/routewolf-apk-bin/wget
+}
+
+prepare_apk_fetcher() {
+    [ "$APK_FETCH_READY" = "1" ] && return 0
+
+    APK_SAFE_PATH="$PATH"
+    _repo_url="$(apk_first_repo_url 2>/dev/null)"
+    if [ -z "$_repo_url" ]; then
+        APK_FETCH_READY=1
+        APK_FETCH_MODE="native"
+        return 0
+    fi
+
+    if apk_fetch_test native "$_repo_url"; then
+        APK_FETCH_READY=1
+        APK_FETCH_MODE="native"
+        return 0
+    fi
+
+    if [ -x /bin/uclient-fetch ] && apk_fetch_test uclient "$_repo_url"; then
+        mkdir -p /tmp/routewolf-apk-bin || return 1
+        ln -sf /bin/uclient-fetch /tmp/routewolf-apk-bin/wget || return 1
+        APK_SAFE_PATH="/tmp/routewolf-apk-bin:$PATH"
+        APK_FETCH_READY=1
+        APK_FETCH_MODE="uclient-fetch"
+        msgc "$C_YELLOW" \
+            "The system wget cannot download OpenWrt HTTPS feeds. RouteWolf will use uclient-fetch without changing system files." \
+            "Системный wget не может скачать HTTPS-репозитории OpenWrt. RouteWolf временно использует uclient-fetch, не изменяя системные файлы."
+        return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1 && apk_fetch_test curl "$_repo_url"; then
+        create_curl_wget_wrapper || return 1
+        APK_SAFE_PATH="/tmp/routewolf-apk-bin:$PATH"
+        APK_FETCH_READY=1
+        APK_FETCH_MODE="curl"
+        msgc "$C_YELLOW" \
+            "The system wget is broken. RouteWolf will use a temporary curl-based APK downloader." \
+            "Системный wget неисправен. RouteWolf временно использует загрузчик APK на основе curl."
+        return 0
+    fi
+
+    msgc "$C_RED" \
+        "Cannot download an OpenWrt package index over HTTPS with wget, uclient-fetch or curl." \
+        "Не удалось скачать индекс пакетов OpenWrt по HTTPS через wget, uclient-fetch или curl."
+    msgc "$C_RED" \
+        "Check WAN, DNS, date/time and whether wget-nossl shadows /bin/uclient-fetch." \
+        "Проверьте WAN, DNS, дату/время и не перекрывает ли wget-nossl системный /bin/uclient-fetch."
+    return 1
+}
+
+apk_run() {
+    prepare_apk_fetcher || return 1
+    env PATH="$APK_SAFE_PATH" apk "$@"
+}
+
 pkg_update() {
     detect_pkg_manager
     case "$PKG_MANAGER" in
-        apk) quiet_cmd /tmp/routewolf-pkg-update.log apk update ;;
+        apk) quiet_cmd /tmp/routewolf-pkg-update.log apk_run update ;;
         opkg) quiet_cmd /tmp/routewolf-pkg-update.log opkg update ;;
     esac
 }
@@ -1630,7 +1758,7 @@ pkg_update() {
 pkg_install() {
     detect_pkg_manager
     case "$PKG_MANAGER" in
-        apk) quiet_cmd /tmp/routewolf-pkg-install.log apk -U add "$@" ;;
+        apk) quiet_cmd /tmp/routewolf-pkg-install.log apk_run -U add "$@" ;;
         opkg) quiet_cmd /tmp/routewolf-pkg-install.log opkg install "$@" ;;
     esac
 }
@@ -1638,7 +1766,7 @@ pkg_install() {
 pkg_remove() {
     detect_pkg_manager
     case "$PKG_MANAGER" in
-        apk) quiet_cmd /tmp/routewolf-pkg-remove.log apk del "$@" ;;
+        apk) quiet_cmd /tmp/routewolf-pkg-remove.log apk_run del "$@" ;;
         opkg) quiet_cmd /tmp/routewolf-pkg-remove.log opkg remove "$@" ;;
     esac
 }
@@ -1654,10 +1782,12 @@ pkg_is_installed() {
 
 check_repo() {
     if ! pkg_update; then
-        msgc "$C_YELLOW" "Warning: package repository update returned an error." "Предупреждение: обновление репозитория пакетов завершилось с ошибкой."
-        msgc "$C_YELLOW" "The installer will continue and try to use already updated feeds/cache." "Установка продолжится и попробует использовать уже обновлённые feeds/cache."
-        msgc "$C_YELLOW" "If package installation fails, check internet, DNS, date/time or run: ntpd -p ptbtime1.ptb.de" "Если установка пакетов не пройдёт, проверьте интернет, DNS, дату/время или выполните: ntpd -p ptbtime1.ptb.de"
+        msgc "$C_RED" "Package repository update failed. Installation cannot safely continue." "Обновление репозитория пакетов не выполнено. Безопасно продолжить установку нельзя."
+        msgc "$C_YELLOW" "For OpenWrt 25.12 check: command -v wget; readlink -f $(command -v wget); apk info -e wget-nossl" "Для OpenWrt 25.12 проверьте: command -v wget; readlink -f $(command -v wget); apk info -e wget-nossl"
+        msgc "$C_YELLOW" "Also check WAN, DNS, date/time and free RAM in /tmp." "Также проверьте WAN, DNS, дату/время и свободную RAM в /tmp."
+        return 1
     fi
+    return 0
 }
 
 install_routewolf_watchdog() {
@@ -1993,10 +2123,26 @@ TABLE="vpn"
 grep -q "99 $TABLE" /etc/iproute2/rt_tables 2>/dev/null || echo "99 $TABLE" >> /etc/iproute2/rt_tables
 
 ensure_rule() {
-    ip rule show 2>/dev/null | grep -q "fwmark 0x1.*lookup $TABLE" || ip rule add fwmark 0x1 table "$TABLE" priority 100 >/dev/null 2>&1 || true
-    if [ "$IPV6_SUPPORT" = "1" ]; then
-        ip -6 rule show 2>/dev/null | grep -q "fwmark 0x1.*lookup $TABLE" || ip -6 rule add fwmark 0x1 table "$TABLE" priority 100 >/dev/null 2>&1 || true
+    # Keep exactly one IPv4 rule at priority 100. Older releases sometimes
+    # left an auto-priority rule such as "1: fwmark 0x1 lookup vpn".
+    ip rule show 2>/dev/null | awk '/fwmark 0x1(\/0x1)?/ && /lookup (vpn|99)/ {gsub(":", "", $1); if ($1 != 100) print $1}' |     while IFS= read -r old_prio; do
+        [ -n "$old_prio" ] && ip rule del priority "$old_prio" >/dev/null 2>&1 || true
+    done
+    if ! ip rule show 2>/dev/null | grep -Eq '^100:.*fwmark 0x1(/0x1)?.*lookup (vpn|99)'; then
+        ip rule del fwmark 0x1/0x1 table 99 priority 100 >/dev/null 2>&1 || true
+        ip rule add fwmark 0x1/0x1 table 99 priority 100 >/dev/null 2>&1 || return 1
     fi
+
+    if [ "$IPV6_SUPPORT" = "1" ]; then
+        ip -6 rule show 2>/dev/null | awk '/fwmark 0x1(\/0x1)?/ && /lookup (vpn|99)/ {gsub(":", "", $1); if ($1 != 100) print $1}' |         while IFS= read -r old_prio; do
+            [ -n "$old_prio" ] && ip -6 rule del priority "$old_prio" >/dev/null 2>&1 || true
+        done
+        if ! ip -6 rule show 2>/dev/null | grep -Eq '^100:.*fwmark 0x1(/0x1)?.*lookup (vpn|99)'; then
+            ip -6 rule del fwmark 0x1/0x1 table 99 priority 100 >/dev/null 2>&1 || true
+            ip -6 rule add fwmark 0x1/0x1 table 99 priority 100 >/dev/null 2>&1 || return 1
+        fi
+    fi
+    return 0
 }
 
 fail_open_route() {
@@ -2115,7 +2261,7 @@ EOF
 [ -f /etc/routewolf/route.conf ] && . /etc/routewolf/route.conf
 [ -f /etc/routewolf/user.conf ] && . /etc/routewolf/user.conf
 
-echo "=== RouteWolf v35 status ==="
+echo "=== RouteWolf v41 status ==="
 echo "VPN_ROUTE_DEV=${VPN_ROUTE_DEV:-not set}"
 echo "VPN_ROUTE_GW=${VPN_ROUTE_GW:-not set}"
 echo "IPV6_SUPPORT=${IPV6_SUPPORT:-0}"
@@ -2242,22 +2388,32 @@ EOF
 }
 
 add_mark() {
-    grep -q "99 vpn" /etc/iproute2/rt_tables || echo '99 vpn' >> /etc/iproute2/rt_tables
-    
-    if ! uci show network | grep -q mark0x1; then
-        printf "\033[32;1mConfigure mark rule\033[0m\n"
-        uci add network rule
-        uci set network.@rule[-1].name='mark0x1'
-        uci set network.@rule[-1].mark='0x1'
-        uci set network.@rule[-1].priority='100'
-        uci set network.@rule[-1].lookup='vpn'
-        uci commit
-    fi
+    # OpenWrt netifd accepts a numeric table ID or a symbolic alias.  Use the
+    # numeric ID in UCI to avoid parser differences between OpenWrt builds.
+    grep -qE '^[[:space:]]*99[[:space:]]+vpn([[:space:]]|$)' /etc/iproute2/rt_tables 2>/dev/null ||         echo '99 vpn' >> /etc/iproute2/rt_tables
 
-    # v12 default is fail-open. Do not install blackhole routes automatically.
-    # If VPN is not available, routed domains fall back to the normal WAN route instead
-    # of breaking Android/iOS connectivity checks and normal internet indicators.
+    # Remove the legacy anonymous rule that produced "uci: Invalid argument"
+    # on some 24.10 builds, then create one deterministic named section.
+    delete_uci_sections_by_name network rule mark0x1
+    uci -q delete network.mark0x1
+    uci -q delete network.routewolf_mark
+
+    printf "\033[32;1mConfigure RouteWolf policy rule\033[0m\n"
+    uci set network.routewolf_mark='rule' || return 1
+    uci set network.routewolf_mark.mark='0x1/0x1' || return 1
+    uci set network.routewolf_mark.priority='100' || return 1
+    uci set network.routewolf_mark.lookup='99' || return 1
+    uci commit network || return 1
+
+    # Do not report success unless the persistent UCI rule is complete.
+    [ "$(uci -q get network.routewolf_mark)" = 'rule' ] || return 1
+    [ "$(uci -q get network.routewolf_mark.mark)" = '0x1/0x1' ] || return 1
+    [ "$(uci -q get network.routewolf_mark.priority)" = '100' ] || return 1
+    [ "$(uci -q get network.routewolf_mark.lookup)" = '99' ] || return 1
+
+    # Default safety mode is fail-open. Never leave an old blackhole route.
     ip route del blackhole default table vpn metric 42767 >/dev/null 2>&1 || true
+    return 0
 }
 
 add_tunnel() {
@@ -2762,7 +2918,7 @@ add_dns_resolver() {
 }
 
 add_packages() {
-    for package in curl nano; do
+    for package in curl; do
         if pkg_is_installed "$package"; then
             msgc "$C_GREEN" "$package is already installed" "$package уже установлен"
         else
@@ -2824,7 +2980,7 @@ section() { printf "\n%b=== %s ===%b\n" "$BLUE" "$1" "$RESET"; }
 [ -f /etc/routewolf/user.conf ] && . /etc/routewolf/user.conf
 
 section "RouteWolf diagnostics"
-echo "Version: v27"
+echo "Version: v41-apk-fetch-fix"
 echo "Date: $(date 2>/dev/null)"
 echo "Model: $(ubus call system board 2>/dev/null | jsonfilter -e '@.model' 2>/dev/null || cat /tmp/sysinfo/model 2>/dev/null)"
 echo "OpenWrt: $(ubus call system board 2>/dev/null | jsonfilter -e '@.release.description' 2>/dev/null)"
@@ -2920,7 +3076,13 @@ if dnsmasq --test >/tmp/routewolf-dnsmasq-test.log 2>&1; then ok "dnsmasq syntax
 uci show dhcp 2>/dev/null | grep -E "dnsmasq.d|filter_aaaa" || true
 
 section "Policy routing"
-ip rule show 2>/dev/null | grep -E 'fwmark 0x1|lookup vpn' || bad "No fwmark 0x1 rule found"
+if [ "$(uci -q get network.routewolf_mark 2>/dev/null)" = "rule" ] &&    [ "$(uci -q get network.routewolf_mark.mark 2>/dev/null)" = "0x1/0x1" ] &&    [ "$(uci -q get network.routewolf_mark.priority 2>/dev/null)" = "100" ] &&    [ "$(uci -q get network.routewolf_mark.lookup 2>/dev/null)" = "99" ]; then
+    ok "Persistent UCI rule network.routewolf_mark is valid"
+else
+    bad "Persistent UCI policy rule is missing or invalid; run: rw repair"
+fi
+ip rule show 2>/dev/null | grep -Eq '^100:.*fwmark 0x1(/0x1)?.*lookup (vpn|99)' &&     ok "Runtime fwmark rule is present at priority 100" || bad "Runtime fwmark rule is missing or has a stale priority"
+ip rule show 2>/dev/null | grep -E 'fwmark 0x1|lookup vpn' || true
 VPN_TABLE=$(ip route show table vpn 2>/dev/null)
 printf '%s\n' "$VPN_TABLE"
 echo "$VPN_TABLE" | grep -q 'blackhole' && bad "blackhole route found in table vpn; old broken fail-closed route must be removed"
@@ -2961,6 +3123,30 @@ else
     bad "Could not resolve youtube.com through router DNS ($LAN_IP)"
     cat /tmp/routewolf-youtube-nslookup.log 2>/dev/null
 fi
+
+section "Android TV / YouTube DNS path"
+if uci show firewall 2>/dev/null | grep -q "name='routewolf_force_dns'"; then
+    ok "LAN DNS interception is enabled; ordinary TCP/UDP DNS is forced through router dnsmasq"
+else
+    warn "LAN DNS interception is disabled. Android TV or another client with hardcoded DNS may bypass dnsmasq and miss vpn_domains. Optional fix: rw dns on"
+fi
+check_tv_domain() {
+    host="$1"
+    ip="$(nslookup "$host" "$LAN_IP" 2>/dev/null | awk '/^Address: / && $2 ~ /^[0-9.]+$/ {print $2; exit}')"
+    if [ -z "$ip" ]; then
+        warn "$host did not resolve through router DNS"
+        return
+    fi
+    if nft list set inet fw4 vpn_domains 2>/dev/null | grep -Fq "$ip"; then
+        ok "$host -> $ip is present in vpn_domains"
+    else
+        warn "$host -> $ip is not visible in vpn_domains yet"
+    fi
+}
+check_tv_domain www.youtube.com
+check_tv_domain youtubei.googleapis.com
+check_tv_domain i.ytimg.com
+check_tv_domain redirector.googlevideo.com
 
 section "LAN / Wi-Fi notes"
 echo "LAN IP: $LAN_IP"
@@ -3277,7 +3463,23 @@ ovpn_gateway() {
     ip -4 -o addr show dev "$dev" 2>/dev/null | awk '{print $4; exit}' | awk -F'[./]' '{a=$1;b=$2;c=$3;p=$5; if (p==22)c=int(c/4)*4; else if(p==23)c=int(c/2)*2; print a"."b"."c".1"}'
 }
 
+ensure_policy_rule_config() {
+    grep -qE '^[[:space:]]*99[[:space:]]+vpn([[:space:]]|$)' /etc/iproute2/rt_tables 2>/dev/null || echo '99 vpn' >> /etc/iproute2/rt_tables
+    while true; do
+        idx="$(uci show network 2>/dev/null | sed -n "s/^network\.@rule\[\([0-9]*\)\]\.name='mark0x1'.*/\1/p" | head -n 1)"
+        [ -n "$idx" ] || break
+        uci -q delete "network.@rule[$idx]" || break
+    done
+    uci -q delete network.mark0x1
+    uci set network.routewolf_mark='rule' || return 1
+    uci set network.routewolf_mark.mark='0x1/0x1' || return 1
+    uci set network.routewolf_mark.priority='100' || return 1
+    uci set network.routewolf_mark.lookup='99' || return 1
+    uci commit network || return 1
+}
+
 repair_route() {
+    ensure_policy_rule_config || { echo "Failed to repair persistent RouteWolf policy rule"; exit 1; }
     [ ! -f "$CONF" ] && [ -f /etc/domain-routing-route.conf ] && { mkdir -p /etc/routewolf; cp /etc/domain-routing-route.conf "$CONF" 2>/dev/null || true; }
     [ -f "$CONF" ] && . "$CONF"
     dev="${VPN_ROUTE_DEV:-}"
@@ -3296,6 +3498,50 @@ repair_route() {
     cat "$CONF" 2>/dev/null
     echo "=== table vpn ==="
     ip route show table vpn 2>/dev/null
+}
+
+dns_redirect_delete() {
+    while true; do
+        id="$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@redirect\[\([0-9]*\)\]\.name='routewolf_force_dns'.*/\1/p" | head -n 1)"
+        [ -n "$id" ] || break
+        uci -q delete "firewall.@redirect[$id]" || break
+    done
+}
+
+dns_force_status() {
+    if uci show firewall 2>/dev/null | grep -q "name='routewolf_force_dns'"; then
+        echo "RouteWolf LAN DNS interception: ON"
+        uci show firewall 2>/dev/null | grep -A8 -B1 "name='routewolf_force_dns'" || true
+    else
+        echo "RouteWolf LAN DNS interception: OFF"
+    fi
+}
+
+dns_force_on() {
+    lan_ip="$(uci -q get network.lan.ipaddr 2>/dev/null)"
+    [ -n "$lan_ip" ] || lan_ip="192.168.1.1"
+    dns_redirect_delete
+    sec="$(uci add firewall redirect)" || exit 1
+    uci set "firewall.$sec.name=routewolf_force_dns" || exit 1
+    uci set "firewall.$sec.src=lan" || exit 1
+    uci add_list "firewall.$sec.proto=tcp" || exit 1
+    uci add_list "firewall.$sec.proto=udp" || exit 1
+    uci set "firewall.$sec.src_dport=53" || exit 1
+    uci set "firewall.$sec.target=DNAT" || exit 1
+    uci set "firewall.$sec.dest_ip=$lan_ip" || exit 1
+    uci set "firewall.$sec.dest_port=53" || exit 1
+    uci set "firewall.$sec.family=ipv4" || exit 1
+    uci commit firewall || exit 1
+    /etc/init.d/firewall restart >/dev/null 2>&1 || exit 1
+    echo "RouteWolf LAN DNS interception enabled: LAN TCP/UDP 53 -> $lan_ip:53"
+    echo "DoH/Private DNS is not intercepted and must be disabled on the client if it bypasses routing lists."
+}
+
+dns_force_off() {
+    dns_redirect_delete
+    uci commit firewall || exit 1
+    /etc/init.d/firewall restart >/dev/null 2>&1 || exit 1
+    echo "RouteWolf LAN DNS interception disabled"
 }
 
 dco_status() {
@@ -3420,6 +3666,9 @@ rw commands:
   rw watchdog status show universal tunnel watchdog status
   rw watchdog check  run tunnel test now
   rw watchdog restart restart the selected tunnel
+  rw dns status      show LAN DNS interception state
+  rw dns on          force ordinary LAN DNS through router dnsmasq
+  rw dns off         remove RouteWolf LAN DNS interception
   rw openvpn restart restart OpenVPN and repair route
 HELP
     ;;
@@ -3444,6 +3693,14 @@ HELP
         if command -v curl >/dev/null 2>&1; then curl -kL https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
         else wget -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
         fi
+    ;;
+    dns)
+        case "$2" in
+            status|"") dns_force_status ;;
+            on|enable) dns_force_on ;;
+            off|disable) dns_force_off ;;
+            *) echo "Usage: rw dns on|off|status"; exit 1 ;;
+        esac
     ;;
     dco)
         case "$2" in
@@ -3581,8 +3838,11 @@ update_existing_installation() {
     dnsmasqfull
     dnsmasqconfdir
     # DNS redirect is intentionally OFF by default. It can break normal internet checks.
-    add_mark
-    add_set
+    add_mark || {
+        msgc "$C_RED" "Policy rule update failed" "Не удалось обновить правило маршрутизации"
+        return 1
+    }
+    add_set || return 1
     install_management_commands
     add_routewolf update
 
@@ -3602,6 +3862,10 @@ update_existing_installation() {
     /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
     /etc/init.d/routewolf-route start >/dev/null 2>&1 || true
     /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
+    validate_routewolf_installation || {
+        msgc "$C_RED" "Update validation failed" "Проверка после обновления завершилась ошибкой"
+        return 1
+    }
 
     echo "List counts / Количество строк списков:"
     [ -f /tmp/dnsmasq.d/domains.lst ] && wc -l /tmp/dnsmasq.d/domains.lst || echo "0 /tmp/dnsmasq.d/domains.lst"
@@ -4171,15 +4435,16 @@ add_internal_wg() {
 
     grep -q "110 vpninternal" /etc/iproute2/rt_tables || echo '110 vpninternal' >> /etc/iproute2/rt_tables
 
-    if ! uci show network | grep -q mark0x2; then
-        printf "\033[32;1mConfigure mark rule\033[0m\n"
-        uci add network rule
-        uci set network.@rule[-1].name='mark0x2'
-        uci set network.@rule[-1].mark='0x2'
-        uci set network.@rule[-1].priority='110'
-        uci set network.@rule[-1].lookup='vpninternal'
-        uci commit
-    fi
+    # Deterministic named UCI rule; avoids anonymous @rule[-1] failures.
+    delete_uci_sections_by_name network rule mark0x2
+    uci -q delete network.mark0x2
+    uci -q delete network.routewolf_internal_mark
+    printf "\033[32;1mConfigure internal policy rule\033[0m\n"
+    uci set network.routewolf_internal_mark='rule' || return 1
+    uci set network.routewolf_internal_mark.mark='0x2/0x2' || return 1
+    uci set network.routewolf_internal_mark.priority='110' || return 1
+    uci set network.routewolf_internal_mark.lookup='110' || return 1
+    uci commit network || return 1
 
     if ! uci show network | grep -q vpn_route_internal; then
         printf "\033[32;1mAdd route\033[0m\n"
@@ -4346,6 +4611,53 @@ MODEL=$(cat /tmp/sysinfo/model 2>/dev/null)
 ui_header "$(prompt "RouteWolf installer" "Установка RouteWolf")"
 printf "%b%s%b\n" "$C_BLUE" "$(prompt "Model: $MODEL" "Модель: $MODEL")" "$C_RESET"
 printf "%b%s%b\n" "$C_BLUE" "$(prompt "OpenWrt: $OPENWRT_RELEASE" "OpenWrt: $OPENWRT_RELEASE")" "$C_RESET"
+validate_routewolf_installation() {
+    # Final deterministic checks. Do not print a green completion banner when
+    # the persistent rule or its runtime instance is missing.
+    sleep 2
+    [ -x /usr/sbin/routewolf-route.sh ] || {
+        msgc "$C_RED" "Route helper is missing" "Отсутствует скрипт восстановления маршрута"
+        return 1
+    }
+    /usr/sbin/routewolf-route.sh >/tmp/routewolf-final-route.log 2>&1 || {
+        msgc "$C_RED" "Route helper failed" "Скрипт восстановления маршрута завершился ошибкой"
+        tail -n 20 /tmp/routewolf-final-route.log 2>/dev/null || true
+        return 1
+    }
+
+    if [ "$(uci -q get network.routewolf_mark 2>/dev/null)" != "rule" ] ||        [ "$(uci -q get network.routewolf_mark.mark 2>/dev/null)" != "0x1/0x1" ] ||        [ "$(uci -q get network.routewolf_mark.priority 2>/dev/null)" != "100" ] ||        [ "$(uci -q get network.routewolf_mark.lookup 2>/dev/null)" != "99" ]; then
+        msgc "$C_RED" "Persistent policy rule validation failed" "Не прошла проверка постоянного правила маршрутизации"
+        uci show network.routewolf_mark 2>/dev/null || true
+        return 1
+    fi
+
+    if ! ip rule show 2>/dev/null | grep -Eq '^100:.*fwmark 0x1(/0x1)?.*lookup (vpn|99)'; then
+        msgc "$C_RED" "Runtime fwmark rule is missing" "В работающей системе отсутствует правило fwmark"
+        ip rule show 2>/dev/null || true
+        return 1
+    fi
+
+    if ip route show default 2>/dev/null | grep -Eq ' dev (awg0|wg0|tun[0-9]+|sbtun0|outline0)( |$)'; then
+        msgc "$C_RED" "Unsafe VPN default route found in main table" "В основной таблице найден опасный маршрут по умолчанию через VPN"
+        ip route show default 2>/dev/null || true
+        return 1
+    fi
+
+    if ! dnsmasq --test >/tmp/routewolf-final-dnsmasq.log 2>&1; then
+        msgc "$C_RED" "dnsmasq configuration test failed" "Проверка конфигурации dnsmasq завершилась ошибкой"
+        tail -n 20 /tmp/routewolf-final-dnsmasq.log 2>/dev/null || true
+        return 1
+    fi
+
+    nft list set inet fw4 vpn_domains >/dev/null 2>&1 || {
+        msgc "$C_RED" "nft set vpn_domains is missing" "Отсутствует nft-набор vpn_domains"
+        return 1
+    }
+
+    msgc "$C_GREEN" "Persistent rule, runtime rule, WAN default route, dnsmasq and nft set are valid"         "Постоянное и рабочее правила, WAN-маршрут, dnsmasq и nft-набор проверены"
+    return 0
+}
+
 VERSION_ID=$(echo "$VERSION" | awk -F. '{print $1}')
 ID_LIKE_SAFE=" ${ID:-} ${ID_LIKE:-} ${NAME:-} ${OPENWRT_RELEASE:-} "
 
@@ -4382,7 +4694,7 @@ if [ "$1" = "--update" ] || [ "${ROUTEWOLF_UPDATE_ONLY:-0}" = "1" ]; then
     exit 0
 fi
 
-INSTALL_TOTAL_STEPS=12
+INSTALL_TOTAL_STEPS=13
 INSTALL_STEP=0
 
 run_step "$(prompt "Checking package repository" "Проверка репозитория пакетов")" check_repo || exit 1
@@ -4397,6 +4709,7 @@ run_step "$(prompt "Configuring dnsmasq confdir" "Настройка dnsmasq con
 run_step "$(prompt "Installing RouteWolf management commands" "Установка команд управления RouteWolf")" install_management_commands || exit 1
 run_step "$(prompt "Configuring lists and RouteWolf service" "Настройка списков и сервиса RouteWolf")" add_routewolf || exit 1
 run_step "$(prompt "Restarting network" "Перезапуск сети")" /etc/init.d/network restart || exit 1
+run_step "$(prompt "Final routing verification" "Финальная проверка маршрутизации")" validate_routewolf_installation || exit 1
 
 ui_header "$(prompt "Installation completed" "Установка завершена")"
 msgc "$C_GREEN" "RouteWolf is ready." "RouteWolf готов к работе."

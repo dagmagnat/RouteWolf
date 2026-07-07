@@ -172,7 +172,7 @@ rw singbox log
 For subscription/JSON URLs, cron auto-update is enabled. The default interval is 60 minutes. Sing-box stays in safe mode: `auto_route=false`, `strict_route=false`; RouteWolf sends only marked domains/IPs into `sbtun0` using `dnsmasq -> nftset -> fwmark -> table vpn`.
 
 
-## RouteWolf v39: Outline and universal watchdog
+## RouteWolf v40: stable policy routing and universal watchdog
 
 - Added an experimental **Outline** client for ordinary static `ss://` keys.
 - On OpenWrt, Outline uses the official OpenWrt `sing-box-tiny` package as the Shadowsocks client engine.
@@ -181,3 +181,15 @@ For subscription/JSON URLs, cron auto-update is enabled. The default interval is
 - Sing-box/Outline requires at least 64 MB flash, 40 MB free flash and 128 MB RAM. Use WireGuard/AmneziaWG/OpenVPN on 16 MB flash.
 - The universal watchdog checks the selected tunnel every 30 minutes, restarts only that tunnel after two failed checks and reapplies policy routing.
 - On router boot, the selected tunnel is forcibly recovered. Fail-open mode keeps the normal WAN available when a tunnel fails.
+
+### v40 fixes
+
+- Replaced anonymous `network.@rule[-1]` creation that caused `uci: Invalid argument` on some OpenWrt 24.10 builds.
+- The `fwmark 0x1/0x1` rule now uses named section `network.routewolf_mark` and numeric table `99`.
+- Boot repair removes stale duplicate rules and keeps one rule at priority `100`.
+- The installer no longer prints a false `[OK]`; a UCI failure stops the step with `[ERROR]`.
+- Diagnostics now reports the current build version.
+
+### OpenWrt 25.12 and APK
+
+RouteWolf does not install the generic `wget`/`wget-nossl` package because it can shadow the built-in `uclient-fetch` and break APK HTTPS downloads. If the system wget is already broken, the installer temporarily uses `/bin/uclient-fetch` or `curl` for its own APK commands without changing system files.

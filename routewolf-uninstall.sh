@@ -119,8 +119,8 @@ uci commit firewall
 /etc/init.d/firewall restart
 
 echo "Чистим сеть"
+while ip rule del fwmark 0x1/0x1 table 99 priority 100 2>/dev/null; do :; done
 while ip rule del fwmark 0x1 table vpn 2>/dev/null; do :; done
-while ip rule del priority 100 2>/dev/null; do :; done
 ip route flush table vpn 2>/dev/null || true
 ip -6 route flush table vpn 2>/dev/null || true
 sed -i '/[[:space:]]vpn$/d;/^99[[:space:]]/d' /etc/iproute2/rt_tables 2>/dev/null || true
@@ -134,6 +134,11 @@ rule_id=$(uci show network | grep -E '@rule.*name=.mark0x2.' | awk -F '[][{}]' '
 if [ ! -z "$rule_id" ]; then
     while uci -q delete network.@rule[$rule_id]; do :; done
 fi
+
+uci -q delete network.mark0x1
+uci -q delete network.mark0x2
+uci -q delete network.routewolf_mark
+uci -q delete network.routewolf_internal_mark
 
 uci -q delete network.ovpn0
 uci -q delete openvpn.routewolf
