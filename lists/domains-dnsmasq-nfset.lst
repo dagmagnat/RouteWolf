@@ -2,7 +2,7 @@
 a-msedge.net
 accounts.google.com
 accounts.youtube.com
-ads.youtube.com @ads
+ads.youtube.com
 adservice.google.com
 ai.ytimg.com
 akamaized.net
@@ -26,6 +26,7 @@ chatgpt.com
 claude.ai
 claude.com
 claudeusercontent.com
+clients.l.google.com
 clients1.google.com
 clients2.google.com
 clients3.google.com
@@ -53,6 +54,7 @@ discord.new
 discord.st
 discord.store
 discord.tools
+discordInvites.net
 discordactivities.com
 discordapp.com
 discordapp.io
@@ -63,7 +65,6 @@ discordcdn.com
 discordexpert.com
 discordhome.com
 discordhub.com
-discordInvites.net
 discordlist.me
 discordlist.space
 discordmerch.com
@@ -74,6 +75,7 @@ discordservers.com
 discordstatus.com
 discordtop.com
 disforge.com
+dl.google.com
 doubleclick.net
 dyno.gg
 facebook.com
@@ -99,7 +101,6 @@ fragment.com
 full:yt3.googleusercontent.com
 gdata.youtube.com
 ggpht.cn
-ggpht.cn @cn
 ggpht.com
 github.com
 githubcopilot.com
@@ -107,6 +108,7 @@ githubusercontent.com
 google.com
 googleadservices.com
 googleapis.com
+googleapis.l.google.com
 googleusercontent.com
 googlevideo.com
 gpt3-openai.com
@@ -122,6 +124,10 @@ i1.ytimg.com
 i2.ytimg.com
 i3.ytimg.com
 i4.ytimg.com
+i5.ytimg.com
+i6.ytimg.com
+i7.ytimg.com
+i8.ytimg.com
 i9.ytimg.com
 ig.me
 img.youtube.com
@@ -182,18 +188,22 @@ openai.com
 openai.fund
 openai.org
 pagead2.googlesyndication.com
+play.google.com
 play.googleapis.com
 pscdn.co
 quiz.directory
 r2---sn--n5pbvoj5caxu8-nboz.google
 r3---sn--h557snl6.googlevideo
 redirector.googlevideo.com
+redirector.gvt1.com
 returnyoutubedislikeapi.com
 rezka.ag
 rezka.my
 rezkify.com
 rr1---sn-*.googlevideo.com
 rr2---sn-*.googlevideo.com
+rr4---sn-aigl6nl7.googlevideo.com
+rr5---sn-aigl6nsr.googlevideo.com
 rutor.info
 rutor.is
 rutor.org
@@ -203,7 +213,9 @@ rutracker.org
 rutracker.ru
 rutracker.wiki
 rutrk.org
+s.youtube.com
 s.ytimg.com
+s2.youtube.com
 scdn.co
 serv01001.xyz
 spoti.fi
@@ -217,7 +229,10 @@ spotifycodes.com
 spotifyforbrands.com
 spotifyjobs.com
 ssl.gstatic.com
+static.doubleclick.net
 statichdrezka.ac
+suggestqueries.google.com
+suggestqueries.youtube.com
 t-ru.org
 t.co
 t.me
@@ -242,6 +257,8 @@ twimg.com
 twitter.com
 tx.me
 usercontent.dev
+video-stats.l.google.com
+video.google.com
 voidboost.cc
 voidboost.com
 voidboost.in
@@ -261,6 +278,7 @@ whatsappbrand.com
 wide-youtube.l.google.com
 withyoutube.com
 wl.co
+www.google.com
 www.googleapis.com
 www.gstatic.com
 www.youtube.com
@@ -437,15 +455,10 @@ youtubei.googleapis.com
 youtubekids.com
 youtubemobilesupport.com
 yt.be
+yt1.ggpht.com
+yt2.ggpht.com
 yt3.ggpht.com
 yt3.googleusercontent.com
 yt4.ggpht.com
-www.google.com
-static.doubleclick.net
-rr4---sn-aigl6nl7.googlevideo.com
-rr5---sn-aigl6nsr.googlevideo.com
 ytimg.com
 ytimg.l.google.com
-googlevideo.com
-redirector.googlevideo.com
-manifest.googlevideo.com
