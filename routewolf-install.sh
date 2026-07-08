@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v44-low-flash-safe"
+PROJECT_VERSION="v45-tv-debug-ipv4-safe"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -3742,6 +3742,61 @@ dns_force_off() {
     echo "RouteWolf LAN DNS interception disabled"
 }
 
+routewolf_purge() {
+    echo "Purging RouteWolf temporary DNS/IP state..."
+    rm -f /tmp/dnsmasq.d/domains.raw /tmp/dnsmasq.d/domains.lst.new 2>/dev/null || true
+    rm -f /tmp/lst/ipv4.raw /tmp/lst/ipv4.lst.new /tmp/lst/ipv6.raw /tmp/lst/ipv6.lst.new 2>/dev/null || true
+    nft flush set inet fw4 vpn_domains 2>/dev/null || true
+    nft flush set inet fw4 vpn_domains6 2>/dev/null || true
+    nft flush set inet fw4 vpn_subnets 2>/dev/null || true
+    nft flush set inet fw4 vpn_subnets6 2>/dev/null || true
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+    /etc/init.d/firewall restart >/dev/null 2>&1 || true
+    sleep 1
+    /etc/init.d/routewolf start >/dev/null 2>&1 || true
+    /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
+    echo "Done. Reopen YouTube app on the TV and test again."
+}
+
+routewolf_youtube_test() {
+    client="$1"
+    [ -n "$client" ] || client="$(awk '$4 ~ /TV|tv|android|samsung|lg|xiaomi|mi/ {print $3; exit}' /tmp/dhcp.leases 2>/dev/null)"
+    echo "=== RouteWolf YouTube/TV diagnosis ==="
+    [ -n "$client" ] && echo "Client: $client" || echo "Client: not set. Use: rw youtube 192.168.1.50"
+    echo
+    echo "=== DNS/AAAA settings ==="
+    uci show dhcp 2>/dev/null | grep -E 'filter_aaaa|dnsmasq.*server|dnsmasq.*confdir' || true
+    uci show firewall 2>/dev/null | grep -E "routewolf_force_dns|routing_openwrt_force_dns|src_dport='53'|dest_port='53'|dest_ip" || true
+    echo
+    echo "=== Resolve YouTube domains via router dnsmasq ==="
+    for h in youtube.com www.youtube.com youtubei.googleapis.com youtube.googleapis.com googlevideo.com redirector.googlevideo.com manifest.googlevideo.com ytimg.com i.ytimg.com ggpht.com yt3.ggpht.com gstatic.com androidtvwatsonfe-pa.googleapis.com youtube-ui.l.google.com; do
+        ip="$(nslookup "$h" 127.0.0.1 2>/dev/null | awk '/^Address [0-9]*: /{print $3} /^Address: /{print $2}' | grep -E '^[0-9]+\.' | head -n 1)"
+        if [ -n "$ip" ]; then
+            if nft list set inet fw4 vpn_domains 2>/dev/null | grep -Fq "$ip"; then
+                echo "OK   $h -> $ip in vpn_domains"
+            else
+                echo "MISS $h -> $ip not in vpn_domains yet"
+            fi
+        else
+            echo "NOIP $h"
+        fi
+    done
+    echo
+    echo "=== Policy route ==="
+    ip rule show 2>/dev/null | grep -E 'fwmark|lookup vpn|99' || true
+    ip route show table vpn 2>/dev/null || true
+    if [ -n "$client" ]; then
+        echo
+        echo "=== Sample route from client ==="
+        ip route get 8.8.8.8 from "$client" 2>/dev/null || true
+        echo
+        echo "To see live DNS from this TV, run for 60 seconds while opening YouTube:"
+        echo "  tcpdump -i br-lan -n -vvv host $client and port 53"
+    fi
+    echo
+    echo "If MISS stays after opening YouTube: TV bypasses dnsmasq or uses IPv6/DoH. Try: rw dns on and IPv6 off/filter_aaaa."
+}
+
 dco_status() {
     cfg="$(find_ovpn_config)" || { echo "OpenVPN config not found"; exit 1; }
     echo "OpenVPN config: $cfg"
@@ -3873,6 +3928,8 @@ rw commands:
   rw diag            run diagnostics
   rw load            show router load/resources
   rw lists           refresh GitHub lists + restart firewall/dnsmasq
+  rw purge           clear stale nft/dnsmasq state and reload lists
+  rw youtube [IP]    diagnose YouTube/TV domain routing
   rw repair          repair policy route/table vpn
   rw cleanup         clean interrupted RouteWolf/APK temporary files
   rw update          update project from GitHub
@@ -3911,6 +3968,8 @@ HELP
         repair_route
         wc -l /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst 2>/dev/null || true
     ;;
+    purge) routewolf_purge ;;
+    youtube|yt|tv) routewolf_youtube_test "$2" ;;
     repair|route) repair_route ;;
     cleanup) cleanup_storage ;;
     update)

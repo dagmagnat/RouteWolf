@@ -3004,7 +3004,7 @@ else
 fi
 
 section "Android TV / YouTube DNS path"
-if uci show firewall 2>/dev/null | grep -q "name='routewolf_force_dns'"; then
+if uci show firewall 2>/dev/null | grep -q "name='routewolf_force_dns'\|name='routing_openwrt_force_dns'"; then
     ok "LAN DNS interception is enabled; ordinary TCP/UDP DNS is forced through router dnsmasq"
 else
     warn "LAN DNS interception is disabled. Android TV or another client with hardcoded DNS may bypass dnsmasq and miss vpn_domains. Optional fix: rw dns on"
@@ -3201,16 +3201,16 @@ repair_route() {
 
 dns_redirect_delete() {
     while true; do
-        id="$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@redirect\[\([0-9]*\)\]\.name='routewolf_force_dns'.*/\1/p" | head -n 1)"
+        id="$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@redirect\[\([0-9]*\)\]\.name='routewolf_force_dns'\|name='routing_openwrt_force_dns'.*/\1/p" | head -n 1)"
         [ -n "$id" ] || break
         uci -q delete "firewall.@redirect[$id]" || break
     done
 }
 
 dns_force_status() {
-    if uci show firewall 2>/dev/null | grep -q "name='routewolf_force_dns'"; then
+    if uci show firewall 2>/dev/null | grep -q "name='routewolf_force_dns'\|name='routing_openwrt_force_dns'"; then
         echo "RouteWolf LAN DNS interception: ON"
-        uci show firewall 2>/dev/null | grep -A8 -B1 "name='routewolf_force_dns'" || true
+        uci show firewall 2>/dev/null | grep -A8 -B1 "name='routewolf_force_dns'\|name='routing_openwrt_force_dns'" || true
     else
         echo "RouteWolf LAN DNS interception: OFF"
     fi
