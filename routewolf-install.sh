@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v45-tv-debug-ipv4-safe"
+PROJECT_VERSION="v46-smarttv-migration"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -3350,12 +3350,106 @@ EOF
     cat << 'EOF' > /usr/sbin/routewolf-update.sh
 #!/bin/sh
 # Update RouteWolf from GitHub without deleting the current tunnel config.
+# Arguments are passed through, so cron can call: routewolf-update.sh --auto
 set -e
 cd /tmp
 /usr/sbin/routewolf-fetch.sh https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh /tmp/routewolf-update.sh
-exec sh /tmp/routewolf-update.sh
+exec sh /tmp/routewolf-update.sh "$@"
 EOF
     chmod +x /usr/sbin/routewolf-update.sh
+
+    cat << 'EOF' > /usr/sbin/routewolf-apply.sh
+#!/bin/sh
+# Apply current RouteWolf code/config to the running router after install/update/list refresh.
+set +e
+LOG="${1:-/tmp/routewolf-apply.log}"
+{
+    echo "=== RouteWolf apply $(date 2>/dev/null) ==="
+    mkdir -p /tmp/dnsmasq.d /tmp/lst /etc/routewolf/lists
+    # Keep Smart TV compatible runtime settings on every apply/update.
+    if command -v uci >/dev/null 2>&1; then
+        # Do not create duplicate redirect here; routewolf installer/update owns it.
+        [ "$(uci -q get dhcp.@dnsmasq[0].filter_aaaa 2>/dev/null)" = "1" ] || \
+            echo "note: filter_aaaa is off; IPv6 may bypass domain routing"
+    fi
+    /etc/init.d/routewolf start
+    /etc/init.d/firewall restart
+    sleep 1
+    /etc/init.d/dnsmasq restart
+    [ -x /etc/init.d/routewolf-route ] && /etc/init.d/routewolf-route start
+    [ -x /usr/sbin/routewolf-route.sh ] && /usr/sbin/routewolf-route.sh
+    [ -x /usr/sbin/routewolf-healthcheck.sh ] && /usr/sbin/routewolf-healthcheck.sh || true
+    echo "=== list counts ==="
+    wc -l /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst 2>/dev/null || true
+    echo "=== table vpn ==="
+    ip route show table vpn 2>/dev/null || true
+} >"$LOG" 2>&1
+rc="$?"
+tail -n 60 "$LOG" 2>/dev/null || true
+exit "$rc"
+EOF
+    chmod +x /usr/sbin/routewolf-apply.sh
+
+    cat << 'EOF' > /usr/sbin/routewolf-purge.sh
+#!/bin/sh
+# Clear stale temporary DNS/nft state and re-apply RouteWolf. Does not delete saved user config.
+set +e
+echo "Purging RouteWolf runtime state..."
+rm -f /tmp/dnsmasq.d/domains.lst /tmp/dnsmasq.d/domains.lst.new /tmp/dnsmasq.d/domains.raw       /tmp/lst/ipv4.lst /tmp/lst/ipv4.lst.new /tmp/lst/ipv4.raw       /tmp/lst/ipv6.lst /tmp/lst/ipv6.lst.new /tmp/lst/ipv6.raw 2>/dev/null || true
+for set in vpn_domains vpn_subnets vpn_domains6 vpn_subnets6; do
+    nft flush set inet fw4 "$set" >/dev/null 2>&1 || true
+done
+/etc/init.d/dnsmasq stop >/dev/null 2>&1 || true
+/etc/init.d/firewall restart >/dev/null 2>&1 || true
+/etc/init.d/dnsmasq start >/dev/null 2>&1 || true
+/usr/sbin/routewolf-apply.sh /tmp/routewolf-purge-apply.log
+EOF
+    chmod +x /usr/sbin/routewolf-purge.sh
+
+    cat << 'EOF' > /usr/sbin/routewolf-youtube.sh
+#!/bin/sh
+# YouTube/Smart TV diagnostics. Usage: routewolf-youtube.sh [TV_IP]
+TV_IP="$1"
+LAN_IP="$(uci -q get network.lan.ipaddr 2>/dev/null)"; [ -n "$LAN_IP" ] || LAN_IP="192.168.1.1"
+echo "=== RouteWolf YouTube/TV diagnostics ==="
+echo "LAN DNS: $LAN_IP"
+[ -n "$TV_IP" ] && echo "TV/STB IP: $TV_IP" || echo "TV/STB IP: not provided"
+echo
+if [ -n "$TV_IP" ]; then
+    echo "--- route from TV to common IPs ---"
+    ip route get 8.8.8.8 from "$TV_IP" 2>/dev/null || true
+    ip route get 1.1.1.1 from "$TV_IP" 2>/dev/null || true
+    echo
+fi
+echo "--- DNS/domain checks ---"
+for d in youtube.com www.youtube.com tv.youtube.com youtubei.googleapis.com androidtvwatsonfe-pa.googleapis.com i.ytimg.com yt3.ggpht.com redirector.googlevideo.com manifest.googlevideo.com googlevideo.com gvt1.com; do
+    ip="$(nslookup "$d" "$LAN_IP" 2>/dev/null | awk '/^Address: / && $2 ~ /^[0-9.]+$/ {print $2; exit}')"
+    printf '%-45s %s
+' "$d" "${ip:-NO_A_RECORD}"
+    if [ -n "$ip" ]; then
+        nft list set inet fw4 vpn_domains 2>/dev/null | grep -Fq "$ip" && echo "  OK: $ip is in vpn_domains" || echo "  WARN: $ip is not visible in vpn_domains yet"
+        ip route get "$ip" 2>/dev/null | sed 's/^/  router route: /'
+    fi
+done
+echo
+echo "--- IPv6 / AAAA mode ---"
+uci -q get dhcp.@dnsmasq[0].filter_aaaa 2>/dev/null | awk '{print "filter_aaaa=" $0}' || echo "filter_aaaa is not set"
+nslookup youtube.com "$LAN_IP" 2>/dev/null | grep -E 'Address: .*:' >/dev/null && echo "WARN: AAAA answers are visible" || echo "OK/unknown: no AAAA shown by this nslookup"
+echo
+echo "--- DNS interception ---"
+uci show firewall 2>/dev/null | grep -A10 -B1 "name='routewolf_force_dns'" || echo "DNS interception is OFF. Try: rw dns on"
+echo
+echo "--- nft marks ---"
+nft list ruleset 2>/dev/null | grep -E 'mark_domains|mark_subnet|vpn_domains|vpn_subnets' -n | head -n 80 || true
+echo
+echo "To capture real TV domains:"
+if [ -n "$TV_IP" ]; then
+    echo "  tcpdump -i br-lan -n -vvv host $TV_IP and port 53"
+else
+    echo "  tcpdump -i br-lan -n -vvv host TV_IP and port 53"
+fi
+EOF
+    chmod +x /usr/sbin/routewolf-youtube.sh
 
     cat << 'EOF' > /usr/sbin/routewolf-uninstall.sh
 #!/bin/sh
@@ -3742,61 +3836,6 @@ dns_force_off() {
     echo "RouteWolf LAN DNS interception disabled"
 }
 
-routewolf_purge() {
-    echo "Purging RouteWolf temporary DNS/IP state..."
-    rm -f /tmp/dnsmasq.d/domains.raw /tmp/dnsmasq.d/domains.lst.new 2>/dev/null || true
-    rm -f /tmp/lst/ipv4.raw /tmp/lst/ipv4.lst.new /tmp/lst/ipv6.raw /tmp/lst/ipv6.lst.new 2>/dev/null || true
-    nft flush set inet fw4 vpn_domains 2>/dev/null || true
-    nft flush set inet fw4 vpn_domains6 2>/dev/null || true
-    nft flush set inet fw4 vpn_subnets 2>/dev/null || true
-    nft flush set inet fw4 vpn_subnets6 2>/dev/null || true
-    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-    /etc/init.d/firewall restart >/dev/null 2>&1 || true
-    sleep 1
-    /etc/init.d/routewolf start >/dev/null 2>&1 || true
-    /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
-    echo "Done. Reopen YouTube app on the TV and test again."
-}
-
-routewolf_youtube_test() {
-    client="$1"
-    [ -n "$client" ] || client="$(awk '$4 ~ /TV|tv|android|samsung|lg|xiaomi|mi/ {print $3; exit}' /tmp/dhcp.leases 2>/dev/null)"
-    echo "=== RouteWolf YouTube/TV diagnosis ==="
-    [ -n "$client" ] && echo "Client: $client" || echo "Client: not set. Use: rw youtube 192.168.1.50"
-    echo
-    echo "=== DNS/AAAA settings ==="
-    uci show dhcp 2>/dev/null | grep -E 'filter_aaaa|dnsmasq.*server|dnsmasq.*confdir' || true
-    uci show firewall 2>/dev/null | grep -E "routewolf_force_dns|routing_openwrt_force_dns|src_dport='53'|dest_port='53'|dest_ip" || true
-    echo
-    echo "=== Resolve YouTube domains via router dnsmasq ==="
-    for h in youtube.com www.youtube.com youtubei.googleapis.com youtube.googleapis.com googlevideo.com redirector.googlevideo.com manifest.googlevideo.com ytimg.com i.ytimg.com ggpht.com yt3.ggpht.com gstatic.com androidtvwatsonfe-pa.googleapis.com youtube-ui.l.google.com; do
-        ip="$(nslookup "$h" 127.0.0.1 2>/dev/null | awk '/^Address [0-9]*: /{print $3} /^Address: /{print $2}' | grep -E '^[0-9]+\.' | head -n 1)"
-        if [ -n "$ip" ]; then
-            if nft list set inet fw4 vpn_domains 2>/dev/null | grep -Fq "$ip"; then
-                echo "OK   $h -> $ip in vpn_domains"
-            else
-                echo "MISS $h -> $ip not in vpn_domains yet"
-            fi
-        else
-            echo "NOIP $h"
-        fi
-    done
-    echo
-    echo "=== Policy route ==="
-    ip rule show 2>/dev/null | grep -E 'fwmark|lookup vpn|99' || true
-    ip route show table vpn 2>/dev/null || true
-    if [ -n "$client" ]; then
-        echo
-        echo "=== Sample route from client ==="
-        ip route get 8.8.8.8 from "$client" 2>/dev/null || true
-        echo
-        echo "To see live DNS from this TV, run for 60 seconds while opening YouTube:"
-        echo "  tcpdump -i br-lan -n -vvv host $client and port 53"
-    fi
-    echo
-    echo "If MISS stays after opening YouTube: TV bypasses dnsmasq or uses IPv6/DoH. Try: rw dns on and IPv6 off/filter_aaaa."
-}
-
 dco_status() {
     cfg="$(find_ovpn_config)" || { echo "OpenVPN config not found"; exit 1; }
     echo "OpenVPN config: $cfg"
@@ -3928,11 +3967,12 @@ rw commands:
   rw diag            run diagnostics
   rw load            show router load/resources
   rw lists           refresh GitHub lists + restart firewall/dnsmasq
-  rw purge           clear stale nft/dnsmasq state and reload lists
-  rw youtube [IP]    diagnose YouTube/TV domain routing
+  rw apply           apply current scripts/config/lists to router
+  rw purge           clear stale runtime DNS/nft state and re-apply
+  rw youtube [IP]    diagnose YouTube/Smart TV domain routing
   rw repair          repair policy route/table vpn
   rw cleanup         clean interrupted RouteWolf/APK temporary files
-  rw update          update project from GitHub
+  rw update          update project from GitHub and apply changes
   rw dco status      show OpenVPN DCO state
   rw dco off         disable OpenVPN DCO and restart OpenVPN
   rw dco on          enable/auto OpenVPN DCO and restart OpenVPN
@@ -3961,19 +4001,23 @@ HELP
     diag|diagnose) /usr/sbin/routewolf-diagnose.sh ;;
     load) /usr/sbin/routewolf-load.sh ;;
     lists|refresh)
-        /etc/init.d/routewolf start || true
-        /etc/init.d/firewall restart >/dev/null 2>&1 || true
-        sleep 2
-        /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-        repair_route
-        wc -l /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst 2>/dev/null || true
+        /usr/sbin/routewolf-apply.sh /tmp/routewolf-lists-apply.log
     ;;
-    purge) routewolf_purge ;;
-    youtube|yt|tv) routewolf_youtube_test "$2" ;;
+    apply) /usr/sbin/routewolf-apply.sh /tmp/routewolf-manual-apply.log ;;
+    purge) /usr/sbin/routewolf-purge.sh ;;
+    youtube|yt) /usr/sbin/routewolf-youtube.sh "$2" ;;
+    tvfix|tv)
+        dns_force_on
+        uci set dhcp.@dnsmasq[0].filter_aaaa='1'
+        uci commit dhcp
+        /etc/init.d/firewall restart
+        /etc/init.d/dnsmasq restart
+        echo "TV fix applied: forced DNS is ON, AAAA/IPv6 DNS answers are filtered."
+    ;;
     repair|route) repair_route ;;
     cleanup) cleanup_storage ;;
     update)
-        /usr/sbin/routewolf-update.sh
+        /usr/sbin/routewolf-update.sh "$@"
     ;;
     dns)
         case "$2" in
@@ -4118,7 +4162,18 @@ update_existing_installation() {
 
     dnsmasqfull
     dnsmasqconfdir
-    # DNS redirect is intentionally OFF by default. It can break normal internet checks.
+    # Migration v46: for domain routing to work reliably on Smart TV/Android TV,
+    # LAN clients must use router dnsmasq. Many TVs ignore DHCP DNS and try
+    # 8.8.8.8/1.1.1.1 directly, so RouteWolf would never see domains and
+    # vpn_domains would stay empty for that device. Enable DNS interception on update.
+    dns_force_on >/dev/null 2>&1 || true
+    # If IPv6 routing is not explicitly enabled, suppress AAAA answers. TVs often
+    # prefer IPv6 and bypass IPv4 domain-routing completely.
+    if [ "${IPV6_SUPPORT:-0}" != "1" ]; then
+        uci set dhcp.@dnsmasq[0].filter_aaaa='1' >/dev/null 2>&1 || true
+        remove_firewall_section_by_name ipset vpn_domains6 2>/dev/null || true
+        remove_firewall_section_by_name ipset vpn_subnets6 2>/dev/null || true
+    fi
     add_mark || {
         msgc "$C_RED" "Policy rule update failed" "Не удалось обновить правило маршрутизации"
         return 1
@@ -4138,11 +4193,15 @@ update_existing_installation() {
     if grep -q '^203\.0\.113\.0/24$' /etc/routewolf/lists/ipv4.lst 2>/dev/null; then
         rm -f /etc/routewolf/lists/ipv4.lst
     fi
-    /etc/init.d/routewolf start || true
-    /etc/init.d/firewall restart >/dev/null 2>&1 || true
-    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-    /etc/init.d/routewolf-route start >/dev/null 2>&1 || true
-    /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
+    if [ -x /usr/sbin/routewolf-apply.sh ]; then
+        /usr/sbin/routewolf-apply.sh /tmp/routewolf-update-apply.log || true
+    else
+        /etc/init.d/routewolf start || true
+        /etc/init.d/firewall restart >/dev/null 2>&1 || true
+        /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+        /etc/init.d/routewolf-route start >/dev/null 2>&1 || true
+        /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
+    fi
     validate_routewolf_installation || {
         msgc "$C_RED" "Update validation failed" "Проверка после обновления завершилась ошибкой"
         return 1
@@ -4475,19 +4534,47 @@ normalize_domain_list() {
 
 normalize_ipv4_cidr_list() {
     raw="$1"; out="$2"
-    tr -d '\r' < "$raw" | awk '
+    min_prefix="${ROUTEWOLF_IPV4_MIN_PREFIX:-16}"
+    max_lines="${ROUTEWOLF_IPV4_MAX_LINES:-200000}"
+    case "$min_prefix" in *[!0-9]*|'') min_prefix=16 ;; esac
+    case "$max_lines" in *[!0-9]*|'') max_lines=200000 ;; esac
+    tmp="$out.tmp"
+    tr -d '\r' < "$raw" | awk -v minp="$min_prefix" '
+        function valid_octets(ip, a) {
+            split(ip,a,".")
+            return (a[1] >= 0 && a[1] <= 255 && a[2] >= 0 && a[2] <= 255 && a[3] >= 0 && a[3] <= 255 && a[4] >= 0 && a[4] <= 255)
+        }
         {
             sub(/[[:space:]]#.*$/, "", $0)
             gsub(/,/, " ", $0)
             for (i=1; i<=NF; i++) {
                 t=$i
-                if (t ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/) print t
+                if (t ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/) {
+                    split(t,p,"/"); ip=p[1]; pref=p[2]
+                    if (pref == "") pref=32
+                    pref += 0
+                    if (pref < 0 || pref > 32) next
+                    if (!valid_octets(ip)) next
+                    if (pref < minp) { dropped++; next }
+                    print ip "/" pref
+                }
             }
         }
-    ' | sort -u > "$out"
+        END { if (dropped > 0) print dropped > "/tmp/routewolf-ipv4-dropped-wide.count" }
+    ' | sort -u > "$tmp"
+    lines=$(wc -l < "$tmp" 2>/dev/null || echo 0)
+    dropped_wide=$(cat /tmp/routewolf-ipv4-dropped-wide.count 2>/dev/null || echo 0)
+    rm -f /tmp/routewolf-ipv4-dropped-wide.count 2>/dev/null || true
+    [ "$dropped_wide" -gt 0 ] 2>/dev/null && echo "IPv4 safety: dropped $dropped_wide networks wider than /$min_prefix"
+    if [ "$lines" -gt "$max_lines" ] 2>/dev/null; then
+        echo "Warning: IPv4 list has $lines entries, limit is $max_lines; disabling IPv4 list for safety"
+        : > "$out"
+        rm -f "$tmp"
+        return 0
+    fi
+    mv "$tmp" "$out"
     [ -f "$out" ]
 }
-
 normalize_ipv6_cidr_list() {
     raw="$1"; out="$2"
     tr -d '\r' < "$raw" | awk '
@@ -4602,8 +4689,10 @@ EOF
     chmod +x /etc/init.d/vpnroute
     /etc/init.d/routewolf enable
 
-    sed -i '/routewolf start/d;/routewolf-healthcheck/d' /etc/crontabs/root 2>/dev/null || true
-    echo "0 2 * * * /etc/init.d/routewolf start" >> /etc/crontabs/root
+    sed -i '/routewolf start/d;/routewolf-update.sh/d;/routewolf-apply.sh/d;/routewolf-healthcheck/d' /etc/crontabs/root 2>/dev/null || true
+    # Nightly auto-update applies new project files from GitHub, regenerates RouteWolf scripts/config,
+    # refreshes lists, restarts firewall/dnsmasq and repairs the policy route.
+    echo "0 2 * * * /usr/sbin/routewolf-update.sh --auto >/tmp/routewolf-auto-update.log 2>&1" >> /etc/crontabs/root
     echo "15 3 * * * /usr/sbin/routewolf-healthcheck.sh" >> /etc/crontabs/root
     if [ -f /etc/routewolf/singbox.conf ]; then
         . /etc/routewolf/singbox.conf 2>/dev/null || true

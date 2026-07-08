@@ -1,31 +1,19 @@
 ---
-  - name: Restart sing-box
-    service:
-      name: sing-box
-      state: restarted
+  # RouteWolf defaults
+  # This fork uses repository-maintained lists instead of country modes.
+  list_domains: true
+  list_subnet: false
+  list_ip: true
+  list_community: false
 
-  - name: Restart network
-    service:
-      name: network
-      state: restarted
+  domain_list_url: https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/lists/domains-dnsmasq-nfset.lst
+  ipv4_list_url: https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/lists/ipv4.lst
+  ipv6_list_url: https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/lists/ipv6.lst
+  ipv6_support: false
 
-  - name: Restart firewall
-    service:
-      name: firewall
-      state: restarted
+  tunnel: wg
+  dns_encrypt: false
+  nano: false
+  wg_access: false
 
-  - name: Run routewolf script
-    service:
-      name: routewolf
-      state: restarted
-
-  - name: Restart dnscrypt-proxy
-    service:
-      name: dnscrypt-proxy
-      state: restarted
-      enabled: yes
-      
-  - name: Restart dnsmasq
-    service:
-      name: dnsmasq
-      state: restarted
+  wg_listen_port: 51820

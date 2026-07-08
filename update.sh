@@ -18,7 +18,7 @@ DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 # Local mode: run directly from an unpacked repository without downloading anything.
 if [ "$SELF_NAME" = "update.sh" ] && [ -f "$DIR/routewolf-install.sh" ]; then
     chmod +x "$DIR/routewolf-install.sh" 2>/dev/null || true
-    exec sh "$DIR/routewolf-install.sh" --update
+    exec sh "$DIR/routewolf-install.sh" --update "$@"
 fi
 
 fetch_to_file() {
@@ -112,7 +112,7 @@ fi
 
 cd "$TMP_DIR" || exit 1
 chmod +x install.sh update.sh uninstall.sh cleanup.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh 2>/dev/null || true
-sh ./routewolf-install.sh --update
+sh ./routewolf-install.sh --update "$@"
 RC="$?"
 cd / >/dev/null 2>&1 || true
 rm -rf "$TMP_DIR" "$ARCHIVE_FILE" "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf-${BRANCH}" 2>/dev/null || true
