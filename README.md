@@ -67,7 +67,7 @@ lists/profiles/<name>/ipv6.lst
 Короткая команда для штатного OpenWrt:
 
 ```sh
-/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
+/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
 ```
 
 Она работает и тогда, когда установленный `wget` собран без HTTPS. Сам bootstrap внутри дополнительно умеет использовать `uclient-fetch`, `curl` или рабочий `wget`.
@@ -75,7 +75,7 @@ lists/profiles/<name>/ipv6.lst
 ## Обновление
 
 ```sh
-/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
+/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
 ```
 
 Обновление сохраняет текущую конфигурацию туннеля, обновляет списки и восстанавливает маршрутизацию.
@@ -83,13 +83,13 @@ lists/profiles/<name>/ipv6.lst
 ## Удаление
 
 ```sh
-/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
+/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
 ```
 
 Полная очистка конфигов проекта:
 
 ```sh
-/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
+/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
 ```
 
 
@@ -106,7 +106,7 @@ rw cleanup
 Если установка раньше оборвалась и команды `rw` ещё нет:
 
 ```sh
-/bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/cleanup.sh | sh
+/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/cleanup.sh | sh
 ```
 
 Если после очистки в `overlay` остаётся меньше 1,5 МБ, установка останавливается без продолжения настройки туннеля.

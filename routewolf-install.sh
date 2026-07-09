@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v47-wg-awg-mtu-tv-safe"
+PROJECT_VERSION="v48-install-bootstrap-fix"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,

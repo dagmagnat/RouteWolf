@@ -12,8 +12,8 @@ ARCHIVE_FILE="/tmp/routewolf-uninstall.tar.gz"
 [ "$ACTION" = "install" ] && ARCHIVE_FILE="/tmp/routewolf.tar.gz"
 ARCHIVE_URL="https://codeload.github.com/${REPO}/tar.gz/refs/heads/${BRANCH}"
 
-SELF_NAME="$(basename "$0" 2>/dev/null)"
-DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
+SELF_NAME="${0##*/}"
+DIR=$(CDPATH= cd "$(dirname "$0")" 2>/dev/null && pwd)
 
 # Local mode: run directly from an unpacked repository without downloading anything.
 if [ "$SELF_NAME" = "uninstall.sh" ] && [ -f "$DIR/routewolf-uninstall.sh" ]; then
@@ -80,7 +80,7 @@ rm -rf "$TMP_DIR" "$ARCHIVE_FILE"     "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf
 if ! fetch_to_file "$ARCHIVE_URL" "$ARCHIVE_FILE"; then
     echo "Error: no working HTTPS downloader could fetch RouteWolf."
     echo "Try the short OpenWrt command:"
-    echo "  /bin/uclient-fetch -qO- https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh"
+    echo "  /bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh"
     echo "If /bin/uclient-fetch is missing, install/use curl or upload the ZIP manually."
     exit 1
 fi
