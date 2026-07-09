@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v46-smarttv-migration"
+PROJECT_VERSION="v47-wg-awg-mtu-tv-safe"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -24,6 +24,11 @@ DEFAULT_USE_IPV4_LIST="1"
 DEFAULT_IPV6_SUPPORT="0"
 DEFAULT_DNS_REDIRECT="0"
 DEFAULT_FAIL_MODE="open"
+# Safe MTU defaults for small OpenWrt routers and Smart TV/YouTube playback.
+# Can be overridden before install/update, e.g. ROUTEWOLF_WG_MTU=1360 sh install.sh
+DEFAULT_WG_MTU="${ROUTEWOLF_WG_MTU:-1280}"
+DEFAULT_AWG_MTU="${ROUTEWOLF_AWG_MTU:-1280}"
+DEFAULT_TUN_MTU="${ROUTEWOLF_TUN_MTU:-1280}"
 FORCE_REINSTALL="0"
 [ "$1" = "--reinstall" ] && FORCE_REINSTALL="1"
 
@@ -987,7 +992,7 @@ singbox_write_vless_config() {
       "tag": "tun-in",
       "interface_name": "sbtun0",
       "address": ["172.19.0.1/30"],
-      "mtu": 9000,
+      "mtu": 1280,
       "auto_route": false,
       "strict_route": false,
       "stack": "system"
@@ -1301,7 +1306,7 @@ outline_write_config() {
       "tag": "outline-tun",
       "interface_name": "outline0",
       "address": ["172.20.0.1/30"],
-      "mtu": 1500,
+      "mtu": 1280,
       "auto_route": false,
       "strict_route": false,
       "stack": "system"
@@ -1422,11 +1427,61 @@ cfg_get_section_value() {
 cfg_get_endpoint_host() { echo "$1" | sed 's#^\[##; s#\]##; s#:[0-9][0-9]*$##'; }
 cfg_get_endpoint_port() { echo "$1" | sed -n 's#.*:\([0-9][0-9]*\)$#\1#p'; }
 
+routewolf_valid_mtu() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -ge 576 ] 2>/dev/null && [ "$1" -le 9000 ] 2>/dev/null
+}
+
+routewolf_mtu_or_default() {
+    _mtu="$1"
+    _default="$2"
+    routewolf_valid_mtu "$_default" || _default="1280"
+    routewolf_valid_mtu "$_mtu" && echo "$_mtu" || echo "$_default"
+}
+
+routewolf_apply_interface_mtu() {
+    _iface="$1"
+    _mtu="$2"
+    _default="$3"
+    _mtu="$(routewolf_mtu_or_default "$_mtu" "$_default")"
+    [ -n "$_iface" ] || return 0
+    uci set "network.$_iface.mtu=$_mtu" >/dev/null 2>&1 || return 0
+    if ip link show "$_iface" >/dev/null 2>&1; then
+        ip link set dev "$_iface" mtu "$_mtu" >/dev/null 2>&1 || true
+    fi
+    msgc "$C_GREEN" "MTU for $_iface set to $_mtu" "MTU для $_iface установлен $_mtu"
+}
+
+routewolf_apply_default_mtu_to_existing_wg_awg() {
+    _changed=0
+    for _iface in wg0 awg0 wg1 awg1; do
+        _proto="$(uci -q get network.$_iface.proto 2>/dev/null)"
+        case "$_proto" in
+            wireguard)
+                _mtu="$(uci -q get network.$_iface.mtu 2>/dev/null)"
+                if ! routewolf_valid_mtu "$_mtu"; then
+                    routewolf_apply_interface_mtu "$_iface" "" "$DEFAULT_WG_MTU"
+                    _changed=1
+                fi
+            ;;
+            amneziawg)
+                _mtu="$(uci -q get network.$_iface.mtu 2>/dev/null)"
+                if ! routewolf_valid_mtu "$_mtu"; then
+                    routewolf_apply_interface_mtu "$_iface" "" "$DEFAULT_AWG_MTU"
+                    _changed=1
+                fi
+            ;;
+        esac
+    done
+    [ "$_changed" = "1" ] && uci commit network >/dev/null 2>&1 || true
+}
+
 parse_awg_config_file() {
     cfg="$1"
     AWG_PRIVATE_KEY=$(cfg_get_section_value Interface PrivateKey "$cfg")
     AWG_IP=$(cfg_get_section_value Interface Address "$cfg")
     AWG_DNS=$(cfg_get_section_value Interface DNS "$cfg")
+    AWG_MTU=$(cfg_get_section_value Interface MTU "$cfg")
     AWG_JC=$(cfg_get_section_value Interface Jc "$cfg")
     AWG_JMIN=$(cfg_get_section_value Interface Jmin "$cfg")
     AWG_JMAX=$(cfg_get_section_value Interface Jmax "$cfg")
@@ -2222,6 +2277,23 @@ route_vpn () {
         return 0
     fi
 
+    case "$VPN_ROUTE_DEV" in
+        wg0|wg1)
+            VPN_ROUTE_MTU="$(uci -q get network.$VPN_ROUTE_DEV.mtu 2>/dev/null)"
+            VPN_ROUTE_MTU="$(routewolf_mtu_or_default "$VPN_ROUTE_MTU" "$DEFAULT_WG_MTU")"
+        ;;
+        awg0|awg1)
+            VPN_ROUTE_MTU="$(uci -q get network.$VPN_ROUTE_DEV.mtu 2>/dev/null)"
+            VPN_ROUTE_MTU="$(routewolf_mtu_or_default "$VPN_ROUTE_MTU" "$DEFAULT_AWG_MTU")"
+        ;;
+        sbtun0|outline0)
+            VPN_ROUTE_MTU="${DEFAULT_TUN_MTU:-1280}"
+        ;;
+        *)
+            VPN_ROUTE_MTU=""
+        ;;
+    esac
+
     grep -q "99 vpn" /etc/iproute2/rt_tables || echo '99 vpn' >> /etc/iproute2/rt_tables
 
     # Do NOT create a persistent UCI route here.
@@ -2242,6 +2314,9 @@ EOF
     if [ -n "${VPN_ROUTE_GW:-}" ]; then
         echo "VPN_ROUTE_GW='$VPN_ROUTE_GW'" >> /etc/routewolf/route.conf
     fi
+    if [ -n "${VPN_ROUTE_MTU:-}" ]; then
+        echo "VPN_ROUTE_MTU='$VPN_ROUTE_MTU'" >> /etc/routewolf/route.conf
+    fi
 
     cat << 'EOF' > /usr/sbin/routewolf-route.sh
 #!/bin/sh
@@ -2258,6 +2333,13 @@ EOF
 [ -f /etc/routewolf/route.conf ] && . /etc/routewolf/route.conf
 [ -f /etc/routewolf/user.conf ] && . /etc/routewolf/user.conf
 [ -n "$VPN_ROUTE_DEV" ] || exit 0
+
+apply_runtime_mtu() {
+    case "${VPN_ROUTE_MTU:-}" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$VPN_ROUTE_MTU" -ge 576 ] 2>/dev/null && [ "$VPN_ROUTE_MTU" -le 9000 ] 2>/dev/null || return 0
+    ip link show dev "$VPN_ROUTE_DEV" >/dev/null 2>&1 || return 0
+    ip link set dev "$VPN_ROUTE_DEV" mtu "$VPN_ROUTE_MTU" >/dev/null 2>&1 || true
+}
 
 TABLE="vpn"
 grep -q "99 $TABLE" /etc/iproute2/rt_tables 2>/dev/null || echo "99 $TABLE" >> /etc/iproute2/rt_tables
@@ -2376,6 +2458,7 @@ use_vpn_route() {
 }
 
 ensure_rule
+apply_runtime_mtu
 
 i=0
 while [ "$i" -lt 30 ]; do
@@ -2637,6 +2720,8 @@ add_tunnel() {
         uci set network.wg0.private_key=$WG_PRIVATE_KEY
         uci set network.wg0.listen_port='51820'
         uci set network.wg0.addresses=$WG_IP
+        WG_MTU="$(routewolf_mtu_or_default "$WG_MTU" "$DEFAULT_WG_MTU")"
+        uci set network.wg0.mtu="$WG_MTU"
 
         if ! uci show network | grep -q wireguard_wg0; then
             uci add network wireguard_wg0
@@ -2703,6 +2788,7 @@ add_tunnel() {
                 if echo "$AWG_IP" | egrep -oq '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+$'; then break; else msgc "$C_RED" "This IP is not valid. Please repeat" "IP указан неверно. Повторите ввод"; fi
             done
             ask_line "Enter DNS value [optional] (from [Interface]):" "Введите DNS [необязательно] (из [Interface]):" AWG_DNS
+            ask_line "Enter MTU [1280 recommended for Smart TV/YouTube]:" "Введите MTU [1280 рекомендуется для Smart TV/YouTube]:" AWG_MTU
             ask_line "Enter Jc value (from [Interface]):" "Введите Jc (из [Interface]):" AWG_JC
             ask_line "Enter Jmin value (from [Interface]):" "Введите Jmin (из [Interface]):" AWG_JMIN
             ask_line "Enter Jmax value (from [Interface]):" "Введите Jmax (из [Interface]):" AWG_JMAX
@@ -2744,6 +2830,8 @@ add_tunnel() {
         uci set network.awg0.private_key="$AWG_PRIVATE_KEY"
         uci set network.awg0.listen_port='51820'
         uci set network.awg0.addresses="$AWG_IP"
+        AWG_MTU="$(routewolf_mtu_or_default "$AWG_MTU" "$DEFAULT_AWG_MTU")"
+        uci set network.awg0.mtu="$AWG_MTU"
         if [ -n "$AWG_DNS" ]; then
             uci -q delete network.awg0.dns
             OLD_IFS="$IFS"
@@ -3436,6 +3524,13 @@ echo "--- IPv6 / AAAA mode ---"
 uci -q get dhcp.@dnsmasq[0].filter_aaaa 2>/dev/null | awk '{print "filter_aaaa=" $0}' || echo "filter_aaaa is not set"
 nslookup youtube.com "$LAN_IP" 2>/dev/null | grep -E 'Address: .*:' >/dev/null && echo "WARN: AAAA answers are visible" || echo "OK/unknown: no AAAA shown by this nslookup"
 echo
+
+echo "--- VPN MTU ---"
+[ -f /etc/routewolf/route.conf ] && . /etc/routewolf/route.conf 2>/dev/null || true
+[ -n "$VPN_ROUTE_DEV" ] && echo "VPN_ROUTE_DEV=$VPN_ROUTE_DEV VPN_ROUTE_MTU=${VPN_ROUTE_MTU:-unset}"
+[ -n "$VPN_ROUTE_DEV" ] && ip link show dev "$VPN_ROUTE_DEV" 2>/dev/null | awk '/mtu/ {for(i=1;i<=NF;i++) if($i=="mtu") print "runtime_mtu="$(i+1)}'
+for d in wg0 awg0; do uci -q get network.$d.mtu 2>/dev/null | awk -v dev="$d" '{print dev" uci_mtu="$0}'; done
+echo
 echo "--- DNS interception ---"
 uci show firewall 2>/dev/null | grep -A10 -B1 "name='routewolf_force_dns'" || echo "DNS interception is OFF. Try: rw dns on"
 echo
@@ -3670,7 +3765,7 @@ write_config() {
       "tag": "tun-in",
       "interface_name": "sbtun0",
       "address": ["172.19.0.1/30"],
-      "mtu": 9000,
+      "mtu": 1280,
       "auto_route": false,
       "strict_route": false,
       "stack": "system"
@@ -3736,6 +3831,83 @@ SBE
 
 CONF="/etc/routewolf/route.conf"
 OVPN=""
+DEFAULT_WG_MTU="${ROUTEWOLF_WG_MTU:-1280}"
+DEFAULT_AWG_MTU="${ROUTEWOLF_AWG_MTU:-1280}"
+DEFAULT_TUN_MTU="${ROUTEWOLF_TUN_MTU:-1280}"
+
+valid_mtu() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -ge 576 ] 2>/dev/null && [ "$1" -le 9000 ] 2>/dev/null
+}
+
+mtu_or_default() {
+    _mtu="$1"; _default="$2"
+    valid_mtu "$_default" || _default="1280"
+    valid_mtu "$_mtu" && echo "$_mtu" || echo "$_default"
+}
+
+mtu_for_dev() {
+    _dev="$1"
+    case "$_dev" in
+        wg*) echo "$(mtu_or_default "$(uci -q get network.$_dev.mtu 2>/dev/null)" "$DEFAULT_WG_MTU")" ;;
+        awg*) echo "$(mtu_or_default "$(uci -q get network.$_dev.mtu 2>/dev/null)" "$DEFAULT_AWG_MTU")" ;;
+        sbtun0|outline0) echo "$(mtu_or_default "" "$DEFAULT_TUN_MTU")" ;;
+        *) echo "" ;;
+    esac
+}
+
+apply_mtu_to_dev() {
+    _dev="$1"; _mtu="$2"
+    valid_mtu "$_mtu" || return 0
+    case "$_dev" in
+        wg*|awg*) uci set "network.$_dev.mtu=$_mtu" >/dev/null 2>&1 || true ;;
+    esac
+    ip link show dev "$_dev" >/dev/null 2>&1 && ip link set dev "$_dev" mtu "$_mtu" >/dev/null 2>&1 || true
+}
+
+rewrite_route_mtu() {
+    _dev="$1"; _mtu="$2"; _gw="$3"
+    mkdir -p /etc/routewolf
+    {
+        echo "VPN_ROUTE_DEV='$_dev'"
+        [ -n "$_gw" ] && echo "VPN_ROUTE_GW='$_gw'"
+        [ -n "$_mtu" ] && echo "VPN_ROUTE_MTU='$_mtu'"
+    } > "$CONF"
+}
+
+mtu_status() {
+    echo "=== configured WG/AWG MTU ==="
+    for _dev in wg0 awg0 wg1 awg1; do
+        _proto="$(uci -q get network.$_dev.proto 2>/dev/null)"
+        [ -n "$_proto" ] || continue
+        _mtu="$(uci -q get network.$_dev.mtu 2>/dev/null)"
+        echo "$_dev proto=$_proto mtu=${_mtu:-unset}"
+    done
+    echo "=== active route MTU ==="
+    [ -f "$CONF" ] && cat "$CONF" || true
+    for _dev in wg0 awg0 sbtun0 outline0; do
+        ip link show dev "$_dev" 2>/dev/null | awk -v d="$_dev" '/mtu/ {for(i=1;i<=NF;i++) if($i=="mtu") print d" runtime_mtu="$(i+1)}'
+    done
+}
+
+mtu_set() {
+    _mtu="$1"; [ -n "$_mtu" ] || _mtu="1280"
+    valid_mtu "$_mtu" || { echo "Usage: rw mtu [576-9000]"; exit 1; }
+    _changed=0
+    for _dev in wg0 awg0 wg1 awg1; do
+        _proto="$(uci -q get network.$_dev.proto 2>/dev/null)"
+        case "$_proto" in wireguard|amneziawg) apply_mtu_to_dev "$_dev" "$_mtu"; echo "$_dev MTU=$_mtu"; _changed=1 ;; esac
+    done
+    [ "$_changed" = "1" ] && uci commit network >/dev/null 2>&1 || true
+    [ -f "$CONF" ] && . "$CONF" 2>/dev/null || true
+    if [ -n "${VPN_ROUTE_DEV:-}" ]; then
+        rewrite_route_mtu "$VPN_ROUTE_DEV" "$_mtu" "${VPN_ROUTE_GW:-}"
+        apply_mtu_to_dev "$VPN_ROUTE_DEV" "$_mtu"
+    fi
+    /etc/init.d/network restart >/dev/null 2>&1 || true
+    sleep 3
+    repair_route
+}
 
 find_ovpn_config() {
     for sec in $(uci -q show openvpn 2>/dev/null | sed -n "s/^openvpn\.\([^.=]*\)\.enabled='1'.*/\1/p"); do
@@ -3778,13 +3950,13 @@ repair_route() {
     [ -n "$dev" ] || for d in awg0 wg0 tun0 tun1 sbtun0 outline0; do ip link show "$d" >/dev/null 2>&1 && { dev="$d"; break; }; done
     [ -n "$dev" ] || { echo "No VPN device found"; exit 1; }
     mkdir -p /etc/routewolf
-    echo "VPN_ROUTE_DEV='$dev'" > "$CONF"
+    mtu="$(mtu_for_dev "$dev")"
+    gw=""
     case "$dev" in
-        tun*)
-            gw="$(ovpn_gateway "$dev" | head -n1)"
-            [ -n "$gw" ] && echo "VPN_ROUTE_GW='$gw'" >> "$CONF"
-        ;;
+        tun*) gw="$(ovpn_gateway "$dev" | head -n1)" ;;
     esac
+    rewrite_route_mtu "$dev" "$mtu" "$gw"
+    [ -n "$mtu" ] && apply_mtu_to_dev "$dev" "$mtu"
     /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
     echo "=== route conf ==="
     cat "$CONF" 2>/dev/null
@@ -3971,6 +4143,7 @@ rw commands:
   rw purge           clear stale runtime DNS/nft state and re-apply
   rw youtube [IP]    diagnose YouTube/Smart TV domain routing
   rw repair          repair policy route/table vpn
+  rw mtu [1280]      show or set WG/AWG MTU, then repair route
   rw cleanup         clean interrupted RouteWolf/APK temporary files
   rw update          update project from GitHub and apply changes
   rw dco status      show OpenVPN DCO state
@@ -4015,6 +4188,9 @@ HELP
         echo "TV fix applied: forced DNS is ON, AAAA/IPv6 DNS answers are filtered."
     ;;
     repair|route) repair_route ;;
+    mtu)
+        if [ -n "$2" ]; then mtu_set "$2"; else mtu_status; fi
+    ;;
     cleanup) cleanup_storage ;;
     update)
         /usr/sbin/routewolf-update.sh "$@"
@@ -4137,6 +4313,8 @@ update_existing_installation() {
     echo "Tunnel configuration is kept. / Конфиг туннеля сохраняется."
 
     # Detect existing tunnel only for the policy route helper.
+    routewolf_apply_default_mtu_to_existing_wg_awg
+
     if [ "$(uci -q get network.awg0.proto 2>/dev/null)" = "amneziawg" ]; then
         TUNNEL="awg"
         route_vpn
@@ -4381,6 +4559,11 @@ add_routewolf() {
         uci commit firewall
         IPV6_URL=""
     fi
+
+    # Fresh installs also enable TV-safe DNS interception. Without this, many
+    # Smart TV/Android TV devices may bypass dnsmasq and RouteWolf never sees
+    # the domains that must fill vpn_domains.
+    dns_force_on >/dev/null 2>&1 || true
 
     mkdir -p /etc/routewolf
     cat << EOF > /etc/routewolf/user.conf
@@ -4770,6 +4953,8 @@ add_internal_wg() {
         echo $WG_ENDPOINT_PORT_INT
     fi
 
+    ask_line "Enter MTU [1280 recommended for Smart TV/YouTube]:" "Введите MTU [1280 рекомендуется для Smart TV/YouTube]:" INT_MTU
+
     if [ "$PROTOCOL_NAME" = 'AmneziaWG' ]; then
         ask_line "Enter Jc value (from [Interface]):" "Введите Jc (из [Interface]):" AWG_JC
         ask_line "Enter Jmin value (from [Interface]):" "Введите Jmin (из [Interface]):" AWG_JMIN
@@ -4787,6 +4972,12 @@ add_internal_wg() {
     uci set network.${INTERFACE_NAME}.private_key=$WG_PRIVATE_KEY_INT
     uci set network.${INTERFACE_NAME}.listen_port='51821'
     uci set network.${INTERFACE_NAME}.addresses=$WG_IP
+    if [ "$PROTOCOL_NAME" = "AmneziaWG" ]; then
+        INT_MTU="$(routewolf_mtu_or_default "$INT_MTU" "$DEFAULT_AWG_MTU")"
+    else
+        INT_MTU="$(routewolf_mtu_or_default "$INT_MTU" "$DEFAULT_WG_MTU")"
+    fi
+    uci set network.${INTERFACE_NAME}.mtu="$INT_MTU"
 
     if [ "$PROTOCOL_NAME" = 'AmneziaWG' ]; then
         uci set network.${INTERFACE_NAME}.awg_jc=$AWG_JC

@@ -111,6 +111,25 @@ If a previous installation stopped before the `rw` command was created:
 
 If less than 1.5 MB remains in `overlay` after cleanup, setup stops before configuring the tunnel.
 
+## Smart TV / YouTube / MTU
+
+For 16 MB flash routers, the priority tunnels are WireGuard and AmneziaWG. New RouteWolf installs automatically set safe MTU `1280` for `wg0`/`awg0`; AmneziaWG also reads `MTU` from the pasted full client config when it is present.
+
+After updating an existing router, you can force MTU repair:
+
+```sh
+rw mtu 1280
+rw purge
+rw repair
+rw youtube TV_IP
+```
+
+To use another MTU, override it before install/update:
+
+```sh
+ROUTEWOLF_WG_MTU=1360 ROUTEWOLF_AWG_MTU=1280 sh install.sh
+```
+
 ## Manual ZIP install
 
 Upload the archive to `/tmp` on the router and run:
