@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v48-install-bootstrap-fix"
+PROJECT_VERSION="v51-openvpn-dco-safe"
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -439,10 +439,10 @@ ovpn_detect_gateway() {
 
     # Connected route is already normalized by the kernel, for example:
     # 10.28.4.0/22 dev tun0 scope link src 10.28.4.5
-    ip -4 route show dev "$dev" scope link 2>/dev/null | awk 'NR==1 {split($1,n,"/"); split(n[1],o,"."); if (o[1] && o[2] && o[3]) {print o[1]"."o[2]"."o[3]"."(o[4]+1); exit}}' | grep -m1 . && return 0
+    ip -4 route show dev "$dev" scope link 2>/dev/null | awk 'NR==1 {split($1,n,"/"); split(n[1],o,"."); if (o[1] != "" && o[2] != "" && o[3] != "") {print o[1]"."o[2]"."o[3]"."(o[4]+1); exit}}' | grep -m1 . && return 0
 
     # Last fallback: same /24-ish subnet, .1.
-    ip -4 addr show dev "$dev" 2>/dev/null | awk '/ inet / {split($2,a,"/"); split(a[1],o,"."); if (o[1] && o[2] && o[3]) {print o[1]"."o[2]"."o[3]".1"; exit}}'
+    ip -4 addr show dev "$dev" 2>/dev/null | awk '/ inet / {split($2,a,"/"); split(a[1],o,"."); if (o[1] != "" && o[2] != "" && o[3] != "") {print o[1]"."o[2]"."o[3]".1"; exit}}'
 }
 
 ovpn_harden_route_only_config() {
@@ -451,7 +451,19 @@ ovpn_harden_route_only_config() {
     # Keep OpenVPN from installing its own default route. RouteWolf routes
     # only marked traffic through the separate vpn table.
     sed -i '/# RouteWolf begin/,/# RouteWolf end/d' "$cfg" 2>/dev/null || true
-    cat >> "$cfg" <<'CFG'
+
+    # DCO default: verified via modprobe+lsmod right now, not assumed from
+    # "package installed". Unverified stays on the stable non-DCO path to
+    # avoid the endless-reconnect failure mode seen on some OpenWrt/X-WRT
+    # kernel builds (vermagic mismatch: kmod installs but never loads).
+    # Live state after install: rw dco status  |  toggle: rw dco on / off
+    if install_dco_if_possible; then
+        dco_line="# DCO verified loaded on this router - kernel fast path active."
+    else
+        dco_line="disable-dco"
+    fi
+
+    cat >> "$cfg" <<CFG
 
 # RouteWolf begin
 # Do not let OpenVPN take the whole router internet.
@@ -463,9 +475,7 @@ pull-filter ignore "route 0.0.0.0"
 pull-filter ignore "route 128.0.0.0"
 pull-filter ignore "dhcp-option DNS"
 pull-filter ignore "block-outside-dns"
-# Stable default: DCO is disabled because some OpenWrt/X-WRT builds reconnect
-# endlessly with ovpn-dco. Use: rw dco on  (or rw dco off)
-disable-dco
+$dco_line
 # RouteWolf end
 CFG
 }
@@ -2398,9 +2408,9 @@ detect_openvpn_gateway_runtime() {
     # Preferred fallback: first host of the current connected tun subnet.
     # This avoids stale gateways after OpenVPN reconnects into another pool
     # (e.g. 10.28.0.3/22 -> 10.28.4.5/22 means gateway must become 10.28.4.1).
-    ip -4 route show dev "$dev" scope link 2>/dev/null | awk 'NR==1 {split($1,n,"/"); split(n[1],o,"."); if (o[1] && o[2] && o[3]) {print o[1]"."o[2]"."o[3]"."(o[4]+1); exit}}' | grep -m1 . && return 0
+    ip -4 route show dev "$dev" scope link 2>/dev/null | awk 'NR==1 {split($1,n,"/"); split(n[1],o,"."); if (o[1] != "" && o[2] != "" && o[3] != "") {print o[1]"."o[2]"."o[3]"."(o[4]+1); exit}}' | grep -m1 . && return 0
 
-    ip -4 addr show dev "$dev" 2>/dev/null | awk '/ inet / {split($2,a,"/"); split(a[1],o,"."); if (o[1] && o[2] && o[3]) {print o[1]"."o[2]"."o[3]".1"; exit}}'
+    ip -4 addr show dev "$dev" 2>/dev/null | awk '/ inet / {split($2,a,"/"); split(a[1],o,"."); if (o[1] != "" && o[2] != "" && o[3] != "") {print o[1]"."o[2]"."o[3]".1"; exit}}'
 }
 
 persist_openvpn_gateway_runtime() {
@@ -2431,16 +2441,21 @@ use_vpn_route() {
             # tun subnet/gateway; a stale VPN_ROUTE_GW breaks policy routing.
             RUNTIME_GW="$(detect_openvpn_gateway_runtime "$VPN_ROUTE_DEV" | head -n 1)"
             GW="${RUNTIME_GW:-${VPN_ROUTE_GW:-}}"
-            if [ -n "$GW" ]; then
-                if ip route replace default via "$GW" dev "$VPN_ROUTE_DEV" table "$TABLE" metric 10 >/dev/null 2>&1; then
-                    [ "$GW" = "$VPN_ROUTE_GW" ] || persist_openvpn_gateway_runtime "$VPN_ROUTE_DEV" "$GW"
-                else
-                    # Do not keep a stale gateway. Fail-open by leaving table empty
-                    # rather than installing a weak default dev tun0 route that may not work.
+
+            if [ -n "$GW" ] && ip route replace default via "$GW" dev "$VPN_ROUTE_DEV" table "$TABLE" metric 10 >/dev/null 2>&1; then
+                [ "$GW" = "$VPN_ROUTE_GW" ] || persist_openvpn_gateway_runtime "$VPN_ROUTE_DEV" "$GW"
+            elif ip link show dev "$VPN_ROUTE_DEV" 2>/dev/null | grep -q POINTOPOINT; then
+                # No gateway could be determined, but the device is point-to-point.
+                # A next hop is NOT required on a NOARP p2p link: "default dev tunX"
+                # is exactly what we already do for wg/awg below, and it is correct.
+                # Failing open here was the old bug: OpenVPN "dev tun" almost always
+                # lands in this branch, so the vpn table was wiped and nothing routed.
+                ip route replace default dev "$VPN_ROUTE_DEV" table "$TABLE" scope link metric 10 >/dev/null 2>&1 || {
                     ip route del default table "$TABLE" >/dev/null 2>&1 || true
                     return 1
-                fi
+                }
             else
+                # Genuinely ambiguous: no gateway AND not point-to-point. Fail open.
                 ip route del default table "$TABLE" >/dev/null 2>&1 || true
                 return 1
             fi
@@ -4012,9 +4027,14 @@ dco_status() {
     cfg="$(find_ovpn_config)" || { echo "OpenVPN config not found"; exit 1; }
     echo "OpenVPN config: $cfg"
     if grep -qE '^[[:space:]]*disable-dco([[:space:]]|$)' "$cfg"; then
-        echo "DCO: off (disable-dco present)"
+        echo "Config: disable-dco present (DCO off)"
     else
-        echo "DCO: on/auto (disable-dco absent)"
+        echo "Config: disable-dco absent (DCO requested)"
+    fi
+    if dco_kmod_loaded; then
+        echo "Kernel module: loaded (verified) -> DCO is actually active"
+    else
+        echo "Kernel module: NOT loaded -> DCO is NOT active even if the config allows it"
     fi
     if command -v opkg >/dev/null 2>&1; then
         opkg list-installed 2>/dev/null | grep -E '^kmod-ovpn-dco|^kmod-ovpn-dco-v2|^openvpn' || true
@@ -4023,6 +4043,16 @@ dco_status() {
     fi
 }
 
+
+# Returns 0 only if an ovpn-dco kernel module is ACTUALLY loaded right now
+# (verified via lsmod), not just installed as a package. "Package installed
+# but module not loaded" is exactly the state that produces endless-reconnect
+# on some OpenWrt/X-WRT kernel builds (vermagic mismatch): OpenVPN keeps
+# requesting DCO, the kernel side silently isn't there. Same verification
+# pattern used for the AmneziaWG kmod.
+dco_kmod_loaded() {
+    lsmod 2>/dev/null | grep -qE '^ovpn_dco'
+}
 
 install_dco_if_possible() {
     if command -v opkg >/dev/null 2>&1; then
@@ -4036,6 +4066,13 @@ install_dco_if_possible() {
             apk add kmod-ovpn-dco-v2 >/dev/null 2>&1 || apk add kmod-ovpn-dco >/dev/null 2>&1 || true
         fi
     fi
+
+    # A package being present is not proof it works. Verify by actually
+    # loading it; only that counts as "DCO available" from here on.
+    dco_kmod_loaded && return 0
+    modprobe ovpn-dco-v2 >/dev/null 2>&1
+    modprobe ovpn-dco >/dev/null 2>&1
+    dco_kmod_loaded
 }
 
 dco_set() {
@@ -4047,8 +4084,14 @@ dco_set() {
         printf '\n# RouteWolf stability\ndisable-dco\n' >> "$cfg"
         echo "DCO disabled in $cfg"
     else
-        install_dco_if_possible
-        echo "DCO enabled/auto in $cfg"
+        if install_dco_if_possible; then
+            echo "DCO enabled in $cfg (kernel module verified loaded)"
+        else
+            printf '\n# RouteWolf stability\ndisable-dco\n' >> "$cfg"
+            echo "DCO kernel module could not be verified as loaded - staying on the"
+            echo "stable non-DCO path (avoids endless-reconnect seen on some builds)."
+            echo "The package may still be installing; check again: rw dco status"
+        fi
     fi
     /etc/init.d/openvpn restart 2>/dev/null || true
     sleep 3
