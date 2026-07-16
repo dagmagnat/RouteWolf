@@ -1,7 +1,21 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v51-openvpn-dco-safe"
+PROJECT_VERSION="v54-dco-user-choice"
+ROUTEWOLF_VERSION_FILE="/etc/routewolf/installed_version"
+
+# Persisted across installs/updates so a re-run can tell "what did this router
+# already have" from "what does this script bring". Absent on any router set
+# up before this marker existed - that is a normal, expected state, not an
+# error, and is reported as such rather than as a blank/confusing value.
+read_installed_version() {
+    [ -f "$ROUTEWOLF_VERSION_FILE" ] && cat "$ROUTEWOLF_VERSION_FILE" 2>/dev/null
+}
+
+write_installed_version() {
+    mkdir -p /etc/routewolf 2>/dev/null
+    printf '%s\n' "$PROJECT_VERSION" > "$ROUTEWOLF_VERSION_FILE" 2>/dev/null
+}
 
 # Project defaults for RouteWolf.
 # Lists are read from GitHub RAW links. By default they are stored in this repository,
@@ -472,6 +486,29 @@ install_dco_if_possible() {
     dco_kmod_loaded
 }
 
+# Asks the user once whether to enable DCO for THIS OpenVPN tunnel. Default
+# is "no": a confirmed upstream kernel-module bug (key rotation / reneg-sec)
+# can silently drop the tunnel's IPv4 address hours into a session on some
+# kmod-ovpn-dco-v2 builds. Works fine for many OpenWrt+OpenVPN setups; broken
+# on at least one tested router+server combo (see dmesg signature below).
+# Sets DCO_USER_CHOICE to "on" or "off". "back"/"?"/"назад" is treated as
+# "off" - there is no earlier menu step to return to at this exact point.
+ask_dco_choice() {
+    DCO_USER_CHOICE="off"
+    echo ""
+    msg "OpenVPN DCO moves encryption into the kernel - faster than the default path." \
+        "OpenVPN DCO переносит шифрование в ядро - быстрее, чем путь по умолчанию."
+    msg "Known issue: on some kmod-ovpn-dco-v2 builds the tunnel silently loses its IP" \
+        "Известная проблема: на части сборок kmod-ovpn-dco-v2 туннель тихо теряет IP"
+    msg "hours into a session (key rotation bug). Works fine on many setups, broken on" \
+        "через несколько часов работы (баг ротации ключа). У многих работает нормально,"
+    msg "others. If it breaks for you later: dmesg | grep 'primary key slot', then: rw dco off" \
+        "у части сломано. Если сломается позже: dmesg | grep 'primary key slot', затем: rw dco off"
+    if ask_yes_no_global "$(prompt "Enable DCO" "Включить DCO")" "n"; then
+        DCO_USER_CHOICE="on"
+    fi
+}
+
 ovpn_harden_route_only_config() {
     cfg="$1"
     [ -f "$cfg" ] || return 1
@@ -479,13 +516,15 @@ ovpn_harden_route_only_config() {
     # only marked traffic through the separate vpn table.
     sed -i '/# RouteWolf begin/,/# RouteWolf end/d' "$cfg" 2>/dev/null || true
 
-    # DCO default: verified via modprobe+lsmod right now, not assumed from
-    # "package installed". Unverified stays on the stable non-DCO path to
-    # avoid the endless-reconnect failure mode seen on some OpenWrt/X-WRT
-    # kernel builds (vermagic mismatch: kmod installs but never loads).
-    # Live state after install: rw dco status  |  toggle: rw dco on / off
-    if install_dco_if_possible; then
-        dco_line="# DCO verified loaded on this router - kernel fast path active."
+    # DCO: whatever the user chose in ask_dco_choice(), defaulting to off if
+    # that was never called (defensive - matches ${IPV6_SUPPORT:-0} style
+    # elsewhere in this installer). Even an explicit "on" choice still goes
+    # through install_dco_if_possible() - modprobe/lsmod verified - because
+    # "user wants it" does not make an unloadable kmod loadable. Verified
+    # loading is necessary; it is NOT sufficient (see the known rekey bug
+    # above), which is exactly why this is an informed opt-in, not a default.
+    if [ "${DCO_USER_CHOICE:-off}" = "on" ] && install_dco_if_possible; then
+        dco_line="# DCO enabled by user choice - kernel module verified loaded."
     else
         dco_line="disable-dco"
     fi
@@ -605,6 +644,7 @@ ovpn_prepare_route_only_existing() {
     cfg=$(ovpn_find_config_for_dev "$dev")
     if [ -n "$cfg" ] && [ -f "$cfg" ]; then
         msg "Patching OpenVPN config for route-only mode: $cfg" "Исправляю OpenVPN-конфиг для точечной маршрутизации: $cfg"
+        ask_dco_choice
         ovpn_harden_route_only_config "$cfg"
     else
         msgc "$C_YELLOW" "OpenVPN config file was not detected automatically. Full-tunnel routes will be removed at runtime, but it is better to add route-nopull to the .ovpn config." "OpenVPN-конфиг не определён автоматически. Full-tunnel маршруты будут удалены во время работы, но лучше добавить route-nopull в .ovpn конфиг."
@@ -637,6 +677,7 @@ configure_openvpn_from_paste() {
 
     cp "$OVPN_TMP" "$OVPN_CFG"
     rm -f "$OVPN_TMP"
+    ask_dco_choice
     ovpn_harden_route_only_config "$OVPN_CFG"
 
     OVPN_ROUTE_DEV=$(ovpn_detect_dev "$OVPN_CFG")
@@ -1680,7 +1721,13 @@ handle_existing_routing_config() {
     if [ -n "$EXISTING_IFACE" ]; then
         msg "Detected interface: $EXISTING_IFACE" "Найден интерфейс: $EXISTING_IFACE"
     fi
-    echo "1) $(prompt "Skip tunnel setup and use existing config" "Пропустить настройку туннеля и использовать существующий") [$(prompt "default" "по умолчанию")]"
+    OLD_VER="$(read_installed_version)"
+    if [ -n "$OLD_VER" ]; then
+        msg "Installed version: $OLD_VER -> this installer: $PROJECT_VERSION" "Установленная версия: $OLD_VER -> этот установщик: $PROJECT_VERSION"
+    else
+        msg "Installed version: unknown (set up before version tracking existed) -> this installer: $PROJECT_VERSION" "Установленная версия: неизвестна (установлено до появления учёта версий) -> этот установщик: $PROJECT_VERSION"
+    fi
+    echo "1) $(prompt "Update project code/lists/commands, keep current VPN config untouched" "Обновить код/списки/команды проекта, VPN-конфиг не трогать") [$(prompt "default" "по умолчанию")]"
     echo "2) $(prompt "Replace old config and create a new one" "Заменить старый конфиг и настроить новый")"
     echo "3) $(prompt "Run diagnostics" "Запустить диагностику")"
 
@@ -4073,6 +4120,8 @@ dco_status() {
         [ "$mod_up" = "1" ] && echo "  (kernel module is loaded and ready - just not used by this tunnel: rw dco on)"
     elif [ "$mod_up" = "1" ]; then
         echo "DCO: ON and verified - kernel module loaded, config allows it"
+        echo "  Loaded does not guarantee it survives a rekey. If the tunnel drops its"
+        echo "  IP after working fine for a while: dmesg | grep 'primary key slot'"
     else
         echo "DCO: requested in config but kernel module is NOT loaded right now"
         echo "  (this is the state that causes endless-reconnect on some builds; run: rw dco on)"
@@ -4128,6 +4177,12 @@ dco_set() {
     else
         if install_dco_if_possible; then
             echo "DCO enabled in $cfg (kernel module verified loaded)"
+            echo "Known issue: some kmod-ovpn-dco-v2 builds can lose the tunnel's IPv4"
+            echo "address hours into a session, with this in the kernel log:"
+            echo "  dmesg | grep 'error while retrieving primary key slot'"
+            echo "Module loading fine does not guarantee it survives a key rekey. If your"
+            echo "tunnel becomes unreachable after working for a while, check dmesg for"
+            echo "that line; if present, revert: rw dco off"
         else
             printf '\n# RouteWolf stability\ndisable-dco\n' >> "$cfg"
             echo "DCO kernel module could not be verified as loaded - staying on the"
@@ -4477,6 +4532,7 @@ update_existing_installation() {
         echo "ERROR: IPv4 list still contains example TEST-NET 203.0.113.0/24"
     fi
 
+    write_installed_version
     echo "Update done / Обновление завершено"
     echo "Status command / Проверка: /usr/sbin/routewolf-status.sh"
     echo "Load check / Проверка нагрузки: /usr/sbin/routewolf-load.sh"
@@ -5630,6 +5686,7 @@ run_step "$(prompt "Restarting network" "Перезапуск сети")" /etc/i
 run_step "$(prompt "Final routing verification" "Финальная проверка маршрутизации")" validate_routewolf_installation || exit 1
 
 ui_header "$(prompt "Installation completed" "Установка завершена")"
+write_installed_version
 msgc "$C_GREEN" "RouteWolf is ready." "RouteWolf готов к работе."
 msg "Status command: /usr/sbin/routewolf-status.sh" "Команда проверки: /usr/sbin/routewolf-status.sh"
 msg "Quick command: rw help" "Быстрая команда: rw help"
