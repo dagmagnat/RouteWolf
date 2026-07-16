@@ -445,6 +445,33 @@ ovpn_detect_gateway() {
     ip -4 addr show dev "$dev" 2>/dev/null | awk '/ inet / {split($2,a,"/"); split(a[1],o,"."); if (o[1] != "" && o[2] != "" && o[3] != "") {print o[1]"."o[2]"."o[3]".1"; exit}}'
 }
 
+# Installer-side copies. The /usr/sbin/rw copies below live inside a quoted
+# heredoc ('EOF') that is only ever written to disk as text for a separate
+# runtime script - they are not visible to this installer process. Both
+# copies must be kept in sync; this is the same pattern already used for the
+# gateway-detection awk fix, which exists in both places for the same reason.
+dco_kmod_loaded() {
+    lsmod 2>/dev/null | grep -qE '^ovpn_dco'
+}
+
+install_dco_if_possible() {
+    if command -v opkg >/dev/null 2>&1; then
+        if ! opkg list-installed 2>/dev/null | grep -qE '^kmod-ovpn-dco(-v2)? '; then
+            opkg update >/dev/null 2>&1 || true
+            opkg install kmod-ovpn-dco-v2 >/dev/null 2>&1 || opkg install kmod-ovpn-dco >/dev/null 2>&1 || true
+        fi
+    elif command -v apk >/dev/null 2>&1; then
+        if ! apk list -I 2>/dev/null | grep -qE 'ovpn-dco'; then
+            apk update >/dev/null 2>&1 || true
+            apk add kmod-ovpn-dco-v2 >/dev/null 2>&1 || apk add kmod-ovpn-dco >/dev/null 2>&1 || true
+        fi
+    fi
+    dco_kmod_loaded && return 0
+    modprobe ovpn-dco-v2 >/dev/null 2>&1
+    modprobe ovpn-dco >/dev/null 2>&1
+    dco_kmod_loaded
+}
+
 ovpn_harden_route_only_config() {
     cfg="$1"
     [ -f "$cfg" ] || return 1
@@ -4026,16 +4053,31 @@ dns_force_off() {
 dco_status() {
     cfg="$(find_ovpn_config)" || { echo "OpenVPN config not found"; exit 1; }
     echo "OpenVPN config: $cfg"
+
     if grep -qE '^[[:space:]]*disable-dco([[:space:]]|$)' "$cfg"; then
-        echo "Config: disable-dco present (DCO off)"
+        cfg_off=1
     else
-        echo "Config: disable-dco absent (DCO requested)"
+        cfg_off=0
     fi
     if dco_kmod_loaded; then
-        echo "Kernel module: loaded (verified) -> DCO is actually active"
+        mod_up=1
     else
-        echo "Kernel module: NOT loaded -> DCO is NOT active even if the config allows it"
+        mod_up=0
     fi
+
+    # Report the ACTUAL combined state, not two facts side by side that can
+    # look contradictory. disable-dco in the config always wins: OpenVPN will
+    # not use DCO no matter how ready the kernel module is.
+    if [ "$cfg_off" = "1" ]; then
+        echo "DCO: OFF - disable-dco is in the config, so OpenVPN will not use it"
+        [ "$mod_up" = "1" ] && echo "  (kernel module is loaded and ready - just not used by this tunnel: rw dco on)"
+    elif [ "$mod_up" = "1" ]; then
+        echo "DCO: ON and verified - kernel module loaded, config allows it"
+    else
+        echo "DCO: requested in config but kernel module is NOT loaded right now"
+        echo "  (this is the state that causes endless-reconnect on some builds; run: rw dco on)"
+    fi
+
     if command -v opkg >/dev/null 2>&1; then
         opkg list-installed 2>/dev/null | grep -E '^kmod-ovpn-dco|^kmod-ovpn-dco-v2|^openvpn' || true
     elif command -v apk >/dev/null 2>&1; then
