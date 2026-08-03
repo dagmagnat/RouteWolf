@@ -1,0 +1,753 @@
+<%- include('partials_header', { pageTitle: 'Настройки', pageSubtitle: 'Параметры подписки, админки, безопасности и резервных копий', activePage: 'settings' }) %>
+
+<% if (message) { %><div class="alert ok"><%= message %></div><% } %>
+<% if (error) { %><div class="alert err"><%= error %></div><% } %>
+
+<form id="bumpSubRevisionForm" method="post" action="/settings/subscription-revision/bump"></form>
+
+<div class="grid">
+  <section class="card span-6 panel-settings-card">
+    <h2><span class="section-icon" aria-hidden="true">🎛️</span>Настройка панели</h2>
+    <p class="muted">Управляет внешним видом мобильной версии: размер интерфейса и тип навигации.</p>
+    <form method="post" action="/settings/panel-ui" class="form-grid">
+      <div class="field">
+        <label>Вид интерфейса панели</label>
+        <select name="panel_interface_theme">
+          <option value="classic" <%= panelInterfaceTheme === 'classic' ? 'selected' : '' %>>Классический</option>
+          <option value="mobile_lite" <%= panelInterfaceTheme === 'mobile_lite' ? 'selected' : '' %>>Mobile Lite</option>
+        </select>
+        <small class="hint">Mobile Lite применяется на телефоне, а на компьютере остаётся обычная панель.</small>
+      </div>
+
+      <div class="field">
+        <label>Вид списка клиентов</label>
+        <select name="clients_view_mode">
+          <option value="modern" <%= clientsViewMode === 'modern' ? 'selected' : '' %>>Новый — таблица как в 3x-ui</option>
+          <option value="classic" <%= clientsViewMode === 'classic' ? 'selected' : '' %>>Старый — карточки Aggregator</option>
+        </select>
+        <small class="hint">Новый вид включён по умолчанию. На телефоне в обоих режимах остаются удобные адаптивные карточки.</small>
+      </div>
+
+      <div class="field half">
+        <label>Размер мобильного интерфейса</label>
+        <select name="panel_mobile_ui_scale">
+          <option value="compact" <%= panelMobileUiScale === 'compact' ? 'selected' : '' %>>Компактный</option>
+          <option value="normal" <%= panelMobileUiScale === 'normal' ? 'selected' : '' %>>Обычный</option>
+          <option value="large" <%= panelMobileUiScale === 'large' ? 'selected' : '' %>>Крупный</option>
+        </select>
+        <small class="hint">Компактный размер вмещает больше информации на экран телефона.</small>
+      </div>
+
+      <div class="field half">
+        <label>Мобильное меню</label>
+        <select name="panel_mobile_nav_mode">
+          <option value="bottom" <%= panelMobileNavMode === 'bottom' ? 'selected' : '' %>>Нижнее меню</option>
+          <option value="side" <%= panelMobileNavMode === 'side' ? 'selected' : '' %>>Боковое меню</option>
+        </select>
+        <small class="hint">Если выбрано нижнее меню, боковая панель на телефоне скрывается.</small>
+      </div>
+
+      <div class="field half">
+        <label>Узлов на странице</label>
+        <select name="nodes_page_size">
+          <option value="10" <%= Number(nodesPageSize || 10) === 10 ? 'selected' : '' %>>10</option>
+          <option value="12" <%= Number(nodesPageSize || 10) === 12 ? 'selected' : '' %>>12</option>
+          <option value="15" <%= Number(nodesPageSize || 10) === 15 ? 'selected' : '' %>>15</option>
+        </select>
+        <small class="hint">Для страницы «Узлы»: лишние узлы уходят на страницу 2, 3 и далее.</small>
+      </div>
+
+      <div class="field half">
+        <label class="switch-row compact">
+          <input type="checkbox" name="panel_mobile_client_compact" value="1" <%= panelMobileClientCompact ? 'checked' : '' %> />
+          <span><strong>Краткие карточки клиентов на телефоне</strong><small>Дополнительная экономия места в списке клиентов.</small></span>
+        </label>
+      </div>
+
+      <div class="field panel-extra-links">
+        <strong>Дополнительные разделы для нижнего меню</strong>
+        <small class="hint">Когда выбрано нижнее меню, эти разделы доступны здесь.</small>
+        <div class="panel-extra-link-grid">
+          <a class="link-btn secondary" href="/redirects">🔀 Перенаправление</a>
+          <a class="link-btn secondary" href="/diagnostics">🩺 Диагностика</a>
+          <a class="link-btn secondary" href="/telegram-bot">✈️ TG-бот</a>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="icon-btn">💾 Сохранить настройку панели</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card span-12 happ-control-card" id="happ-control-app">
+    <h2><span class="section-icon" aria-hidden="true">🧭</span>Happ Control App</h2>
+    <p class="muted">Здесь собраны только параметры Happ и совместимых приложений: автообновление профиля, userinfo, support-url, announce/sub-info, подпись сервера и JSON/Xray. Маршрутизация настраивается только в отдельном разделе «Маршрутизация».</p>
+
+    <form method="post" action="/settings/happ-control" class="happ-control-form">
+      <div class="happ-control-layout">
+        <div class="happ-control-main">
+          <div class="happ-section-title">1. Подписка и автообновление</div>
+          <div class="happ-control-grid">
+            <label class="switch-row compact happ-help-source" data-help-title="Показывать HAPP-ссылку" data-help-text="Добавляет кнопку и QR для /happ/:slug в списке клиентов. Сам маршрут остаётся доступен для старых ссылок даже если кнопку скрыть.">
+              <input type="checkbox" name="show_happ_links" value="1" <%= showHappLinks ? 'checked' : '' %> />
+              <span><strong>Показывать HAPP-подписку</strong><small>Кнопка /happ и QR-код в карточках клиентов.</small></span>
+            </label>
+
+            <label class="switch-row compact happ-help-source" data-help-title="Передавать автообновление" data-help-text="Отдаёт profile-update-interval / subscription-update-interval и включает subscription-auto-update-enable. Happ создаёт задачу обновления подписки с указанным интервалом.">
+              <input type="checkbox" name="subscription_client_auto_update_enabled" value="1" <%= subscriptionClientAutoUpdateEnabled ? 'checked' : '' %> />
+              <span><strong>Автообновление в подписке</strong><small>Бесплатный параметр Happ: обновлять профиль по интервалу.</small></span>
+            </label>
+
+            <div class="field half happ-help-source" data-help-title="Интервал автообновления" data-help-text="Значение в часах. Например 1 = примерно раз в час от последней задачи/обновления, а не строго в 14:00, 15:00. Если обновление пропущено, Happ выполнит его при следующем запуске приложения.">
+              <label>Интервал автообновления, часов</label>
+              <input name="subscription_update_interval_hours" type="number" min="1" max="168" step="1" value="<%= subscriptionUpdateIntervalHours || 1 %>" required />
+              <small class="hint">1–168 часов.</small>
+            </div>
+
+            <label class="switch-row compact happ-help-source" data-help-title="Subscription-Userinfo" data-help-text="Передаёт upload/download/total/expire в HTTP-заголовке subscription-userinfo. Клиенты, которые понимают этот заголовок, показывают шкалу трафика и срок подписки.">
+              <input type="checkbox" name="subscription_userinfo_header" value="1" <%= sendSubscriptionUserInfo ? 'checked' : '' %> />
+              <span><strong>Полоса трафика и срок</strong><small>Заголовок Subscription-Userinfo.</small></span>
+            </label>
+
+            <label class="switch-row compact happ-help-source" data-help-title="Живой расход трафика" data-help-text="При обновлении подписки агрегатор коротко опрашивает 3x-ui узлы, чтобы обновить использованный трафик. Если узел недоступен, будет показан кэш.">
+              <input type="checkbox" name="subscription_live_usage" value="1" <%= refreshSubscriptionUsage ? 'checked' : '' %> />
+              <span><strong>Обновлять расход при обновлении подписки</strong><small>Обновляет лимиты и трафик перед выдачей подписки.</small></span>
+            </label>
+          </div>
+
+          <div class="happ-section-title">2. Текст, поддержка и карточка Happ</div>
+          <div class="happ-control-grid">
+            <div class="field happ-help-source" data-help-title="Текст помощи" data-help-text="Короткое сообщение для клиента. Оно используется на странице подключения и может попадать в announce/sub-info, если включён инфо-блок Happ.">
+              <label>Текст помощи для клиента</label>
+              <textarea name="subscription_support_note" rows="3" placeholder="⚠️ Не работает? Обнови подписку, выбери другой сервер или напиши в поддержку."><%= subscriptionSupportNote || '' %></textarea>
+            </div>
+
+            <div class="field happ-help-source" data-help-title="Support URL" data-help-text="Передаётся как support-url и profile-web-page-url. Happ показывает кнопку поддержки рядом с подпиской; для Telegram обычно будет своя иконка.">
+              <label>Ссылка поддержки</label>
+              <input name="subscription_support_url" value="<%= subscriptionSupportUrl || '' %>" placeholder="https://t.me/... или https://site.example" />
+            </div>
+
+            <label class="switch-row compact happ-help-source" data-help-title="Happ sub-info / announce" data-help-text="Показывает логин, лимит устройств, расход трафика и текст помощи под подпиской. Для совместимости можно дублировать тот же текст в обычный announce.">
+              <input type="checkbox" name="subscription_happ_info_enabled" value="1" <%= subscriptionHappInfoEnabled ? 'checked' : '' %> />
+              <span><strong>Показывать Happ-инфо</strong><small>Логин, устройства, трафик и текст помощи.</small></span>
+            </label>
+
+            <label class="switch-row compact happ-help-source" data-help-title="Дублировать в announce" data-help-text="Рекомендуется включить: если конкретная версия Happ не показывает sub-info, клиент всё равно увидит текст через обычное объявление announce.">
+              <input type="checkbox" name="subscription_happ_info_announce_fallback_enabled" value="1" <%= subscriptionHappInfoAnnounceFallbackEnabled ? 'checked' : '' %> />
+              <span><strong>Дублировать в announce</strong><small>Больше совместимости между версиями Happ.</small></span>
+            </label>
+
+            <div class="field happ-help-source" data-help-title="Шаблон Happ-инфо" data-help-text="Можно использовать переменные {login}, {display_name}, {limit_ip}, {ip_usage}, {traffic_usage}, {days_left}, {expiry_date}, {support_note}. Текст ограничивается безопасной длиной для Happ.">
+              <label>Шаблон Happ-инфо</label>
+              <textarea name="subscription_happ_info_template" rows="4" placeholder="👤 Логин: {login}&#10;📱 Устройств: {ip_usage}&#10;{support_note}"><%= subscriptionHappInfoTemplate || '' %></textarea>
+            </div>
+
+            <div class="field half happ-help-source" data-help-title="Цвет инфо-блока" data-help-text="Цвет карточки sub-info в Happ, если версия приложения поддерживает расширенный инфо-блок.">
+              <label>Цвет инфо-блока</label>
+              <select name="subscription_happ_info_color">
+                <option value="blue" <%= subscriptionHappInfoColor === 'blue' ? 'selected' : '' %>>blue</option>
+                <option value="green" <%= subscriptionHappInfoColor === 'green' ? 'selected' : '' %>>green</option>
+                <option value="red" <%= subscriptionHappInfoColor === 'red' ? 'selected' : '' %>>red</option>
+              </select>
+            </div>
+
+            <div class="field half happ-help-source" data-help-title="Кнопка Happ" data-help-text="Текст и ссылка кнопки в sub-info. Если ссылка кнопки пустая, будет использована ссылка поддержки.">
+              <label>Текст кнопки Happ</label>
+              <input name="subscription_happ_info_button_text" maxlength="25" value="<%= subscriptionHappInfoButtonText || '' %>" placeholder="Поддержка" />
+            </div>
+
+            <div class="field happ-help-source" data-help-title="Ссылка кнопки Happ" data-help-text="Отдельная ссылка для кнопки sub-info. Можно оставить пустой, тогда возьмётся Support URL.">
+              <label>Ссылка кнопки Happ</label>
+              <input name="subscription_happ_info_button_link" value="<%= subscriptionHappInfoButtonLink || '' %>" placeholder="https://t.me/..." />
+            </div>
+
+            <label class="switch-row compact happ-help-source" data-help-title="Server Description" data-help-text="Добавляет короткую подпись под каждой локацией: в VLESS как serverDescription, в JSON как meta.serverDescription. Ограничение около 30 символов.">
+              <input type="checkbox" name="subscription_happ_server_description_enabled" value="1" <%= subscriptionHappServerDescriptionEnabled ? 'checked' : '' %> />
+              <span><strong>Подпись под каждой локацией</strong><small>Например: VLESS / TCP / REALITY.</small></span>
+            </label>
+
+            <div class="field happ-help-source" data-help-title="Шаблон подписи сервера" data-help-text="Переменные: {protocol}, {network}, {security}, {node}, {country}. Слишком длинный текст Happ может обрезать.">
+              <label>Шаблон подписи сервера</label>
+              <input name="subscription_happ_server_description_template" value="<%= subscriptionHappServerDescriptionTemplate || '' %>" placeholder="VLESS / {network} / JSON" />
+            </div>
+          </div>
+
+          <div class="happ-section-title">3. JSON/Xray и маршрутизация</div>
+          <div class="happ-control-grid">
+            <label class="switch-row compact happ-help-source" data-help-title="Sniffing в JSON" data-help-text="Включает sniffing у локальных SOCKS/HTTP inbounds в JSON-профиле. Это обычная настройка Xray-конфига, не платный Happ app-control.">
+              <input type="checkbox" name="json_sniffing_enabled" value="1" <%= jsonSniffingEnabled ? 'checked' : '' %> />
+              <span><strong>Sniffing в JSON</strong><small>Определение SNI/Host для routing-правил.</small></span>
+            </label>
+
+            <label class="switch-row compact danger-option happ-help-source" data-help-title="MUX в JSON" data-help-text="Добавляет mux в outbound JSON-профиля. Иногда помогает, но на VLESS/REALITY/XHTTP может ухудшить стабильность; включай только после теста.">
+              <input type="checkbox" name="json_mux_enabled" value="1" <%= jsonMuxEnabled ? 'checked' : '' %> />
+              <span><strong>MUX в JSON</strong><small>Осторожно: может ломать некоторые связки.</small></span>
+            </label>
+
+          </div>
+
+          <div class="alert ok happ-routing-link-note">
+            Маршруты, GeoSite/GeoIP, DNS и блокировка настраиваются только в разделе <a href="/routing">«Маршрутизация»</a>. Здесь эти параметры намеренно не дублируются.
+          </div>
+
+          <div class="alert ok happ-free-only-note">
+            Бесплатная сборка не отправляет Provider ID, autoconnect, ping-on-open/TCP ping, update-on-open, fragmentation/noises, Happ mux, no-limit и другие app-control параметры. Это сделано специально, чтобы Happ не получал платные/рискованные директивы.
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="icon-btn">💾 Сохранить Happ Control App</button>
+            <a class="link-btn secondary" href="/routing">Открыть расширенную маршрутизацию</a>
+          </div>
+        </div>
+
+        <aside class="happ-help-panel" id="happ-help-panel" aria-live="polite">
+          <div class="happ-help-kicker">Описание параметра</div>
+          <h3 id="happ-help-title">Наведи мышкой на настройку</h3>
+          <p id="happ-help-text">Справа будет показано, что делает выбранный параметр в Happ или JSON-подписке. На телефоне нажми на настройку, чтобы обновить описание.</p>
+        </aside>
+      </div>
+    </form>
+  </section>
+
+  <section class="card span-6">
+    <h2><span class="section-icon" aria-hidden="true">⚙️</span>Общие настройки</h2>
+    <form method="post" action="/settings">
+      <div class="form-grid">
+        <div class="field">
+          <label>Название подписки</label>
+          <input name="subscription_name" value="<%= subscriptionName %>" placeholder="AMG" required />
+          <small class="hint">Название профиля остаётся коротким. Текст помощи передаётся отдельно как description/announcement.</small>
+        </div>
+
+
+        <div class="field">
+          <div class="kv-item">
+            <strong>Ревизия подписок: <%= subscriptionRevision %></strong>
+            <small class="hint">При изменении названия/надписи ревизия меняется автоматически. Старые ссылки /json, /sub и /happ перенаправляются на новую <code>?rev=...</code>, чтобы приложения меньше держали старый кэш.</small>
+            <button type="submit" form="bumpSubRevisionForm" class="btn-secondary" style="margin-top:10px">Принудительно обновить ревизию подписок</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="switch-row compact">
+            <input type="checkbox" name="show_sub_links" value="1" <%= showSubLinks ? 'checked' : '' %> />
+            <span><strong>Показывать SUB-подписку клиентам</strong><small>Добавляет SUB в профиль, кнопку копирования и QR-код. Подходит для Hiddify и других приложений, которые не импортируют JSON-ссылку.</small></span>
+          </label>
+        </div>
+
+        <div class="field">
+          <label class="switch-row compact">
+            <input type="checkbox" name="show_json_links" value="1" <%= showJsonLinks ? 'checked' : '' %> />
+            <span><strong>Показывать JSON-подписку клиентам</strong><small>Добавляет JSON в профиль, кнопку копирования и QR-код. Если JSON и SUB включены вместе, панель предложит оба варианта.</small></span>
+          </label>
+        </div>
+
+        <div class="field">
+          <h3 style="margin:10px 0 0;">Адреса панели и подписок</h3>
+          <small class="hint">Админка может открываться по одной ссылке, а клиентские JSON/SUB-ссылки могут выдаваться с другого публичного адреса.</small>
+        </div>
+
+        <div class="field">
+          <label>Адрес входа в панель</label>
+          <input name="panel_public_url" value="<%= panelPublicUrl || '' %>" placeholder="https://panel.example.com:3001" />
+          <small class="hint">Используется для показа адреса входа. Сам порт сервера меняется через <code>agg</code>, потому что после смены порта нужен перезапуск Docker/Caddy.</small>
+        </div>
+
+        <div class="field">
+          <label>Secret-key входа в панель</label>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input id="panel-access-key" name="panel_access_key" value="<%= panelAccessKey || '' %>" placeholder="Оставь пустым, чтобы отключить ключ" style="flex:1;" />
+            <button type="button" class="secondary" onclick="generatePanelKey()">Сгенерировать</button>
+          </div>
+          <small class="hint">Если ключ задан, обычный <code>/login</code> отдаёт 404. Вход: <code><%= panelLoginUrl || '' %></code></small>
+        </div>
+
+        <div class="field">
+          <label>Режим ссылок подписок</label>
+          <select name="sub_url_mode">
+            <option value="custom" <%= subUrlMode === 'custom' ? 'selected' : '' %>>Свой публичный адрес подписок</option>
+            <option value="panel_without_port" <%= subUrlMode === 'panel_without_port' ? 'selected' : '' %>>Адрес панели без порта</option>
+            <option value="panel" <%= subUrlMode === 'panel' ? 'selected' : '' %>>Адрес панели как есть, включая порт</option>
+          </select>
+          <small class="hint">Для твоего варианта обычно нужно: «Свой публичный адрес подписок» и адрес вида <code>https://amg.amored.ru</code>.</small>
+        </div>
+
+        <div class="field">
+          <label>Публичный адрес подписок JSON/SUB</label>
+          <input name="sub_public_url" value="<%= subPublicUrl || '' %>" placeholder="https://amg.amored.ru" />
+          <small class="hint">Клиенты будут получать ссылки вида <code><%= publicJsonExample || '' %></code>. Secret-key сюда не добавляется.</small>
+        </div>
+
+        <div class="field">
+          <label>GitHub проекта для проверки обновлений</label>
+          <input name="update_repo_url" value="<%= updateRepoUrl || 'https://github.com/dagmagnat/3xui-Aggregator' %>" placeholder="https://github.com/dagmagnat/3xui-Aggregator" />
+          <small class="hint">По умолчанию используется твой репозиторий. Если кто-то сделает fork, ссылку можно заменить здесь.</small>
+        </div>
+
+        <div class="field">
+          <label class="switch-row compact">
+            <input type="checkbox" name="subscription_show_limits" value="1" <%= showSubscriptionLimits ? 'checked' : '' %> />
+            <span><strong>Показывать лимит и срок в названиях узлов</strong><small>Если у узла задан лимит: Россия · 7/50 ГБ · 15 дн. Если лимита нет: Польша · ∞ · 15 дн.</small></span>
+          </label>
+        </div>
+
+        <div class="field">
+          <label class="switch-row compact">
+            <input type="checkbox" name="subscription_show_empty_limits" value="1" <%= subscriptionShowEmptyLimits ? 'checked' : '' %> />
+            <span><strong>Показывать ∞ у безлимитных узлов</strong><small>Если выключено, у безлимитных клиентов в названии узла не будет «∞ · ∞ дн.» — останется только название региона.</small></span>
+          </label>
+        </div>
+
+        <div class="field">
+          <h3 style="margin:10px 0 0;">Доступ к админке</h3>
+          <small class="hint">Для смены логина или пароля обязательно укажи текущий пароль.</small>
+        </div>
+
+        <div class="field half">
+          <label>Логин администратора</label>
+          <input name="admin_username" value="<%= adminUsername || '' %>" autocomplete="username" />
+        </div>
+
+        <div class="field half">
+          <label>Текущий пароль</label>
+          <input name="current_password" type="password" autocomplete="current-password" placeholder="Нужен только для смены логина/пароля" />
+        </div>
+
+        <div class="field half">
+          <label>Новый пароль</label>
+          <input name="new_password" type="password" autocomplete="new-password" placeholder="Минимум 8 символов" />
+        </div>
+
+        <div class="field half">
+          <label>Повтор нового пароля</label>
+          <input name="new_password_confirm" type="password" autocomplete="new-password" />
+        </div>
+
+        <div class="field">
+          <label>Разрешённые IP для входа в админку</label>
+          <textarea name="admin_allowed_ips" rows="4" placeholder="Оставь пустым, чтобы разрешить вход с любого IP"><%= adminAllowedIps || '' %></textarea>
+          <small class="hint">Твой текущий IP: <strong><%= currentIp || 'не определён' %></strong>. Можно указать несколько IP через пробел, запятую или с новой строки. Будь осторожен: если указать неправильный IP, вход будет закрыт.</small>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="submit">Сохранить</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card span-6">
+    <h2><span class="section-icon" aria-hidden="true">🛡️</span>SNI-профили REALITY</h2>
+    <p class="muted">Сохраняй часто используемые SNI, проверяй TLS-доступность и выбирай их потом в узлах. Это меняет только выдаваемую подписку, если в узле выбран профиль.</p>
+    <form method="post" action="/settings/sni-profiles" class="form-grid sni-profile-form" data-floating-save-label="SNI-профиль">
+      <div class="field half"><label>Название</label><input name="name" placeholder="VK Mobile" required /></div>
+      <div class="field half sni-inline-field">
+        <label>SNI</label>
+        <div class="sni-input-row">
+          <input name="sni" placeholder="m.vk.com" required />
+          <button type="button" class="secondary sni-check-inline icon-btn" data-sni-check-button>🛡️ Проверить</button>
+        </div>
+        <div class="sni-check-result hidden" data-sni-check-result></div>
+      </div>
+      <div class="field"><label>Комментарий</label><input name="comment" placeholder="когда использовать этот SNI" /></div>
+      <div class="actions sni-profile-actions">
+        <button type="submit" class="icon-btn">💾 Сохранить</button>
+        <button type="submit" name="check_now" value="1" class="secondary no-wrap icon-btn">🛡️ Сохранить и проверить</button>
+      </div>
+    </form>
+    <div class="table-wrap compact-table" style="margin-top:14px;">
+      <table>
+        <thead><tr><th>Название</th><th>SNI</th><th>Статус</th><th>Комментарий</th><th></th></tr></thead>
+        <tbody>
+          <% (sniProfiles || []).forEach(profile => { %>
+            <tr>
+              <td><strong><%= profile.name %></strong><% if (profile.is_builtin) { %><br><small>встроенный</small><% } %></td>
+              <td><code><%= profile.sni %></code></td>
+              <td><span class="status <%= profile.last_status === 'ok' ? 'ok' : (profile.last_status === 'error' ? 'off' : '') %>"><%= profile.last_status || 'не проверен' %></span></td>
+              <td><small><%= profile.comment || '' %></small></td>
+              <td>
+                <% if (!profile.is_builtin) { %>
+                  <form method="post" action="/settings/sni-profiles/<%= profile.id %>/delete" onsubmit="return confirm('Удалить SNI-профиль?')"><button type="submit" class="danger small">Удалить</button></form>
+                <% } %>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card span-6">
+    <h2><span class="section-icon" aria-hidden="true">💾</span>Резервная копия</h2>
+    <div class="kv-list">
+      <div class="kv-item">
+        <strong>Скачать резервную копию</strong>
+        <div class="muted">Сохраняет пользователей панели, настройки, узлы, клиентов и связи клиентов с узлами.</div>
+        <div class="muted" style="margin-top:8px;">Имя файла теперь содержит домен или IP панели в конце: <code><%= backupFileExample %></code></div>
+        <div class="actions" style="margin-top:12px;">
+          <a class="button" href="/backup/download">Создать и скачать</a>
+        </div>
+      </div>
+      <div class="kv-item">
+        <strong>Восстановить из резервной копии</strong>
+        <div class="muted">После восстановления текущая база будет заменена, а сессия сброшена.</div>
+        <input id="backup-file" type="file" accept="application/json,.json" style="margin-top:12px;" />
+        <div class="actions" style="margin-top:12px;">
+          <button id="backup-restore-btn" type="button" onclick="window.restoreBackup && window.restoreBackup()">Загрузить резервную копию</button>
+        </div>
+        <div id="backup-restore-status" class="muted" style="margin-top:10px;"></div>
+        <small class="hint">Важно: сюда загружается только JSON-бэкап, созданный кнопкой «Создать и скачать» в панели или кнопкой «💾 Бэкап» в Telegram-боте. Backup из команды <code>agg</code> — это tar.gz-архив папки проекта для восстановления сервера через SSH, он не восстанавливается через эту форму.</small>
+      </div>
+    </div>
+  </section>
+
+  <section class="card span-6" id="project-update-card">
+    <h2><span class="section-icon" aria-hidden="true">🔄</span>Обновление проекта</h2>
+    <div class="kv-list update-box">
+      <div class="kv-item">
+        <strong>Текущая версия</strong>
+        <div class="muted">Репозиторий: <code id="upd-repo"><%= projectUpdateStatus.repo || 'dagmagnat/3xui-Aggregator' %></code></div>
+        <div class="muted">Версия: <code id="upd-current-version"><%= projectUpdateStatus.currentVersion || '0.1.0' %></code> · ветка: <code id="upd-branch"><%= projectUpdateStatus.branch %></code> · commit: <code id="upd-current-commit"><%= projectUpdateStatus.current %></code></div>
+        <div class="muted" id="upd-remote-line"><% if (projectUpdateStatus.remoteVersion) { %>GitHub version: <code><%= projectUpdateStatus.remoteVersion %></code> · <%= projectUpdateStatus.hasUpdate ? 'доступно обновление' : 'обновлений не найдено' %><% } else { %>Нажми «Проверить», чтобы получить последнюю версию с GitHub.<% } %></div>
+        <div class="muted" id="upd-archive-line"><% if (projectUpdateStatus.archiveUrl) { %>Архив: <code><%= projectUpdateStatus.archiveUrl %></code><% } %></div>
+        <div class="muted" id="upd-error-line"><% if (projectUpdateStatus.error) { %>Проверка GitHub не удалась: <%= projectUpdateStatus.error %><% } %></div>
+        <ul class="muted" id="upd-notes"><% if (projectUpdateStatus.notes && projectUpdateStatus.notes.length) { projectUpdateStatus.notes.forEach(n => { %><li><%= n %></li><% }) } %></ul>
+        <div class="muted" id="upd-runtime-line">Статус обновления: не запущено</div>
+      </div>
+    </div>
+    <div class="actions update-actions">
+      <button type="button" class="secondary" onclick="checkProjectUpdate(this)">Проверить</button>
+      <button type="button" class="btn-main" id="project-update-btn" onclick="startProjectUpdate(this)" disabled>Обновить</button>
+      <a class="link-btn secondary" href="/backup/download" target="_blank">Скачать backup</a>
+      <button type="button" class="secondary" onclick="copyText('agg update', this)">Скопировать agg</button>
+    </div>
+    <small class="hint">Кнопка «Обновить» запускает host-updater: он делает backup, скачивает архив GitHub и выполняет обновление как пункт 2 в <code>agg</code>. Если статус не меняется — значит host-updater ещё не установлен; выполни один раз обновление через SSH.</small>
+  </section>
+
+  <div class="modal-backdrop" id="project-update-modal" style="display:none;">
+    <div class="modal-card small-modal">
+      <button type="button" class="modal-close" onclick="closeProjectUpdateModal()">×</button>
+      <h2><span class="section-icon" aria-hidden="true">🔄</span>Обновление проекта</h2>
+      <p id="project-update-modal-text">Подготовка...</p>
+      <pre id="project-update-log" class="mini-log"></pre>
+    </div>
+  </div>
+
+
+  <section class="card span-6">
+    <h2><span class="section-icon" aria-hidden="true">🖥️</span>Сервер и обслуживание</h2>
+    <div class="kv-list">
+      <div class="kv-item">
+        <strong>Текущий запуск</strong>
+        <div class="muted">Порт приложения: <code><%= runtimePort %></code></div>
+        <div class="muted">Привязка портов к IP: <code><%= runtimeBindIp || 'не задана, все IP сервера' %></code></div>
+        <div class="muted">Secure cookie: <code><%= runtimeSessionSecure ? 'включено' : 'выключено' %></code>, trust proxy: <code><%= runtimeTrustProxy ? 'включено' : 'выключено' %></code></div>
+        <div class="muted" style="margin-top:8px;">Порт и режим Caddy меняются через <code>agg</code>, потому что после изменения нужен перезапуск контейнеров. В веб-панели можно безопасно менять secret-key и публичный адрес подписок.</div>
+      </div>
+
+      <div class="kv-item">
+        <strong>Команды на сервере</strong>
+        <div class="command-row">
+          <code>agg</code>
+          <button type="button" class="secondary" onclick="copyText('agg update', this)">Копировать</button>
+        </div>
+        <div class="command-row">
+          <code>cd <%= appDirHint %> &amp;&amp; docker compose logs --tail=100</code>
+          <button type="button" class="secondary" onclick="copyText('cd <%= appDirHint %> && docker compose logs --tail=100', this)">Копировать</button>
+        </div>
+        <div class="command-row">
+          <code>bash <%= appDirHint %>/uninstall.sh</code>
+          <button type="button" class="secondary" onclick="copyText('bash <%= appDirHint %>/uninstall.sh', this)">Копировать</button>
+        </div>
+        <small class="hint">Удаление из веб-панели специально не запускается: контейнер не получает root-доступ к серверу и Docker socket, чтобы не снижать безопасность. Удаление доступно через <code>agg</code> или команду выше.</small>
+      </div>
+
+      <div class="kv-item">
+        <strong>Какие ссылки сейчас будут выдаваться</strong>
+        <div class="muted">Вход в панель: <code><%= panelLoginUrl || panelPublicUrl || '' %></code></div>
+        <div class="muted">Вход с телефона/ярлыка: <code><%= panelMobileLoginUrl || panelLoginUrl || '' %></code></div>
+        <div class="muted">JSON клиенту: <code><%= publicJsonExample || '' %></code></div>
+        <div class="muted">SUB клиенту: <code><%= publicSubExample || '' %></code></div>
+        <div class="muted">HAPP клиенту: <code><%= publicHappExample || '' %></code></div>
+        <div class="command-row">
+          <code><%= panelMobileLoginUrl || panelLoginUrl || '' %></code>
+          <button type="button" class="secondary" onclick="copyText('<%= panelMobileLoginUrl || panelLoginUrl || '' %>', this)">Скопировать вход для телефона</button>
+        </div>
+        <div class="muted">Backup-каталог на сервере: <code><%= backupDirHint %></code></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card span-6">
+    <h2><span class="section-icon" aria-hidden="true">✈️</span>Telegram</h2>
+    <p class="muted">Системные уведомления перенесены в раздел TG-бот, чтобы все Telegram-настройки были в одном месте.</p>
+    <div class="actions"><a class="link-btn secondary" href="/telegram-bot">Открыть TG-бот</a></div>
+  </section>
+
+  <section class="card span-6">
+    <h2><span class="section-icon" aria-hidden="true">🔒</span>Безопасность</h2>
+    <form method="post" action="/settings/security" class="form-grid security-settings-form">
+      <div class="field half">
+        <label>Автовыход при бездействии, минут</label>
+        <select name="admin_idle_timeout_minutes">
+          <% [10, 15, 20, 30, 60, 120, 240, 1440].forEach(v => { %>
+            <option value="<%= v %>" <%= Number(adminIdleTimeoutMinutes || 20) === v ? 'selected' : '' %>><%= v === 1440 ? '24 часа' : v + ' мин.' %></option>
+          <% }) %>
+        </select>
+        <small class="hint">По умолчанию 20 минут. После этого панель попросит войти заново.</small>
+      </div>
+      <label class="field half switch-row compact">
+        <input type="checkbox" name="admin_bind_session_to_ip" value="1" <%= adminBindSessionToIp ? 'checked' : '' %> />
+        <span><strong>Выходить при смене IP</strong><small>Безопаснее для ПК. Для мобильного интернета может выбрасывать при смене сети.</small></span>
+      </label>
+      <div class="kv-list field full security-info-list">
+        <div class="kv-item"><strong>Защита от перебора</strong><div class="muted">После 5 неверных попыток вход блокируется на 15 минут для пары IP + логин.</div></div>
+        <div class="kv-item"><strong>Разделение входа и подписок</strong><div class="muted">Вход в админку может быть по адресу с портом и secret-key, а JSON/SUB-ссылки для клиентов — по отдельному публичному адресу без порта и без ключа.</div></div>
+      </div>
+      <div class="actions field full"><button type="submit" class="btn-main">Сохранить безопасность</button></div>
+    </form>
+  </section>
+</div>
+
+<script>
+function generatePanelKey() {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const bytes = new Uint8Array(32);
+  window.crypto.getRandomValues(bytes);
+  let value = '';
+  for (const b of bytes) value += alphabet[b % alphabet.length];
+  const input = document.getElementById('panel-access-key');
+  if (input) input.value = value;
+}
+
+async function copyText(value, button) {
+  try {
+    await navigator.clipboard.writeText(String(value || ''));
+    if (button) {
+      const old = button.textContent;
+      button.textContent = 'Скопировано';
+      setTimeout(() => { button.textContent = old; }, 1200);
+    }
+  } catch (err) {
+    alert('Не удалось скопировать. Скопируй вручную.');
+  }
+}
+
+const HAPP_LOYAL_GEOSITE_URL = 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat';
+const HAPP_LOYAL_GEOIP_URL = 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat';
+
+function syncHappGeoSourceFields() {
+  const source = document.getElementById('happ-geodata-source')?.value || 'loyalsoldier';
+  const geosite = document.getElementById('happ-geosite-url');
+  const geoip = document.getElementById('happ-geoip-url');
+  if (!geosite || !geoip) return;
+  if (source === 'loyalsoldier') {
+    geosite.value = HAPP_LOYAL_GEOSITE_URL;
+    geoip.value = HAPP_LOYAL_GEOIP_URL;
+    geosite.readOnly = true;
+    geoip.readOnly = true;
+  } else if (source === 'official') {
+    geosite.value = '';
+    geoip.value = '';
+    geosite.readOnly = true;
+    geoip.readOnly = true;
+  } else {
+    geosite.readOnly = false;
+    geoip.readOnly = false;
+  }
+}
+
+function setHappGeoPreset(kind) {
+  const presets = {
+    loyal: ['loyalsoldier', HAPP_LOYAL_GEOSITE_URL, HAPP_LOYAL_GEOIP_URL],
+    ru: ['custom', 'https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geosite.dat', 'https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/geoip.dat'],
+    iran: ['custom', 'https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat', 'https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat']
+  };
+  const chosen = presets[kind];
+  if (!chosen) return;
+  const source = document.getElementById('happ-geodata-source');
+  const geosite = document.getElementById('happ-geosite-url');
+  const geoip = document.getElementById('happ-geoip-url');
+  if (source) source.value = chosen[0];
+  if (geosite) geosite.value = chosen[1];
+  if (geoip) geoip.value = chosen[2];
+  syncHappGeoSourceFields();
+}
+
+function initHappHelpPanel() {
+  const panel = document.getElementById('happ-help-panel');
+  const title = document.getElementById('happ-help-title');
+  const text = document.getElementById('happ-help-text');
+  if (!panel || !title || !text) return;
+  const update = (el) => {
+    const t = el.getAttribute('data-help-title') || 'Параметр';
+    const body = el.getAttribute('data-help-text') || 'Описание не задано.';
+    title.textContent = t;
+    text.textContent = body;
+    panel.classList.add('is-active');
+  };
+  document.querySelectorAll('.happ-help-source').forEach(el => {
+    el.addEventListener('mouseenter', () => update(el));
+    el.addEventListener('focusin', () => update(el));
+    el.addEventListener('click', () => update(el));
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  syncHappGeoSourceFields();
+  initHappHelpPanel();
+});
+
+
+let lastProjectUpdateStatus = null;
+let projectUpdatePollTimer = null;
+
+function renderProjectUpdateStatus(payload) {
+  if (!payload || !payload.updateStatus) return;
+  const u = payload.updateStatus;
+  lastProjectUpdateStatus = u;
+  const remoteLine = document.getElementById('upd-remote-line');
+  const archiveLine = document.getElementById('upd-archive-line');
+  const errorLine = document.getElementById('upd-error-line');
+  const notes = document.getElementById('upd-notes');
+  const runtimeLine = document.getElementById('upd-runtime-line');
+  const updateBtn = document.getElementById('project-update-btn');
+  if (remoteLine) {
+    if (u.remoteVersion) remoteLine.innerHTML = `GitHub version: <code>${escapeHtml(u.remoteVersion)}</code> · ${u.hasUpdate ? 'доступно обновление' : 'обновлений не найдено'}`;
+    else if (u.remote) remoteLine.innerHTML = `GitHub commit: <code>${escapeHtml(u.remote)}</code> · ${u.hasUpdate ? 'доступно обновление' : 'обновлений не найдено'}`;
+    else remoteLine.textContent = 'GitHub проверен, версия не получена.';
+  }
+  if (archiveLine) archiveLine.innerHTML = u.archiveUrl ? `Архив: <code>${escapeHtml(u.archiveUrl)}</code>` : '';
+  if (errorLine) errorLine.textContent = u.error ? `Проверка GitHub не удалась: ${u.error}` : '';
+  if (notes) notes.innerHTML = Array.isArray(u.notes) ? u.notes.map(n => `<li>${escapeHtml(n)}</li>`).join('') : '';
+  if (runtimeLine && payload.runtimeStatus) runtimeLine.textContent = `Статус обновления: ${payload.runtimeStatus.message || payload.runtimeStatus.status || 'не запущено'}`;
+  if (updateBtn) updateBtn.disabled = !u.archiveUrl;
+}
+
+function escapeHtml(value) {
+  return String(value || '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
+}
+
+async function checkProjectUpdate(button) {
+  const old = button ? button.textContent : '';
+  if (button) { button.disabled = true; button.textContent = 'Проверяю...'; }
+  try {
+    const response = await fetch('/settings/project-update/status.json?check=1', { headers: { 'Accept': 'application/json' } });
+    const payload = await response.json();
+    if (!response.ok || payload.ok === false) throw new Error(payload.error || 'Ошибка проверки обновления');
+    renderProjectUpdateStatus(payload);
+    document.getElementById('project-update-card')?.scrollIntoView({ block: 'center' });
+  } catch (err) {
+    alert(String(err.message || err));
+  } finally {
+    if (button) { button.disabled = false; button.textContent = old || 'Проверить'; }
+  }
+}
+
+async function startProjectUpdate(button) {
+  if (!confirm('Запустить обновление проекта? Будет создан backup, скачан архив GitHub и выполнено обновление без изменения настроек.')) return;
+  const modal = document.getElementById('project-update-modal');
+  const text = document.getElementById('project-update-modal-text');
+  const log = document.getElementById('project-update-log');
+  if (modal) modal.style.display = 'flex';
+  if (text) text.textContent = 'Отправляю запрос на обновление...';
+  if (log) log.textContent = '';
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch('/settings/project-update/start.json', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ archive_url: lastProjectUpdateStatus && lastProjectUpdateStatus.archiveUrl })
+    });
+    const payload = await response.json();
+    if (!response.ok || payload.ok === false) throw new Error(payload.error || 'Ошибка запуска обновления');
+    pollProjectUpdateStatus(true);
+  } catch (err) {
+    if (text) text.textContent = 'Ошибка запуска обновления';
+    if (log) log.textContent = String(err.message || err);
+    if (button) button.disabled = false;
+  }
+}
+
+async function pollProjectUpdateStatus(forceModal) {
+  try {
+    const response = await fetch('/settings/project-update/status.json', { headers: { 'Accept': 'application/json' } });
+    const payload = await response.json();
+    if (payload && payload.ok) renderProjectUpdateStatus(payload);
+    const st = payload.runtimeStatus || {};
+    const state = String(st.status || 'idle');
+    const text = document.getElementById('project-update-modal-text');
+    const log = document.getElementById('project-update-log');
+    if (forceModal && document.getElementById('project-update-modal')) document.getElementById('project-update-modal').style.display = 'flex';
+    if (text) text.textContent = st.message || state;
+    if (log) log.textContent = [st.updatedAt || '', st.archiveUrl || '', st.error || '', st.logTail || ''].filter(Boolean).join('\n');
+    if (['success'].includes(state)) {
+      clearTimeout(projectUpdatePollTimer);
+      if (text) text.textContent = 'Обновление успешно произведено. Страница перезагрузится...';
+      setTimeout(() => { window.location.href = '/dashboard?message=' + encodeURIComponent('Обновление успешно произведено'); }, 3000);
+      return;
+    }
+    if (['failed', 'error'].includes(state)) {
+      clearTimeout(projectUpdatePollTimer);
+      document.getElementById('project-update-btn')?.removeAttribute('disabled');
+      return;
+    }
+  } catch (_) {}
+  projectUpdatePollTimer = setTimeout(() => pollProjectUpdateStatus(false), 3000);
+}
+
+function closeProjectUpdateModal() {
+  const modal = document.getElementById('project-update-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function restoreBackup() {
+  const input = document.getElementById('backup-file');
+  const button = document.getElementById('backup-restore-btn');
+  const status = document.getElementById('backup-restore-status');
+  const file = input && input.files && input.files[0];
+  if (!file) return alert('Выбери файл резервной копии');
+  if (!/\.json$/i.test(file.name || '')) {
+    return alert('Через панель можно восстановить только JSON-бэкап. tar.gz из agg восстанавливается через SSH.');
+  }
+  if (!confirm('Восстановить резервную копию? Текущие данные будут заменены, а сессия будет сброшена.')) return;
+
+  try {
+    if (button) button.disabled = true;
+    if (status) status.textContent = 'Читаю файл резервной копии...';
+    const text = (await file.text()).replace(/^\uFEFF/, '').trim();
+    if (!text) throw new Error('Файл резервной копии пустой');
+
+    // Быстрая проверка на стороне браузера, чтобы сразу показать понятную ошибку.
+    JSON.parse(text);
+
+    if (status) status.textContent = 'Загружаю резервную копию в панель...';
+    const response = await fetch('/backup/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: text,
+      credentials: 'same-origin'
+    });
+
+    if (response.redirected) {
+      window.location.href = response.url;
+      return;
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Ошибка восстановления резервной копии');
+    }
+
+    if (status) status.textContent = 'Резервная копия восстановлена. Перехожу на страницу входа...';
+    window.location.href = '/login';
+  } catch (err) {
+    alert(String(err.message || err));
+    if (status) status.textContent = 'Ошибка: ' + String(err.message || err);
+    if (button) button.disabled = false;
+  }
+}
+window.restoreBackup = restoreBackup;
+</script>
+<%- include('partials_footer') %>

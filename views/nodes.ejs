@@ -1,0 +1,993 @@
+<%
+  const activeNodeTab = ['list', 'add', 'help'].includes(String(typeof nodeActiveTab !== 'undefined' ? nodeActiveTab : 'list'))
+    ? String(typeof nodeActiveTab !== 'undefined' ? nodeActiveTab : 'list')
+    : 'list';
+  function flagEmojiFromCode(code) {
+    const cc = String(code || '').trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(cc) || ['ZZ','XX'].includes(cc)) return '';
+    return Array.from(cc).map(ch => String.fromCodePoint(0x1F1E6 + ch.charCodeAt(0) - 65)).join('');
+  }
+  function escapeFlagAttr(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function nodeFallbackIcon(nodeType) {
+    const kind = ['remnawave', 'h1cloud', 'h1cloud_3xui'].includes(String(nodeType || ''))
+      ? String(nodeType)
+      : '3xui';
+    const label = kind === 'remnawave' ? 'Remnawave' : (kind.startsWith('h1cloud') ? 'H1Cloud' : 'Узел');
+    const glyph = kind === 'remnawave'
+      ? '<circle cx="12" cy="12" r="2.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M5 19a10 10 0 0 1 0-14M19 5a10 10 0 0 1 0 14"/>'
+      : (kind.startsWith('h1cloud')
+        ? '<path d="M5 17.5h14"/><path d="M8 17.5v-4.2a4 4 0 0 1 8 0v4.2"/><circle cx="12" cy="6" r="2"/><path d="M4.5 9.5a8.5 8.5 0 0 1 15 0"/>'
+        : '<rect x="4" y="5" width="16" height="5.5" rx="1.6"/><rect x="4" y="13.5" width="16" height="5.5" rx="1.6"/><path d="M7 7.8h.01M7 16.2h.01"/>');
+    return `<span class="flag-badge node-type-fallback node-type-${kind}" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${glyph}</svg></span>`;
+  }
+  function flagHtml(code, fallback, name, nodeType) {
+    const rawCode = String(code || '').trim().toLowerCase();
+    const flagValue = String(fallback || '').trim();
+    const nameText = String(name || '').trim();
+    const codeFromName = (typeof countryCodeByName === 'function') ? String(countryCodeByName(nameText) || '').trim().toLowerCase() : '';
+    const code2 = (/^[a-z]{2}$/i.test(rawCode) ? rawCode : (/^[a-z]{2}$/i.test(flagValue) ? flagValue.toLowerCase() : codeFromName));
+    const emoji = (typeof countryFlagText === 'function')
+      ? countryFlagText(code, flagValue, nameText)
+      : ((flagValue && flagValue !== '🌐' && !/^[a-z]{2}$/i.test(flagValue)) ? flagValue : flagEmojiFromCode(code || flagValue));
+    if (code2 && !['zz','xx'].includes(code2)) {
+      const fallbackEmoji = emoji || flagEmojiFromCode(code2);
+      return `<span class="flag-badge local-flag-shell"><img class="flag-img" src="/flags/${code2}.svg" alt="${escapeFlagAttr(name || code2)}" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="flag-emoji-fallback" hidden>${fallbackEmoji}</span></span>`;
+    }
+    return emoji && emoji !== '🌐'
+      ? `<span class="flag-badge emoji-fallback" aria-label="${escapeFlagAttr(String(code || '').toUpperCase())}">${emoji}</span>`
+      : nodeFallbackIcon(nodeType);
+  }
+  function compactTransportLabel(label) {
+    const raw = String(label || '').trim();
+    if (!raw) return 'не загружено';
+    return raw
+      .replace(/\s*\/\s*RAW/gi, '')
+      .replace(/\s*\/\s*TCP/gi, '')
+      .replace(/\s*\/\s*JSON/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/\s*\/\s*/g, ' / ')
+      .trim() || raw;
+  }
+%>
+
+<%- include('partials_header', { pageTitle: 'Узлы', pageSubtitle: 'Добавление, проверка и управление 3x-ui и Remnawave', activePage: 'nodes', hidePageHeader: true }) %>
+
+<% if (message) { %>
+  <div class="alert ok"><%= message %></div>
+<% } %>
+
+<% if (error) { %>
+  <div class="alert err"><%= error %></div>
+<% } %>
+
+<div class="desktop-page-tabs" data-page-tabs="nodes">
+  <button type="button" class="<%= activeNodeTab === 'list' ? 'is-active' : '' %>" data-tab-target="list">🧩 Список узлов</button>
+  <button type="button" class="<%= activeNodeTab === 'add' ? 'is-active' : '' %>" data-tab-target="add">➕ Добавить узел</button>
+  <button type="button" class="<%= activeNodeTab === 'help' ? 'is-active' : '' %>" data-tab-target="help">ℹ️ Подсказка</button>
+</div>
+
+<nav class="nodes-mobile-tabs" aria-label="Разделы узлов">
+  <a href="/nodes?tab=list" class="<%= activeNodeTab === 'list' ? 'is-active' : '' %>">Список</a>
+  <a href="/nodes?tab=add" class="<%= activeNodeTab === 'add' ? 'is-active' : '' %>">＋ Добавить узел</a>
+  <a href="/nodes?tab=help" class="<%= activeNodeTab === 'help' ? 'is-active' : '' %>">Подсказка</a>
+</nav>
+
+
+<div class="grid">
+  <section class="card span-12 tab-panel <%= activeNodeTab === 'add' ? 'is-active' : '' %>" data-tab-panel="add">
+    <h2>Добавить узел</h2>
+    <form method="post" action="/nodes" class="js-long-action auth-token-active" data-loading-title="Добавляю узел" data-loading-text="Проверяю узел и при включённом создании добавляю существующих клиентов агрегатора в новый узел.">
+      <div class="form-grid">
+        <div class="field">
+          <label>Страна</label>
+          <select name="country_code" required>
+            <option value="">Выбери страну</option>
+            <% countries.forEach(country => { %>
+              <option value="<%= country.code %>"><%= country.name_ru %></option>
+            <% }) %>
+          </select>
+        </div>
+
+        <div class="field half">
+          <label>Свой регион, если выбрано «Другое»</label>
+          <input name="custom_country_name_ru" placeholder="например: Europe Auto, Private" />
+          <small class="hint">Используется только для пункта «Другое / свой регион».</small>
+        </div>
+        <div class="field half">
+          <label>Свой флаг / emoji</label>
+          <input name="custom_country_flag" placeholder="🇪🇺 или 🌐" maxlength="8" />
+        </div>
+
+        <div class="field">
+          <label>Доп. название узла</label>
+          <input name="label_suffix" placeholder="например: 1, 2, Frankfurt, Hetzner" />
+          <small class="hint">Например: Германия + 1 = Германия-1. Флаг и страна остаются от выбранной страны в подписке.</small>
+        </div>
+
+        <div class="field">
+          <label>Тип узла</label>
+          <select name="node_type" class="js-node-type-select">
+            <option value="3xui" selected>3x-ui (обычная панель)</option>
+            <option value="remnawave">Remnawave Panel (API)</option>
+          </select>
+          <small class="hint" data-node-type-summary>Панель провайдера, работающая как обычная 3x-ui, добавляется типом 3x-ui. Remnawave подключается по URL панели и API Token.</small>
+        </div>
+
+        <div class="field" data-node-endpoint-field>
+          <label data-node-endpoint-label>3x-ui Panel URL</label>
+          <input name="panel_url" placeholder="https://panel.example.com:2053" required data-node-endpoint-input />
+          <small class="hint" data-node-endpoint-hint>Адрес установленной совместимой панели 3x-ui.</small>
+        </div>
+
+        <div class="field js-node-3xui-only">
+          <label>Panel Path</label>
+          <input name="panel_path" placeholder="/qwerty123" />
+        </div>
+
+        <div class="field js-node-3xui-only">
+          <label>Метод API 3x-ui</label>
+          <select name="api_auth_mode" class="js-api-auth-mode" data-target="add-node-auth-fields">
+            <option value="token" selected>API Token</option>
+            <option value="password">3x-ui старый метод: логин и пароль</option>
+          </select>
+          <small class="hint">Для 3x-ui выбери новый API Token или старый способ с логином и паролем.</small>
+        </div>
+
+        <div id="add-node-auth-fields" class="auth-mode-fields field full">
+          <div class="auth-password-fields form-grid hidden" style="display:none">
+            <div class="field half">
+              <label>Логин панели</label>
+              <input name="username" placeholder="admin" data-required-when="password" />
+            </div>
+
+            <div class="field half">
+              <label>Пароль панели</label>
+              <input name="password" type="password" data-required-when="password" />
+            </div>
+          </div>
+
+          <div class="auth-token-fields">
+            <label data-node-token-label>API Token 3x-ui</label>
+            <input name="api_token" type="password" placeholder="API Token удалённой панели 3x-ui" data-required-when="token" data-node-token-input />
+            <small class="hint" data-node-token-hint>В 3x-ui v3.4.0 токен показывается только при создании и затем хранится в панели как хеш. Вставь сохранённый полный токен; агрегатор хранит его зашифрованно.</small>
+          </div>
+        </div>
+
+        <div class="field full js-node-remnawave-only hidden" hidden style="display:none!important">
+          <div class="alert ok" style="margin:0;">
+            <strong>Подключение к Remnawave Panel.</strong> Укажи корень панели, например <code>https://rw.nl.amored.ru</code>, Bearer API Token и UUID рабочего Internal Squad. При создании клиента Aggregator использует тот же VLESS UUID, назначает squad и добавляет ссылки Remnawave в общую SUB/JSON подписку.
+          </div>
+        </div>
+
+        <div class="field half js-node-remnawave-only hidden" hidden style="display:none!important">
+          <label>Internal Squad UUID</label>
+          <input name="remnawave_internal_squad_uuid" placeholder="UUID сквада bee1" data-remnawave-squad-input />
+          <small class="hint">Обязательно: этот squad будет назначен каждому созданному пользователю, поэтому его видимые Hosts появятся в общей подписке Aggregator.</small>
+        </div>
+
+        <div class="field half js-node-remnawave-only hidden" hidden style="display:none!important">
+          <label>Remnawave Node UUID</label>
+          <input name="remnawave_node_uuid" placeholder="необязательно" />
+          <small class="hint">Необязательно. Используется как справочная привязка к физической Node в Remnawave.</small>
+        </div>
+
+        <div class="field half js-node-remnawave-only hidden" hidden style="display:none!important">
+          <label>Host UUID</label>
+          <input name="remnawave_host_uuid" placeholder="необязательно" />
+          <small class="hint">UUID конкретного Host. После сохранения Aggregator сможет выбирать именно его ссылку по адресу, порту, SNI и пути.</small>
+        </div>
+
+        <div class="field half js-node-remnawave-only hidden" hidden style="display:none!important">
+          <label>Какие Hosts добавлять</label>
+          <select name="remnawave_link_mode">
+            <option value="first" selected>Один Host — первый подходящий</option>
+            <option value="unique">Все уникальные Hosts</option>
+            <option value="all">Все записи Remnawave без отбора</option>
+          </select>
+          <small class="hint">Рекомендуется «Один Host», если в Internal Squad включено несколько Hosts, но в Aggregator это один узел.</small>
+        </div>
+
+        <div class="field half js-node-remnawave-only hidden" hidden style="display:none!important">
+          <label>Название в подписке</label>
+          <select name="remnawave_remark_mode">
+            <option value="aggregator" selected>Название узла Aggregator</option>
+            <option value="provider">Оригинальное имя Host</option>
+            <option value="combined">Aggregator + имя Host</option>
+          </select>
+        </div>
+
+        <div class="field half js-node-remnawave-only hidden" hidden style="display:none!important">
+          <label>Фильтр Host или адреса</label>
+          <input name="remnawave_link_filter" placeholder="cdn.amored.ru, beet" />
+          <small class="hint">Необязательно. Фильтрует ссылки по имени, адресу, SNI, Host и пути.</small>
+        </div>
+
+        <div class="field half js-node-remnawave-only hidden" hidden style="display:none!important">
+          <label>Дополнительный X-Api-Key</label>
+          <input name="remnawave_caddy_token" type="password" placeholder="только если панель защищена Caddy Auth" />
+          <small class="hint">Не является Remnawave API Token. Оставь пустым при обычной установке Nginx.</small>
+        </div>
+
+        <div class="field half js-node-3xui-only">
+          <label>Inbound ID</label>
+          <input name="inbound_id" type="number" min="1" placeholder="1" required />
+        </div>
+
+        <div class="field full protocol-recommend-card js-node-3xui-only js-node-3xui-editable-only" data-protocol-recommend-root>
+          <h3>Рекомендации протокола и транспорта</h3>
+          <small class="hint">Выбери то, что создаёшь в оригинальной 3x-ui. Панель подскажет обязательные поля и типовые значения. Это справка для создания inbound в 3x-ui; после добавления узла можно нажать «Загрузить параметры из 3x-ui» и сохранить точные значения.</small>
+          <div class="recommend-grid">
+            <label>Protocol<select data-rec-protocol><option value="vless">VLESS</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks</option><option value="wireguard">WireGuard</option><option value="hysteria">Hysteria / Hysteria2</option><option value="http">HTTP</option><option value="mixed">Mixed</option><option value="tunnel">Tunnel</option></select></label>
+            <label>Transport<select data-rec-network><option value="raw">RAW</option><option value="tcp">TCP</option><option value="ws">WebSocket</option><option value="grpc">gRPC</option><option value="httpupgrade">HTTP Upgrade</option><option value="xhttp">xHTTP</option><option value="kcp">mKCP</option></select></label>
+            <label>Домен SNI/Host<input data-rec-domain placeholder="cdn.example.com / m.vk.com" /></label>
+          </div>
+          <div class="protocol-recommend-output" data-rec-output></div>
+        </div>
+
+        <div class="field js-node-3xui-only js-node-3xui-editable-only">
+          <label>SNI в подписках</label>
+          <select name="sni_mode" data-sni-source>
+            <option value="inbound" selected>Из 3x-ui inbound</option>
+            <option value="profile">Выбрать SNI-профиль</option>
+            <option value="manual">Ручной SNI</option>
+          </select>
+          <small class="hint">Если выбран профиль или ручной SNI, при добавлении узла агрегатор применит SNI и Target в 3x-ui inbound: target = SNI:443.</small>
+        </div>
+        <div class="field half js-node-3xui-only js-node-3xui-editable-only" data-sni-profile-field>
+          <label>SNI-профиль</label>
+          <select name="sni_profile_id">
+            <option value="">Не выбран</option>
+            <% (sniProfiles || []).forEach(profile => { %>
+              <option value="<%= profile.id %>"><%= profile.name %> · <%= profile.sni %></option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="field half js-node-3xui-only js-node-3xui-editable-only" data-sni-manual-field>
+          <label>Ручной SNI</label>
+          <input name="sni_override" placeholder="m.vk.com" />
+        </div>
+      </div>
+
+      <label class="switch-row compact add-clients-switch js-node-client-sync-only">
+        <input type="checkbox" name="create_existing_clients_on_node" value="1" />
+        <span>
+          <strong>Создать существующих клиентов в новом узле</strong>
+          <small>После проверки создаст только отсутствующих пользователей. Для Remnawave сохранит тот же VLESS UUID, назначит указанный Internal Squad и не перезапишет пользователя с чужим UUID.</small>
+        </span>
+      </label>
+
+      <label class="switch-row compact add-clients-switch js-node-client-sync-only">
+        <input type="checkbox" name="import_clients_from_node" value="1" />
+        <span>
+          <strong>Импортировать клиентов из нового узла в агрегатор</strong>
+          <small>Импортирует существующих пользователей в Aggregator и создаёт локальные связи. Для Remnawave читает <code>/api/users</code>, VLESS UUID, срок, лимит, squad-подписку и URL пользователя.</small>
+        </span>
+      </label>
+
+      <div class="actions node-actions add-node-actions">
+        <button type="submit" class="btn-main add-node-submit">Добавить узел</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card span-12 tab-panel <%= activeNodeTab === 'help' ? 'is-active' : '' %>" data-tab-panel="help">
+    <h2>Подсказка</h2>
+    <div class="kv-list">
+      <div class="kv-item">
+        <strong>Отключение узла</strong>
+        <div class="muted">Если на узле техработы, нажми «Отключить». Узел останется в панели, но исчезнет из SUB/JSON подписок клиентов.</div>
+      </div>
+      <div class="kv-item">
+        <strong>Доп. название</strong>
+        <div class="muted">Используется в названии сервера внутри подписки: Германия-1, Германия-2, Финляндия Hetzner.</div>
+      </div>
+      <div class="kv-item">
+        <strong>Поддерживаемые подключения</strong>
+        <div class="muted"><b>Любая совместимая панель 3x-ui</b> добавляется обычным типом 3x-ui. <b>Remnawave Panel</b> подключается по корневому URL и Bearer API Token; физическая Node отдельно в Aggregator не авторизуется.</div>
+      </div>
+      <div class="kv-item">
+        <strong>API / Panel URL</strong>
+        <div class="muted">Для 3x-ui — адрес панели. Для Remnawave — корень панели вида <code>https://rw.nl.amored.ru</code>, без <code>/api</code>.</div>
+      </div>
+      <div class="kv-item">
+        <strong>Inbound ID</strong>
+        <div class="muted">Для 3x-ui нужен ID входящего подключения. Для Remnawave используются UUID Internal Squad, Node и Host.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card span-12 tab-panel nodes-modern-card <%= activeNodeTab === 'list' ? 'is-active' : '' %>" data-tab-panel="list">
+    <div class="nodes-modern-head">
+      <div class="section-title-row nodes-order-title">
+        <h2><span class="section-icon" aria-hidden="true">🗂️</span>Список узлов <span class="count-chip"><%= nodes.length %></span></h2>
+        <span id="nodeOrderStatus" class="muted">Перетащи ⠿ на ПК или используй ↑/↓ на телефоне, чтобы изменить порядок в приложении</span>
+      </div>
+      <% if (nodes.length) { %>
+        <div class="nodes-modern-toolbar" role="search">
+          <label class="nodes-search-field" for="nodeSearchInput">
+            <span aria-hidden="true">⌕</span>
+            <input id="nodeSearchInput" type="search" placeholder="Поиск по названию, ID или URL..." autocomplete="off" />
+          </label>
+          <div class="nodes-filter-group" aria-label="Фильтры узлов">
+            <label class="nodes-filter-field nodes-filter-type">
+              <span>Тип</span>
+              <select id="nodeTypeFilter">
+                <option value="all">Все</option>
+                <option value="3xui">3x-ui</option>
+                <option value="remnawave">Remnawave</option>
+              </select>
+            </label>
+            <label class="nodes-filter-field nodes-filter-state">
+              <span>Статус</span>
+              <select id="nodeStateFilter">
+                <option value="all">Все</option>
+                <option value="enabled">Включён</option>
+                <option value="disabled">Отключён</option>
+                <option value="online">online</option>
+                <option value="offline">offline</option>
+              </select>
+            </label>
+            <button type="button" class="secondary nodes-reset-filter" id="nodeResetFilters" title="Сбросить фильтры" aria-label="Сбросить фильтры"><span aria-hidden="true">↻</span></button>
+          </div>
+        </div>
+      <% } %>
+    </div>
+
+    <% if (!nodes.length) { %>
+      <p class="muted">Пока нет добавленных узлов.</p>
+    <% } else { %>
+      <div class="nodes-modern-layout" id="nodesModernLayout">
+        <div class="nodes-list-panel">
+          <div class="nodes-list-header">
+            <span>ID</span>
+            <span>Название</span>
+            <span>Тип</span>
+            <span>Транспорт</span>
+            <span>Статус</span>
+            <span>Активность</span>
+          </div>
+          <div id="nodesOrderBody" class="nodes-modern-list" data-page-size="<%= nodePageSize || 10 %>">
+            <% nodes.forEach((node, idx) => {
+              const suffix = (node.label_suffix || '').trim();
+              const baseName = node.country_name_ru || node.name;
+              const displayName = suffix
+                ? (/^\d+$/.test(suffix) ? `${baseName}-${suffix}` : `${baseName} ${suffix}`)
+                : baseName;
+              const isEnabled = Number(node.enabled) === 1;
+              const nodeType = String(node.node_type || '3xui');
+              const isH1 = nodeType === 'h1cloud';
+              const isH1Panel = nodeType === 'h1cloud_3xui';
+              const isRemnawave = nodeType === 'remnawave';
+              const nodeKind = isRemnawave ? 'remnawave' : (isH1 ? 'h1cloud' : (isH1Panel ? 'h1cloud_3xui' : '3xui'));
+              const nodeTypeLabel = node.node_type_label || (isRemnawave ? 'Remnawave Panel' : (isH1 ? 'H1Cloud VLESS API' : (isH1Panel ? 'H1Cloud 3x-ui' : '3x-ui')));
+              const transportLabel = node.transport_label || 'не загружено';
+              const transportCompact = compactTransportLabel(transportLabel);
+              const activityStatus = node.last_status || 'unknown';
+              const searchText = [node.id, displayName, nodeTypeLabel, node.panel_url, node.panel_path, node.sub_base_url, node.inbound_id, transportLabel, activityStatus, node.last_error].join(' ').toLowerCase();
+            %>
+              <div
+                class="node-list-row <%= idx === 0 ? 'is-selected' : '' %> <%= isEnabled ? '' : 'muted-row' %>"
+                draggable="true"
+                data-node-id="<%= node.id %>"
+                data-node-type="<%= nodeKind %>"
+                data-node-enabled="<%= isEnabled ? 'enabled' : 'disabled' %>"
+                data-node-activity="<%= activityStatus %>"
+                data-node-search="<%= searchText %>"
+              >
+                <button type="button" class="drag-handle" title="Перетащить узел" aria-label="Перетащить узел">⠿</button>
+                <button type="button" class="node-row-select" data-select-node="<%= node.id %>" aria-label="Открыть детали узла <%= displayName %>">
+                  <span class="node-row-id"><%= node.id %></span>
+                  <span class="node-row-name"><strong><%- flagHtml(node.country_code, node.country_flag, node.country_name_ru || node.name, node.node_type) %><span><%= displayName %></span></strong></span>
+                  <span class="node-row-type"><%= nodeTypeLabel %></span>
+                  <span class="transport-chip transport-chip-full"><%= isRemnawave ? 'Remnawave API' : (isH1 ? 'H1Cloud API' : transportCompact) %></span><span class="transport-chip transport-chip-mobile"><%= isRemnawave ? 'Remnawave API' : (isH1 ? 'H1Cloud API' : transportCompact) %></span>
+                  <span class="badge <%= isEnabled ? 'online' : 'offline' %>"><%= isEnabled ? 'Включён' : 'Отключён' %></span>
+                  <span class="node-row-activity"><span class="badge <%= activityStatus %>"><%= activityStatus %></span><span class="signal-bars" aria-hidden="true"><i></i><i></i><i></i></span></span>
+                  <span class="node-row-chevron" aria-hidden="true">›</span>
+                </button>
+                <div class="node-mobile-order-controls" aria-label="Изменить порядок узла">
+                  <button type="button" class="secondary mobile-order-btn" data-mobile-move="up" title="Поднять выше">↑</button>
+                  <button type="button" class="secondary mobile-order-btn" data-mobile-move="down" title="Опустить ниже">↓</button>
+                </div>
+              </div>
+            <% }) %>
+          </div>
+          <div class="nodes-list-footer">
+            <span>Показано <strong id="nodesPageRange">0–0</strong> из <strong id="visibleNodesCount"><%= nodes.length %></strong> узлов</span>
+            <div class="nodes-pagination" id="nodesPagination" aria-label="Страницы узлов"></div>
+          </div>
+        </div>
+
+        <aside class="nodes-detail-panel" id="nodesDetailPanel" aria-live="polite">
+          <button type="button" class="nodes-detail-close" id="nodeDetailsClose" aria-label="Скрыть детали" onclick="event.preventDefault(); event.stopPropagation(); closeNodeDetailsPanel(event); return false;">×</button>
+          <% nodes.forEach((node, idx) => {
+            const suffix = (node.label_suffix || '').trim();
+            const baseName = node.country_name_ru || node.name;
+            const displayName = suffix
+              ? (/^\d+$/.test(suffix) ? `${baseName}-${suffix}` : `${baseName} ${suffix}`)
+              : baseName;
+            const isEnabled = Number(node.enabled) === 1;
+            const nodeType = String(node.node_type || '3xui');
+            const isH1 = nodeType === 'h1cloud';
+            const isH1Panel = nodeType === 'h1cloud_3xui';
+            const isRemnawave = nodeType === 'remnawave';
+            const nodeTypeLabel = node.node_type_label || (isRemnawave ? 'Remnawave Panel' : (isH1 ? 'H1Cloud VLESS API' : (isH1Panel ? 'H1Cloud 3x-ui' : '3x-ui')));
+            const transportLabel = node.transport_label || 'не загружено';
+            const transportCompact = compactTransportLabel(transportLabel);
+            const activityStatus = node.last_status || 'unknown';
+            const apiValue = node.panel_url || '-';
+            const pathValue = isRemnawave ? (node.remnawave_internal_squad_uuid || '-') : ((isH1 || isH1Panel) ? (node.sub_base_url || '-') : (node.panel_path || '-'));
+            const inboundValue = (isH1 || isRemnawave) ? '—' : (node.inbound_id || '-');
+            const fpValue = isRemnawave ? 'Bearer API Token' : (isH1 ? (node.h1cloud_fingerprint || 'как в H1Cloud') : (node.inbound_fingerprint || 'не загружено'));
+          %>
+            <article class="node-detail-card <%= idx === 0 ? 'is-active' : '' %>" data-detail-node-id="<%= node.id %>" <%= idx === 0 ? '' : 'hidden' %>>
+              <div class="node-detail-title-row">
+                <div class="node-detail-flag"><%- flagHtml(node.country_code, node.country_flag, node.country_name_ru || node.name, node.node_type) %></div>
+                <div class="node-detail-title">
+                  <div><strong><%= displayName %></strong> <span class="badge <%= isEnabled ? 'online' : 'offline' %>"><%= isEnabled ? 'Включён' : 'Отключён' %></span></div>
+                  <small>ID: <%= node.id %> · Тип: <%= nodeTypeLabel %> · Транспорт: <%= transportLabel %></small>
+                </div>
+              </div>
+
+              <div class="node-detail-kv">
+                <div class="node-detail-kv-row">
+                  <span>API / Panel URL</span>
+                  <code><%= apiValue %></code>
+                  <button type="button" class="copy-mini" data-copy-text="<%= apiValue %>" title="Копировать">⧉</button>
+                </div>
+                <div class="node-detail-kv-row">
+                  <span><%= isRemnawave ? 'Internal Squad UUID' : ((isH1 || isH1Panel) ? 'SUB Base URL' : 'Path') %></span>
+                  <code><%= pathValue %></code>
+                  <button type="button" class="copy-mini" data-copy-text="<%= pathValue %>" title="Копировать">⧉</button>
+                </div>
+                <div class="node-detail-kv-row">
+                  <span>Inbound</span>
+                  <strong><%= inboundValue %></strong>
+                </div>
+                <div class="node-detail-kv-row">
+                  <span>Fingerprint</span>
+                  <code><%= fpValue %></code>
+                  <button type="button" class="copy-mini" data-copy-text="<%= fpValue %>" title="Копировать">⧉</button>
+                </div>
+                <% if (isH1) { %>
+                  <div class="node-detail-kv-row">
+                    <span>Фильтр H1Cloud</span>
+                    <strong><%= node.h1cloud_link_types_label || node.h1cloud_link_mode || 'Reality' %></strong>
+                  </div>
+                <% } %>
+                <% if (isRemnawave) { %>
+                  <div class="node-detail-kv-row">
+                    <span>Node UUID</span>
+                    <code><%= node.remnawave_node_uuid || 'не выбран' %></code>
+                  </div>
+                  <div class="node-detail-kv-row">
+                    <span>Host UUID</span>
+                    <code><%= node.remnawave_host_uuid || 'не выбран' %></code>
+                  </div>
+                  <div class="node-detail-kv-row">
+                    <span>Hosts в подписке</span>
+                    <strong><%= String(node.remnawave_link_mode || 'first') === 'all' ? 'Все' : (String(node.remnawave_link_mode || 'first') === 'unique' ? 'Все уникальные' : 'Один') %></strong>
+                  </div>
+                  <div class="node-detail-kv-row">
+                    <span>Фильтр Remnawave</span>
+                    <code><%= node.remnawave_link_filter || 'нет' %></code>
+                  </div>
+                <% } %>
+                <% if (node.last_error) { %>
+                  <div class="node-detail-kv-row danger-row">
+                    <span>Ошибка</span>
+                    <code><%= node.last_error %></code>
+                  </div>
+                <% } %>
+              </div>
+
+              <div class="node-detail-section">
+                <h3>Статус и активность</h3>
+                <div class="node-status-grid">
+                  <div><span>Статус</span><strong class="badge <%= isEnabled ? 'online' : 'offline' %>"><%= isEnabled ? 'Включён' : 'Отключён' %></strong></div>
+                  <div><span>Активность</span><strong class="badge <%= activityStatus %>"><%= activityStatus %></strong></div>
+                </div>
+              </div>
+
+              <div class="node-detail-section">
+                <h3>Метки</h3>
+                <div class="node-tags">
+                  <span><%= isRemnawave ? 'remnawave' : (isH1 ? 'h1cloud' : '3x-ui') %></span>
+                  <span><%= isEnabled ? 'enabled' : 'disabled' %></span>
+                  <% if (node.transport_security) { %><span><%= node.transport_security %></span><% } %>
+                  <% if (node.country_code) { %><span><%= String(node.country_code).toLowerCase() %></span><% } %>
+                </div>
+              </div>
+
+              <div class="node-detail-actions">
+                <form method="post" action="/nodes/<%= node.id %>/check" class="inline-form node-detail-action-form js-long-action" data-loading-title="Проверяю узел" data-loading-text="Ожидание ответа ограничено коротким тайм-аутом. Недоступный узел не будет удерживать страницу 30 секунд." onclick="event.stopPropagation()">
+                  <button type="submit" class="btn-main">Проверить</button>
+                </form>
+                <a href="/nodes/<%= node.id %>/edit" class="link-btn secondary node-detail-action-link" onclick="event.stopPropagation()">Изменить</a>
+                <form method="post" action="/nodes/<%= node.id %>/create-missing-clients" class="inline-form node-detail-action-form js-long-action" data-loading-title="Добавляю отсутствующих клиентов" data-loading-text="На этот узел будут созданы только отсутствующие клиенты. Уже существующие записи не обновляются." onclick="event.stopPropagation()" onsubmit="return confirm('<%= isRemnawave ? 'Создать в Remnawave только отсутствующих пользователей Aggregator и назначить им настроенный Internal Squad?' : 'Создать на выбранном узле только отсутствующих клиентов агрегатора? Уже существующие клиенты будут пропущены.' %>')">
+                  <button type="submit" class="secondary">Создать отсутствующих</button>
+                </form>
+                <form method="post" action="/nodes/<%= node.id %>/toggle" class="inline-form node-detail-action-form" onclick="event.stopPropagation()" onsubmit="return confirm('<%= isRemnawave ? (isEnabled ? 'Отключить подключение Remnawave?' : 'Включить подключение Remnawave?') : (isEnabled ? 'Отключить узел из подписок?' : 'Включить узел обратно в подписки?') %>')">
+                  <% if (isEnabled) { %>
+                    <button type="submit" class="danger">Отключить</button>
+                  <% } else { %>
+                    <button type="submit" class="secondary">Включить</button>
+                  <% } %>
+                </form>
+              </div>
+              <p class="node-detail-last muted">Последний статус: <%= activityStatus %></p>
+            </article>
+          <% }) %>
+        </aside>
+      </div>
+    <% } %>
+  </section>
+</div>
+
+<div id="loadingModal" class="modal hidden loading-modal" aria-live="polite">
+  <div class="modal-card loading-card">
+    <div class="loader-ring"></div>
+    <h2 id="loadingTitle">Загрузка</h2>
+    <p class="muted" id="loadingText">Операция выполняется. Не закрывайте страницу.</p>
+  </div>
+</div>
+
+<script>
+
+function setNodeOrderStatus(text, isError) {
+  const el = document.getElementById('nodeOrderStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('err-text', !!isError);
+}
+async function saveNodeOrder(order) {
+  if (!order.length) return;
+  setNodeOrderStatus('Сохраняю порядок...', false);
+  const response = await fetch('/nodes/reorder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ order })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) throw new Error(data.error || 'Не удалось сохранить порядок');
+  setNodeOrderStatus('Порядок сохранён', false);
+  refreshMobileOrderControls();
+}
+
+function getNodeRows() {
+  return [...document.querySelectorAll('#nodesOrderBody .node-list-row')];
+}
+
+let nodeCurrentPage = 1;
+
+function getNodePageSize() {
+  const list = document.getElementById('nodesOrderBody');
+  const n = Number(list?.dataset.pageSize || 10);
+  return [10, 12, 15].includes(n) ? n : 10;
+}
+
+function getFilteredNodeRows() {
+  return getNodeRows().filter(row => !row.classList.contains('hidden-by-filter'));
+}
+
+function renderNodePagination() {
+  const rows = getFilteredNodeRows();
+  const pageSize = getNodePageSize();
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (nodeCurrentPage > totalPages) nodeCurrentPage = totalPages;
+  if (nodeCurrentPage < 1) nodeCurrentPage = 1;
+  const start = total ? (nodeCurrentPage - 1) * pageSize : 0;
+  const end = total ? Math.min(start + pageSize, total) : 0;
+  getNodeRows().forEach(row => {
+    row.classList.remove('hidden-by-page');
+    row.style.removeProperty('display');
+  });
+  rows.forEach((row, index) => {
+    const hide = index < start || index >= end;
+    row.classList.toggle('hidden-by-page', hide);
+    if (hide) row.style.setProperty('display', 'none', 'important');
+    else row.style.removeProperty('display');
+  });
+  const range = document.getElementById('nodesPageRange');
+  if (range) range.textContent = total ? `${start + 1}–${end}` : '0–0';
+  const count = document.getElementById('visibleNodesCount');
+  if (count) count.textContent = String(total);
+  const pager = document.getElementById('nodesPagination');
+  if (pager) {
+    pager.innerHTML = '';
+    if (totalPages > 1) {
+      const mk = (label, page, active, disabled) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = active ? 'is-active' : '';
+        b.textContent = label;
+        b.disabled = !!disabled;
+        b.addEventListener('click', () => { nodeCurrentPage = page; renderNodePagination(); ensureSelectedNodeOnVisiblePage(); });
+        return b;
+      };
+      pager.appendChild(mk('‹', Math.max(1, nodeCurrentPage - 1), false, nodeCurrentPage === 1));
+      for (let i = 1; i <= totalPages; i += 1) pager.appendChild(mk(String(i), i, i === nodeCurrentPage, false));
+      pager.appendChild(mk('›', Math.min(totalPages, nodeCurrentPage + 1), false, nodeCurrentPage === totalPages));
+    }
+  }
+  refreshMobileOrderControls();
+}
+
+function ensureSelectedNodeOnVisiblePage() {
+  const selected = getNodeRows().find(row => row.classList.contains('is-selected'));
+  if (selected && !selected.classList.contains('hidden-by-filter') && !selected.classList.contains('hidden-by-page')) return;
+  const first = getNodeRows().find(row => !row.classList.contains('hidden-by-filter') && !row.classList.contains('hidden-by-page'));
+  if (first) selectNodeDetails(first.dataset.nodeId, { openMobile: false });
+}
+
+function getDesktopNodeOrder() {
+  return getNodeRows().map(row => Number(row.dataset.nodeId)).filter(Boolean);
+}
+
+function getMobileNodeOrder() {
+  return getDesktopNodeOrder();
+}
+
+function refreshMobileOrderControls() {
+  const rows = getNodeRows();
+  rows.forEach((row, index) => {
+    const up = row.querySelector('[data-mobile-move="up"]');
+    const down = row.querySelector('[data-mobile-move="down"]');
+    if (up) up.disabled = index === 0;
+    if (down) down.disabled = index === rows.length - 1;
+  });
+}
+
+function isMobileNodesLayout() {
+  return window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+}
+
+function closeNodeDetailsPanel(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const layout = document.getElementById('nodesModernLayout');
+  if (!layout) return false;
+  if (isMobileNodesLayout()) layout.classList.remove('mobile-details-open');
+  else layout.classList.add('details-hidden');
+  return false;
+}
+window.closeNodeDetailsPanel = closeNodeDetailsPanel;
+
+function selectNodeDetails(id, opts) {
+  const layout = document.getElementById('nodesModernLayout');
+  const openMobile = !!(opts && opts.openMobile);
+  if (layout) {
+    layout.classList.remove('details-hidden');
+    if (isMobileNodesLayout()) {
+      layout.classList.toggle('mobile-details-open', openMobile);
+    } else {
+      layout.classList.remove('mobile-details-open');
+    }
+  }
+  document.querySelectorAll('.node-list-row').forEach(row => {
+    row.classList.toggle('is-selected', String(row.dataset.nodeId) === String(id));
+  });
+  document.querySelectorAll('.node-detail-card').forEach(card => {
+    const active = String(card.dataset.detailNodeId) === String(id);
+    card.classList.toggle('is-active', active);
+    card.hidden = !active;
+    if (active) card.style.removeProperty('display');
+    else card.style.setProperty('display', 'none', 'important');
+  });
+}
+
+function selectFirstVisibleNode() {
+  const first = getNodeRows().find(row => !row.classList.contains('hidden-by-filter') && !row.classList.contains('hidden-by-page'));
+  if (first) selectNodeDetails(first.dataset.nodeId, { openMobile: false });
+}
+
+function updateVisibleNodesCount() {
+  const count = getNodeRows().filter(row => !row.classList.contains('hidden-by-filter')).length;
+  const list = document.getElementById('nodesOrderBody');
+  if (list) list.classList.toggle('is-empty-filter', count === 0);
+  renderNodePagination();
+}
+
+function applyNodeFilters() {
+  const q = String(document.getElementById('nodeSearchInput')?.value || '').trim().toLowerCase();
+  const type = String(document.getElementById('nodeTypeFilter')?.value || 'all');
+  const state = String(document.getElementById('nodeStateFilter')?.value || 'all');
+  let selectedStillVisible = false;
+  getNodeRows().forEach(row => {
+    const matchesText = !q || String(row.dataset.nodeSearch || '').includes(q);
+    const matchesType = type === 'all' || row.dataset.nodeType === type;
+    const matchesState = state === 'all'
+      || row.dataset.nodeEnabled === state
+      || row.dataset.nodeActivity === state;
+    const visible = matchesText && matchesType && matchesState;
+    row.classList.toggle('hidden-by-filter', !visible);
+    if (visible && row.classList.contains('is-selected')) selectedStillVisible = true;
+  });
+  nodeCurrentPage = 1;
+  updateVisibleNodesCount();
+  ensureSelectedNodeOnVisiblePage();
+  if (!selectedStillVisible) {
+    const first = getNodeRows().find(row => !row.classList.contains('hidden-by-filter') && !row.classList.contains('hidden-by-page'));
+    if (first) selectNodeDetails(first.dataset.nodeId, { openMobile: false });
+    else {
+      document.querySelectorAll('.node-detail-card').forEach(card => { card.hidden = true; card.classList.remove('is-active'); });
+    }
+  }
+}
+
+function initNodeDetailsPanel() {
+  document.addEventListener('click', event => {
+    const selector = event.target.closest('[data-select-node]');
+    if (selector) {
+      event.preventDefault();
+      selectNodeDetails(selector.dataset.selectNode, { openMobile: true });
+      return;
+    }
+    const copy = event.target.closest('[data-copy-text]');
+    if (copy) {
+      const text = copy.dataset.copyText || '';
+      if (navigator.clipboard && text && text !== '-') {
+        navigator.clipboard.writeText(text).then(() => {
+          copy.classList.add('copied');
+          setTimeout(() => copy.classList.remove('copied'), 900);
+        }).catch(() => {});
+      }
+    }
+  });
+  const close = document.getElementById('nodeDetailsClose');
+  if (close) close.addEventListener('click', closeNodeDetailsPanel);
+  ['nodeSearchInput', 'nodeTypeFilter', 'nodeStateFilter'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', applyNodeFilters);
+    if (el) el.addEventListener('change', applyNodeFilters);
+  });
+  const reset = document.getElementById('nodeResetFilters');
+  if (reset) reset.addEventListener('click', () => {
+    const search = document.getElementById('nodeSearchInput');
+    const type = document.getElementById('nodeTypeFilter');
+    const state = document.getElementById('nodeStateFilter');
+    if (search) search.value = '';
+    if (type) type.value = 'all';
+    if (state) state.value = 'all';
+    applyNodeFilters();
+  });
+  updateVisibleNodesCount();
+}
+
+function initNodeDragOrder() {
+  const body = document.getElementById('nodesOrderBody');
+  if (!body) return;
+  let dragged = null;
+  function bindRow(row) {
+    row.addEventListener('dragstart', event => {
+      if (event.target.closest('button:not(.drag-handle), a, input, select, textarea')) {
+        event.preventDefault();
+        return;
+      }
+      dragged = row;
+      row.classList.add('dragging');
+      setNodeOrderStatus('Перемести строку и отпусти мышь', false);
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      dragged = null;
+    });
+  }
+  getNodeRows().forEach(bindRow);
+  body.addEventListener('dragover', event => {
+    event.preventDefault();
+    if (!dragged) return;
+    const rows = getNodeRows().filter(row => row !== dragged && !row.classList.contains('hidden-by-filter') && !row.classList.contains('hidden-by-page'));
+    const next = rows.find(row => event.clientY <= row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2);
+    body.insertBefore(dragged, next || null);
+  });
+  body.addEventListener('drop', async event => {
+    event.preventDefault();
+    try {
+      await saveNodeOrder(getDesktopNodeOrder());
+      refreshMobileOrderControls();
+    } catch (err) {
+      setNodeOrderStatus(err.message || String(err), true);
+    }
+  });
+}
+
+function initMobileNodeOrder() {
+  const list = document.getElementById('nodesOrderBody');
+  if (!list) return;
+  refreshMobileOrderControls();
+  list.addEventListener('click', async event => {
+    const button = event.target.closest('[data-mobile-move]');
+    if (!button || button.disabled) return;
+    const row = button.closest('.node-list-row');
+    if (!row) return;
+    const direction = button.dataset.mobileMove;
+    if (direction === 'up' && row.previousElementSibling) {
+      list.insertBefore(row, row.previousElementSibling);
+    } else if (direction === 'down' && row.nextElementSibling) {
+      list.insertBefore(row.nextElementSibling, row);
+    } else {
+      return;
+    }
+    refreshMobileOrderControls();
+    try {
+      await saveNodeOrder(getMobileNodeOrder());
+    } catch (err) {
+      setNodeOrderStatus(err.message || String(err), true);
+    }
+  });
+}
+function showLoading(title, text) {
+  const modal = document.getElementById('loadingModal');
+  if (!modal) return;
+  document.getElementById('loadingTitle').textContent = title || 'Загрузка';
+  document.getElementById('loadingText').textContent = text || 'Операция выполняется. Не закрывайте страницу.';
+  modal.classList.remove('hidden');
+}
+document.addEventListener('DOMContentLoaded', () => {
+  initNodeDragOrder();
+  initMobileNodeOrder();
+  initNodeDetailsPanel();
+  document.querySelectorAll('form.js-long-action').forEach(form => {
+    form.addEventListener('submit', () => showLoading(form.dataset.loadingTitle, form.dataset.loadingText));
+  });
+});
+</script>
+
+<%- include('partials_footer') %>
+
+<script>
+(function() {
+  function updateApiMode(select) {
+    const targetId = select.dataset.target;
+    const root = targetId ? document.getElementById(targetId) : select.closest('form');
+    const form = select.closest('form');
+    if (!root) return;
+    const mode = select.value === 'token' ? 'token' : 'password';
+    if (form) {
+      form.classList.toggle('auth-token-active', mode === 'token');
+      form.classList.toggle('auth-password-active', mode === 'password');
+    }
+    root.querySelectorAll('.auth-password-fields').forEach(el => {
+      const hide = mode !== 'password';
+      el.classList.toggle('hidden', hide);
+      el.hidden = hide;
+      if (hide) el.style.setProperty('display', 'none', 'important');
+      else el.style.removeProperty('display');
+    });
+    root.querySelectorAll('.auth-token-fields').forEach(el => {
+      const hide = mode !== 'token';
+      el.classList.toggle('hidden', hide);
+      el.hidden = hide;
+      if (hide) el.style.setProperty('display', 'none', 'important');
+      else el.style.removeProperty('display');
+    });
+    root.querySelectorAll('[data-required-when]').forEach(input => {
+      const hasSavedSecret = input.dataset.hasSavedSecret === '1';
+      input.required = input.dataset.requiredWhen === mode && !hasSavedSecret;
+      input.disabled = input.dataset.requiredWhen !== mode;
+    });
+  }
+  function updateH1CloudFingerprint(select) {
+    const form = select.closest('form');
+    if (!form) return;
+    const isCustom = select.value === 'custom';
+    const isH1 = form.querySelector('.js-node-type-select')?.value === 'h1cloud';
+    form.querySelectorAll('.js-h1cloud-custom-fingerprint').forEach(el => el.classList.toggle('hidden', !isH1 || !isCustom));
+    form.querySelectorAll('input[name="h1cloud_fingerprint_custom"]').forEach(input => {
+      input.disabled = !isH1 || !isCustom;
+      input.required = isH1 && isCustom;
+    });
+  }
+  function setNodeTypeGroup(form, selector, visible) {
+    form.querySelectorAll(selector).forEach(el => {
+      el.classList.toggle('hidden', !visible);
+      el.hidden = !visible;
+      if (visible) el.style.removeProperty('display');
+      else el.style.setProperty('display', 'none', 'important');
+      el.querySelectorAll('input, select, textarea, button').forEach(control => {
+        control.disabled = !visible;
+      });
+    });
+  }
+  function updateNodeTypeText(form, type) {
+    const isH1Api = type === 'h1cloud';
+    const isH1Panel = type === 'h1cloud_3xui';
+    const isRemnawave = type === 'remnawave';
+    const endpointLabel = form.querySelector('[data-node-endpoint-label]');
+    const endpointInput = form.querySelector('[data-node-endpoint-input]');
+    const endpointHint = form.querySelector('[data-node-endpoint-hint]');
+    const tokenLabel = form.querySelector('[data-node-token-label]');
+    const tokenInput = form.querySelector('[data-node-token-input]');
+    const tokenHint = form.querySelector('[data-node-token-hint]');
+    if (endpointLabel) endpointLabel.textContent = isRemnawave ? 'Remnawave Panel URL' : (isH1Api ? 'H1Cloud API Base URL' : '3x-ui Panel URL');
+    if (endpointInput) endpointInput.placeholder = isRemnawave ? 'https://rw.nl.amored.ru' : (isH1Api ? 'https://IP:API_PORT/api' : 'https://panel.example.com:2053');
+    if (endpointHint) endpointHint.innerHTML = isRemnawave
+      ? 'Корневой HTTPS URL панели Remnawave, без <code>/api</code>.'
+      : (isH1Api ? 'API отдельного H1Cloud VLESS-скрипта: <code>https://IP:API_PORT/api</code>.' : (isH1Panel ? 'Адрес ограниченной панели H1Cloud 3x-ui. Inbound будет только читаться; изменяются только клиенты.' : 'Адрес обычной панели 3x-ui.'));
+    if (tokenLabel) tokenLabel.textContent = isRemnawave ? 'Remnawave API Token' : (isH1Api ? 'H1Cloud API Token' : 'API Token 3x-ui');
+    if (tokenInput) tokenInput.placeholder = isRemnawave ? 'Bearer token из Remnawave → API Tokens' : (isH1Api ? 'Токен из команды vpn api token' : 'API Token удалённой панели 3x-ui');
+    if (tokenHint) tokenHint.innerHTML = isRemnawave
+      ? 'Создай токен в панели Remnawave с правами list/create/update/delete для Users; для выбора по Host UUID также разреши чтение Hosts. Aggregator отправляет его как <code>Authorization: Bearer</code> и хранит зашифрованно.'
+      : (isH1Api ? 'Возьми токен командой <code>vpn api token</code>.' : (isH1Panel ? 'Нужен API Token из ограниченной панели H1Cloud 3x-ui.' : 'Токен удалённой панели 3x-ui хранится зашифрованно.'));
+  }
+  function updateNodeType(select) {
+    const form = select.closest('form');
+    if (!form) return;
+    const type = select.value;
+    const isH1Api = type === 'h1cloud';
+    const isH1Panel = type === 'h1cloud_3xui';
+    const isRemnawave = type === 'remnawave';
+    const is3xuiType = type === '3xui' || isH1Panel;
+    setNodeTypeGroup(form, '.js-node-3xui-only', is3xuiType);
+    setNodeTypeGroup(form, '.js-node-h1-only', isH1Api);
+    setNodeTypeGroup(form, '.js-node-h1panel-only', isH1Panel);
+    setNodeTypeGroup(form, '.js-node-remnawave-only', isRemnawave);
+    setNodeTypeGroup(form, '.js-node-client-sync-only', true);
+    setNodeTypeGroup(form, '.js-node-3xui-editable-only', type === '3xui');
+    updateNodeTypeText(form, type);
+    const authSelect = form.querySelector('.js-api-auth-mode');
+    if (authSelect) {
+      if (isH1Api || isRemnawave) authSelect.value = 'token';
+      authSelect.disabled = isH1Api || isRemnawave;
+      updateApiMode(authSelect);
+    }
+    const inbound = form.querySelector('input[name="inbound_id"]');
+    if (inbound) inbound.required = is3xuiType;
+    const squadInput = form.querySelector('[data-remnawave-squad-input]');
+    if (squadInput) squadInput.required = isRemnawave;
+    const apiToken = form.querySelector('input[name="api_token"]');
+    if (apiToken) {
+      apiToken.disabled = false;
+      apiToken.required = true;
+    }
+    form.querySelectorAll('.js-h1cloud-fingerprint-select').forEach(fpSelect => updateH1CloudFingerprint(fpSelect));
+  }
+  document.querySelectorAll('.js-api-auth-mode').forEach(select => {
+    select.addEventListener('change', () => updateApiMode(select));
+    updateApiMode(select);
+  });
+  document.querySelectorAll('.js-h1cloud-fingerprint-select').forEach(select => {
+    select.addEventListener('change', () => updateH1CloudFingerprint(select));
+    updateH1CloudFingerprint(select);
+  });
+  document.querySelectorAll('.js-node-type-select').forEach(select => {
+    select.addEventListener('change', () => updateNodeType(select));
+    updateNodeType(select);
+  });
+
+  document.querySelectorAll('[data-h1-link-filter]').forEach(group => {
+    const boxes = Array.from(group.querySelectorAll('input[name="h1cloud_link_types"]'));
+    const all = group.querySelector('[data-h1-select-all]');
+    const syncAll = () => {
+      if (!all) return;
+      const checked = boxes.filter(box => box.checked).length;
+      all.checked = checked === boxes.length;
+      all.indeterminate = checked > 0 && checked < boxes.length;
+    };
+    boxes.forEach(box => box.addEventListener('change', syncAll));
+    if (all) all.addEventListener('change', () => {
+      boxes.forEach(box => { box.checked = all.checked; });
+      syncAll();
+    });
+    const form = group.closest('form');
+    if (form) form.addEventListener('submit', event => {
+      const isH1 = form.querySelector('.js-node-type-select')?.value === 'h1cloud';
+      if (isH1 && !boxes.some(box => box.checked)) {
+        event.preventDefault();
+        alert('Выбери хотя бы один тип ссылки H1Cloud.');
+      }
+    });
+    syncAll();
+  });
+})();
+</script>

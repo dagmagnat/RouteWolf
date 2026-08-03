@@ -1,0 +1,446 @@
+<%
+  function flagEmojiFromCode(code) {
+    const cc = String(code || '').trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(cc) || ['ZZ','XX'].includes(cc)) return '';
+    return Array.from(cc).map(ch => String.fromCodePoint(0x1F1E6 + ch.charCodeAt(0) - 65)).join('');
+  }
+  function escapeFlagAttr(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+  function flagHtml(code, fallback, name) {
+    const rawCode = String(code || '').trim().toLowerCase();
+    const flagValue = String(fallback || '').trim();
+    const nameText = String(name || '').trim();
+    const codeFromName = (typeof countryCodeByName === 'function') ? String(countryCodeByName(nameText) || '').trim().toLowerCase() : '';
+    const code2 = (/^[a-z]{2}$/i.test(rawCode) ? rawCode : (/^[a-z]{2}$/i.test(flagValue) ? flagValue.toLowerCase() : codeFromName));
+    const emoji = (typeof countryFlagText === 'function')
+      ? countryFlagText(code, flagValue, nameText)
+      : ((flagValue && flagValue !== '🌐' && !/^[a-z]{2}$/i.test(flagValue)) ? flagValue : flagEmojiFromCode(code || flagValue));
+    if (code2 && !['zz','xx'].includes(code2)) {
+      const fallbackEmoji = emoji || flagEmojiFromCode(code2);
+      return `<span class="flag-badge local-flag-shell"><img class="flag-img" src="/flags/${code2}.svg" alt="${escapeFlagAttr(name || code2)}" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="flag-emoji-fallback" hidden>${fallbackEmoji}</span></span>`;
+    }
+    return emoji ? `<span class="flag-badge emoji-fallback" aria-label="${escapeFlagAttr(String(code || '').toUpperCase())}">${emoji}</span>` : '';
+  }
+  function nodeEndpointLabel(n) {
+    return String(n.node_type || '3xui') === 'h1cloud' ? 'H1Cloud SUB/API' : ('inbound ' + (n.inbound_id || '—'));
+  }
+%>
+
+<%- include('partials_header', { pageTitle: 'Маршрутизация', pageSubtitle: 'Loyalsoldier GeoData, RU direct, VPN-исключения и блокировка рекламы', activePage: 'routing' }) %>
+
+<style>
+  .geodata-catalog-card { position: static; top: auto; align-self: stretch; width: 100%; }
+  .geodata-toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0 12px; }
+  .geodata-toolbar input { flex:1 1 220px; min-width:0; }
+  .geodata-status { font-size:12px; color: var(--muted); margin: 6px 0 10px; }
+  .geodata-lists { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .geodata-list-box { border:1px solid rgba(130,170,220,.2); border-radius:16px; background:rgba(8,23,42,.26); overflow:hidden; }
+  .geodata-list-head { display:flex; justify-content:space-between; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid rgba(130,170,220,.16); }
+  .geodata-list-head strong { font-size:14px; }
+  .geodata-list-head small { color:var(--muted); white-space:nowrap; }
+  .geodata-scroll { max-height:420px; overflow:auto; padding:8px; }
+  .geodata-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto auto auto; gap:6px; align-items:center; padding:7px; border-radius:12px; }
+  .geodata-row:hover { background:rgba(96,165,250,.12); }
+  .geodata-token { font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+  .geodata-mini { border:1px solid rgba(130,170,220,.25); background:rgba(15,38,70,.75); color:var(--text); border-radius:10px; padding:5px 7px; font-size:11px; cursor:pointer; }
+  .geodata-mini:hover { border-color:rgba(96,165,250,.75); }
+  .geodata-mini.copy-ok { border-color:rgba(52,211,153,.75); }
+  .geodata-help { margin-top:10px; font-size:12px; color:var(--muted); line-height:1.45; }
+  @media (max-width: 900px) {
+    .geodata-catalog-card { position:static; }
+    .geodata-lists { grid-template-columns:1fr; }
+    .geodata-scroll { max-height:280px; }
+  }
+</style>
+
+<% if (message) { %><div class="alert ok"><%= message %></div><% } %>
+<% if (error) { %><div class="alert err"><%= error %></div><% } %>
+
+<div class="grid">
+  <section class="card span-6">
+    <h2>Параметры для JSON</h2>
+    <p class="muted">Эти настройки применяются к JSON-подпискам узлов 3x-ui: <code>/json/:slug</code>. Здесь задаются только собственные правила domain/geosite и IP/geoip, исключения, DNS и блокировка.</p>
+
+    <form method="post" action="/routing" class="routing-form">
+      <label class="switch-row">
+        <input type="checkbox" name="routing_enabled" value="1" <%= routingEnabled ? 'checked' : '' %> />
+        <span><strong>Использовать маршрутизацию</strong><small>Если выключить, JSON будет без proxy-правил и почти всё пойдёт напрямую.</small></span>
+      </label>
+
+      <label class="switch-row">
+        <input type="checkbox" name="routing_all_nodes" value="1" <%= routingAllNodes ? 'checked' : '' %> onchange="document.getElementById('excluded-routing-nodes').style.display = this.checked ? 'none' : 'block'" />
+        <span><strong>Маршруты на всех узлах 3x-ui</strong><small>Если снять галочку, можно выбрать 3x-ui узлы, где JSON будет без routing.</small></span>
+      </label>
+
+      <div id="excluded-routing-nodes" style="display:<%= routingAllNodes ? 'none' : 'block' %>; margin:12px 0 18px;">
+        <h3>Узлы без маршрутизации</h3>
+        <p class="hint">Отметь 3x-ui серверы, для которых не нужно применять маршруты. Например, РФ/RU сервер: он останется в JSON-подписке, но при подключении к нему весь трафик пойдёт через него.</p>
+        <div class="preset-grid">
+          <% nodes.forEach(n => { %>
+            <label class="preset-card">
+              <input type="checkbox" name="routing_excluded_node_ids" value="<%= n.id %>" <%= routingExcludedNodeIds.map(Number).includes(Number(n.id)) ? 'checked' : '' %> />
+              <span><strong><%- flagHtml(n.country_code, n.country_flag, n.country_name_ru || n.name) %><%= n.country_name_ru || n.name %></strong><small><%= n.label_suffix || nodeEndpointLabel(n) %> · <%= n.transport_label || 'не загружено' %></small></span>
+            </label>
+          <% }) %>
+        </div>
+      </div>
+
+      <h3>Режим</h3>
+      <div class="mode-grid">
+        <label class="preset-card"><input type="radio" name="routing_mode" value="proxy-selected" <%= routingMode !== 'proxy-except' ? 'checked' : '' %> /><span><strong>Через proxy только выбранное</strong><small>Через VPN идут только правила из собственных списков ниже.</small></span></label>
+        <label class="preset-card"><input type="radio" name="routing_mode" value="proxy-except" <%= routingMode === 'proxy-except' ? 'checked' : '' %> /><span><strong>Всё через proxy, кроме...</strong><small>Исключения идут напрямую, остальной TCP/UDP трафик — в proxy.</small></span></label>
+      </div>
+
+      <div class="form-grid" style="margin-top:16px;">
+        <div class="field half">
+          <label>Всегда через VPN: domain / geosite</label>
+          <textarea name="custom_domains" rows="10" placeholder="geosite:youtube&#10;domain:example.com&#10;regexp:.*\\.example\\.com$"><%= customDomainsText %></textarea>
+          <small class="hint">Можно писать через новую строку, запятую или точку с запятой. Поддерживается: <code>geosite:tag</code>, <code>domain:site.com</code>, <code>regexp:...</code>, <code>keyword:...</code>, <code>full:...</code>. Для кастомных .dat Xray также можно хранить <code>ext:geosite_alias.dat:tag</code>, но мобильный клиент должен иметь этот .dat локально.</small>
+        </div>
+
+        <div class="field half">
+          <label>Всегда через VPN: ip / geoip</label>
+          <textarea name="custom_ips" rows="10" placeholder="geoip:telegram&#10;1.2.3.0/24&#10;2001:db8::/32"><%= customIpsText %></textarea>
+          <small class="hint">Поддерживается: <code>geoip:tag</code>, IPv4, IPv4 CIDR, IPv6 и IPv6 CIDR. Префикс <code>ip:</code> можно вводить — панель уберёт его автоматически. Для кастомных .dat Xray: <code>ext:geoip_alias.dat:tag</code>.</small>
+        </div>
+      </div>
+
+      <h3>Исключения для режима «всё кроме»</h3>
+      <div class="form-grid">
+        <div class="field half"><label>Кроме domain / geosite → direct</label><textarea name="except_domains" rows="7" placeholder="geosite:category-ru&#10;domain:bank.ru"><%= exceptDomainsText %></textarea><small class="hint">Для RU обычно добавляют <code>geosite:category-ru</code>. Можно написать просто <code>ru</code> — агрегатор сохранит как <code>geosite:category-ru</code>.</small></div>
+        <div class="field half"><label>Кроме ip / geoip → direct</label><textarea name="except_ips" rows="7" placeholder="geoip:ru&#10;10.0.0.0/8"><%= exceptIpsText %></textarea><small class="hint">Для российских IP добавь <code>geoip:ru</code>. Можно написать <code>ip-ru</code> — агрегатор сохранит как <code>geoip:ru</code>.</small></div>
+      </div>
+
+      <h3>Блокировка рекламы</h3>
+      <label class="switch-row">
+        <input type="checkbox" name="adblock_enabled" value="1" <%= adBlockEnabled ? 'checked' : '' %> />
+        <span><strong>Включить блокировку рекламы</strong><small>Опция выключена по умолчанию. Широкие рекламные списки могут задевать служебные домены, уведомления и CDN мобильных приложений.</small></span>
+      </label>
+      <div class="form-grid">
+        <div class="field half">
+          <label>Блокировать domain / geosite</label>
+          <textarea name="adblock_domains" rows="6" placeholder="geosite:category-ads-all&#10;domain:ads.example.com"><%= adBlockDomainsText || '' %></textarea>
+          <small class="hint">Можно удалить, изменить или добавить свои правила. Поддерживается <code>geosite:</code>, <code>domain:</code>, <code>regexp:</code>, <code>keyword:</code>, <code>full:</code>.</small>
+        </div>
+        <div class="field half">
+          <label>Блокировать ip / geoip</label>
+          <textarea name="adblock_ips" rows="6" placeholder="geoip:private&#10;1.2.3.0/24"><%= adBlockIpsText || '' %></textarea>
+          <small class="hint">Обычно достаточно domain/geosite. IP/geoip блокировку добавляй только если точно знаешь, что нужно заблокировать.</small>
+        </div>
+      </div>
+
+      <h3>GeoSite / GeoIP источники</h3>
+      <div class="alert ok" style="margin-top:12px;">Источник выбирается отдельно: <strong>Loyalsoldier</strong> можно сделать базой по умолчанию, можно переключиться на локальный/официальный источник клиента или указать свои URL. Агрегатор сохраняет эти URL в JSON-метаданных и, если включить бесплатный Happ routing-профиль, передаёт их в Happ. расширенные платные функции полностью исключены.</div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Основной источник GeoData</label>
+          <select name="geodata_source" id="geodata-source" onchange="syncGeoSourceFields()">
+            <option value="official" <%= geodataSource === 'official' ? 'selected' : '' %>>Официальный / локальный источник клиента</option>
+            <option value="loyalsoldier" <%= geodataSource !== 'official' && geodataSource !== 'custom' ? 'selected' : '' %>>Loyalsoldier / V2Ray rules dat</option>
+            <option value="custom" <%= geodataSource === 'custom' ? 'selected' : '' %>>Свои URL</option>
+          </select>
+          <small class="hint">Если выбран Loyalsoldier, все правила <code>geosite:</code>/<code>geoip:</code> в панели считаются тегами из этих DAT-файлов. Если выбран официальный/локальный источник, URL в Happ-профиль не передаются. Свои URL можно использовать для будущего собственного geosite.dat / geoip.dat.</small>
+        </div>
+        <div class="field half">
+          <label>GeoSite URL</label>
+          <input id="geosite-url" name="geosite_url" value="<%= geositeUrl || '' %>" placeholder="Необязательно: ссылка на geosite.dat" />
+          <small class="hint">Файл доменных списков geosite.dat.</small>
+        </div>
+        <div class="field half">
+          <label>GeoIP URL</label>
+          <input id="geoip-url" name="geoip_url" value="<%= geoipUrl || '' %>" placeholder="Необязательно: ссылка на geoip.dat" />
+          <small class="hint">Файл IP-списков geoip.dat.</small>
+        </div>
+      </div>
+      <div class="field">
+        <label>Дополнительные ссылки / заметки</label>
+        <textarea name="geodata_urls" rows="3" placeholder="Необязательно. Можно вставить дополнительные ссылки или заметки."><%= geodataUrlsText %></textarea>
+        <small class="hint">Здесь можно хранить дополнительные ссылки/заметки. Для клиентской маршрутизации через провайдера важно, чтобы сам клиент понимал выбранные GeoData. Для серверной маршрутизации Xray эти же URL нужно добавлять в оригинальную 3x-ui отдельно.</small>
+      </div>
+      <div class="form-grid" style="margin-top:12px;">
+        <label class="switch-row compact field half">
+          <input type="checkbox" name="happ_routing_profile_enabled" value="1" <%= happRoutingProfileEnabled ? 'checked' : '' %> />
+          <span><strong>Передавать Happ routing-профиль</strong><small>Опционально: header <code>routing</code> / ссылка <code>happ://routing/onadd/...</code> с выбранными GeoData URL и правилами. По умолчанию выключено, чтобы не создавать профиль в Happ автоматически.</small></span>
+        </label>
+        <label class="switch-row compact field half">
+          <input type="checkbox" name="happ_routing_force_update" value="1" <%= happRoutingForceUpdate ? 'checked' : '' %> />
+          <span><strong>Обновлять GeoIP/GeoSite при ревизии</strong><small><code>LastUpdated</code> берётся из ревизии подписки. Работает только если включена передача Happ routing-профиля.</small></span>
+        </label>
+      </div>
+
+      <div class="preset-grid dns-preset-grid">
+        <button type="button" class="btn-secondary" onclick="setGeoPreset('loyal')">Loyalsoldier / Happ</button>
+        <button type="button" class="btn-secondary" onclick="setGeoPreset('ru')">Russia rules</button>
+        <button type="button" class="btn-secondary" onclick="setGeoPreset('iran')">Iran rules</button>
+      </div>
+
+      <h3>DNS для JSON-подписки</h3>
+      <p class="hint">Эти DNS попадут в генерируемый JSON-конфиг. DoH/DoT можно использовать, если клиентская сборка Xray/Happ их поддерживает.</p>
+      <div class="form-grid">
+        <div class="field half">
+          <label>Готовый набор DNS</label>
+          <select name="dns_preset">
+            <option value="cloudflare-google" <%= dnsPreset === 'cloudflare-google' ? 'selected' : '' %>>Cloudflare + Google</option>
+            <option value="cloudflare" <%= dnsPreset === 'cloudflare' ? 'selected' : '' %>>Cloudflare</option>
+            <option value="google" <%= dnsPreset === 'google' ? 'selected' : '' %>>Google</option>
+            <option value="quad9" <%= dnsPreset === 'quad9' ? 'selected' : '' %>>Quad9</option>
+            <option value="yandex" <%= dnsPreset === 'yandex' ? 'selected' : '' %>>Yandex DNS</option>
+            <option value="doh_cloudflare" <%= dnsPreset === 'doh_cloudflare' ? 'selected' : '' %>>Cloudflare DoH</option>
+            <option value="doh_google" <%= dnsPreset === 'doh_google' ? 'selected' : '' %>>Google DoH</option>
+            <option value="manual" <%= dnsPreset === 'manual' ? 'selected' : '' %>>Только вручную</option>
+          </select>
+        </div>
+        <div class="field half">
+          <label>Ручные DNS / DoH / DoT</label>
+          <textarea name="dns_custom" rows="4" placeholder="1.1.1.1&#10;https://cloudflare-dns.com/dns-query&#10;tls://dns.google"><%= dnsCustomText || '' %></textarea>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="submit">Сохранить и применить</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card span-6">
+    <h2>Текущий итог</h2>
+    <div class="kv-list">
+      <div class="kv-item">
+        <strong>JSON-ссылка</strong>
+        <div class="muted"><code><%= jsonUrlExample %></code></div>
+      </div>
+      <div class="kv-item">
+        <strong>Happ routing-профиль</strong>
+        <div class="muted"><%= happRoutingProfileEnabled ? 'Передаётся через header routing + body link' : 'Отключён' %></div>
+        <div class="muted"><code><%= happRoutingJsonExample %></code></div>
+      </div>
+      <div class="kv-item">
+        <strong>0. Сначала блокировка рекламы</strong>
+        <% if (blockDomains.length || blockIps.length) { %>
+          <% if (blockDomains.length) { %><pre class="routing-preview"><%= blockDomains.join('\n') %></pre><% } %>
+          <% if (blockIps.length) { %><pre class="routing-preview"><%= blockIps.join('\n') %></pre><% } %>
+        <% } else { %>
+          <div class="muted">Блокировка рекламы выключена или список пуст.</div>
+        <% } %>
+      </div>
+      <div class="kv-item">
+        <strong>1. Сначала через proxy / VPN</strong>
+        <% if (proxyDomains.length || proxyIps.length) { %>
+          <% if (proxyDomains.length) { %><pre class="routing-preview"><%= proxyDomains.join('\n') %></pre><% } %>
+          <% if (proxyIps.length) { %><pre class="routing-preview"><%= proxyIps.join('\n') %></pre><% } %>
+        <% } else { %>
+          <div class="muted">Нет приоритетных правил VPN.</div>
+        <% } %>
+      </div>
+      <% if (routingMode === 'proxy-except') { %>
+        <div class="kv-item">
+          <strong>2. Потом напрямую / direct</strong>
+          <% if (directDomains.length || directIps.length) { %>
+            <% if (directDomains.length) { %><pre class="routing-preview"><%= directDomains.join('\n') %></pre><% } %>
+            <% if (directIps.length) { %><pre class="routing-preview"><%= directIps.join('\n') %></pre><% } %>
+          <% } else { %>
+            <div class="muted">Нет direct-исключений.</div>
+          <% } %>
+        </div>
+      <% } %>
+
+      <div class="kv-item">
+        <strong>Всё остальное</strong>
+        <div class="muted"><%= routingMode === 'proxy-except' ? 'Идёт через proxy. Поэтому Mail.ru/My.ru можно держать выше, а RU — ниже direct.' : 'Идёт напрямую через direct.' %></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card span-12 geodata-catalog-card">
+    <h2>Справочник GeoSite / GeoIP</h2>
+    <p class="muted">Компактный список тегов из источников Happ / Loyalsoldier. Найди нужную категорию, скопируй её или сразу добавь в VPN/direct поле.</p>
+    <div class="geodata-toolbar">
+      <input id="geodata-search" type="search" placeholder="Поиск: mail, meta, viber, ru, telegram..." oninput="renderGeodataCatalog()" />
+      <button type="button" class="btn-secondary" onclick="loadGeodataCatalog(true)">Обновить список</button>
+    </div>
+    <div id="geodata-status" class="geodata-status">Загружаю справочник...</div>
+    <div class="geodata-lists">
+      <div class="geodata-list-box">
+        <div class="geodata-list-head"><strong>GeoSite</strong><small id="geosite-count">0</small></div>
+        <div id="geosite-list" class="geodata-scroll"></div>
+      </div>
+      <div class="geodata-list-box">
+        <div class="geodata-list-head"><strong>GeoIP</strong><small id="geoip-count">0</small></div>
+        <div id="geoip-list" class="geodata-scroll"></div>
+      </div>
+    </div>
+    <div class="geodata-help">
+      Справочник помогает найти теги из Loyalsoldier/V2Ray lists. Нажми VPN/DIRECT, чтобы добавить правило в нужный список, или скопируй вручную. Блокировка рекламы добавляется отдельным списком выше.
+    </div>
+  </section>
+</div>
+
+<script>
+let geodataCatalog = { geosite: [], geoip: [], notes: [] };
+const LOYAL_GEOSITE_URL = 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat';
+const LOYAL_GEOIP_URL = 'https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat';
+
+function syncGeoSourceFields() {
+  const source = document.getElementById('geodata-source')?.value || 'loyalsoldier';
+  const geosite = document.getElementById('geosite-url');
+  const geoip = document.getElementById('geoip-url');
+  if (!geosite || !geoip) return;
+  if (source === 'loyalsoldier') {
+    geosite.value = LOYAL_GEOSITE_URL;
+    geoip.value = LOYAL_GEOIP_URL;
+    geosite.readOnly = true;
+    geoip.readOnly = true;
+  } else if (source === 'official') {
+    geosite.value = '';
+    geoip.value = '';
+    geosite.readOnly = true;
+    geoip.readOnly = true;
+  } else {
+    geosite.readOnly = false;
+    geoip.readOnly = false;
+  }
+}
+
+
+function setGeoPreset(kind) {
+  const presets = {
+    loyal: ['loyalsoldier', LOYAL_GEOSITE_URL, LOYAL_GEOIP_URL],
+    ru: ['custom', 'https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat', 'https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat'],
+    iran: ['custom', 'https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat', 'https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat']
+  };
+  const chosen = presets[kind];
+  if (!chosen) return;
+  const source = document.getElementById('geodata-source');
+  const geosite = document.querySelector('input[name="geosite_url"]');
+  const geoip = document.querySelector('input[name="geoip_url"]');
+  if (source) source.value = chosen[0];
+  if (geosite) geosite.value = chosen[1];
+  if (geoip) geoip.value = chosen[2];
+  syncGeoSourceFields();
+}
+
+function appendRoutingLine(textareaName, value) {
+  const area = document.querySelector(`textarea[name="${textareaName}"]`);
+  if (!area || !value) return;
+  const lines = area.value.split(/\n+/).map(v => v.trim()).filter(Boolean);
+  if (!lines.includes(value)) lines.push(value);
+  area.value = lines.join('\n');
+  area.dispatchEvent(new Event('input', { bubbles: true }));
+  area.dispatchEvent(new Event('change', { bubbles: true }));
+  area.focus();
+  area.scrollTop = area.scrollHeight;
+}
+
+async function copyGeodataToken(value, button) {
+  try {
+    await navigator.clipboard.writeText(value);
+    if (button) {
+      button.classList.add('copy-ok');
+      const old = button.textContent;
+      button.textContent = 'OK';
+      setTimeout(() => { button.classList.remove('copy-ok'); button.textContent = old; }, 900);
+    }
+  } catch (_) {
+    window.prompt('Скопируй строку:', value);
+  }
+}
+
+function makeGeoRow(item, kind) {
+  const row = document.createElement('div');
+  row.className = 'geodata-row';
+  const value = item.value || `${kind}:${item.tag}`;
+
+  const token = document.createElement('div');
+  token.className = 'geodata-token';
+  token.title = 'Нажми, чтобы скопировать';
+  token.textContent = value;
+  token.onclick = () => copyGeodataToken(value, null);
+  row.appendChild(token);
+
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'geodata-mini';
+  copy.textContent = 'copy';
+  copy.onclick = () => copyGeodataToken(value, copy);
+  row.appendChild(copy);
+
+  const vpn = document.createElement('button');
+  vpn.type = 'button';
+  vpn.className = 'geodata-mini';
+  vpn.textContent = 'VPN';
+  vpn.onclick = () => appendRoutingLine(kind === 'geosite' ? 'custom_domains' : 'custom_ips', value);
+  row.appendChild(vpn);
+
+  const direct = document.createElement('button');
+  direct.type = 'button';
+  direct.className = 'geodata-mini';
+  direct.textContent = 'DIRECT';
+  direct.onclick = () => appendRoutingLine(kind === 'geosite' ? 'except_domains' : 'except_ips', value);
+  row.appendChild(direct);
+
+  const block = document.createElement('button');
+  block.type = 'button';
+  block.className = 'geodata-mini';
+  block.textContent = 'BLOCK';
+  block.onclick = () => appendRoutingLine(kind === 'geosite' ? 'adblock_domains' : 'adblock_ips', value);
+  row.appendChild(block);
+
+  return row;
+}
+
+function renderGeoList(kind) {
+  const box = document.getElementById(kind === 'geosite' ? 'geosite-list' : 'geoip-list');
+  const counter = document.getElementById(kind === 'geosite' ? 'geosite-count' : 'geoip-count');
+  if (!box) return;
+  const q = (document.getElementById('geodata-search')?.value || '').trim().toLowerCase();
+  const items = (geodataCatalog[kind] || []).filter(item => {
+    const value = String(item.value || item.tag || '').toLowerCase();
+    return !q || value.includes(q);
+  });
+  if (counter) counter.textContent = `${items.length}/${(geodataCatalog[kind] || []).length}`;
+  box.innerHTML = '';
+  items.slice(0, 300).forEach(item => box.appendChild(makeGeoRow(item, kind)));
+  if (items.length > 300) {
+    const tail = document.createElement('div');
+    tail.className = 'geodata-status';
+    tail.textContent = `Показаны первые 300. Уточни поиск, чтобы сузить список.`;
+    box.appendChild(tail);
+  }
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.style.padding = '12px';
+    empty.textContent = 'Ничего не найдено.';
+    box.appendChild(empty);
+  }
+}
+
+function renderGeodataCatalog() {
+  renderGeoList('geosite');
+  renderGeoList('geoip');
+}
+
+async function loadGeodataCatalog(refresh) {
+  const status = document.getElementById('geodata-status');
+  if (status) status.textContent = refresh ? 'Обновляю список с GitHub...' : 'Загружаю справочник...';
+  try {
+    const resp = await fetch('/routing/geodata-index' + (refresh ? '?refresh=1' : ''), { cache: 'no-store' });
+    const data = await resp.json();
+    geodataCatalog = data || { geosite: [], geoip: [], notes: [] };
+    renderGeodataCatalog();
+    const updated = data.updatedAt ? new Date(data.updatedAt).toLocaleString() : '';
+    if (status) status.textContent = `${data.source || 'catalog'}${data.cached ? ' · cache' : ''}${updated ? ' · ' + updated : ''}`;
+  } catch (err) {
+    if (status) status.textContent = 'Не удалось загрузить справочник: ' + (err && err.message ? err.message : err);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => loadGeodataCatalog(false));
+</script>
+<%- include('partials_footer') %>

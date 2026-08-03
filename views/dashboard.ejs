@@ -75,8 +75,11 @@
     const nameText = String(name || '').trim();
     const codeFromName = (typeof countryCodeByName === 'function') ? String(countryCodeByName(nameText) || '').trim().toLowerCase() : '';
     const code2 = (/^[a-z]{2}$/i.test(rawCode) ? rawCode : (/^[a-z]{2}$/i.test(fb) ? fb.toLowerCase() : codeFromName));
-    if (code2 && !['zz','xx'].includes(code2)) return '<img class="flag-badge flag-img" src="/flags/' + code2 + '.svg" alt="' + code2.toUpperCase() + '" loading="lazy" onerror="this.style.display=\'none\'">';
     const emoji = (typeof countryFlagText === 'function') ? countryFlagText(code, fb, nameText) : ((fb && fb !== '🌐' && !/^[a-z]{2}$/i.test(fb)) ? fb : flagEmojiFromCode(code || fb));
+    if (code2 && !['zz','xx'].includes(code2)) {
+      const fallbackEmoji = emoji || flagEmojiFromCode(code2);
+      return '<span class="flag-badge local-flag-shell"><img class="flag-img" src="/flags/' + code2 + '.svg" alt="' + code2.toUpperCase() + '" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="flag-emoji-fallback" hidden>' + fallbackEmoji + '</span></span>';
+    }
     return emoji && emoji !== '🌐'
       ? '<span class="flag-badge emoji-fallback">' + emoji + '</span>'
       : nodeFallbackIcon(nodeType);
@@ -118,7 +121,7 @@
     <div class="agg-pulse-head">
       <div>
         <h2>Состояние узлов</h2>
-        <p class="muted">Статус узлов обновляется автоматически каждые 10 секунд. <span id="aggPulseUpdatedAt" aria-live="polite"></span></p>
+        <p class="muted">Последний известный статус. Нажмите «Проверить», чтобы опросить узлы и увидеть время отклика.</p>
       </div>
       <button type="button" class="btn-secondary" id="aggPulseCheckBtn">Проверить</button>
     </div>
@@ -344,30 +347,24 @@
     <div class="section-title-row">
       <div>
         <h2>Онлайн клиенты</h2>
-        <p class="muted">Список берётся с активных узлов. Обновляйте вручную или включите автообновление с нужным интервалом.</p>
+        <p class="muted">Список берётся с активных узлов и автоматически обновляется каждые 10 секунд.</p>
       </div>
     </div>
     <div class="online-modal-controls">
       <button type="button" class="btn-main" id="onlineRefreshBtn">Обновить</button>
-      <label class="redirect-refresh-toggle" for="onlineAutoRefreshToggle">
-        <input type="checkbox" id="onlineAutoRefreshToggle" />
-        <span>Автообновление</span>
+      <label class="redirect-refresh-toggle">
+        <input type="checkbox" id="onlineAutoRefreshToggle" checked />
+        <span>Автообновление каждые 10 секунд</span>
       </label>
-      <select id="onlineRefreshInterval" aria-label="Интервал автообновления онлайн-клиентов">
-        <option value="5">5 сек.</option>
-        <option value="10" selected>10 сек.</option>
-        <option value="30">30 сек.</option>
-        <option value="60">60 сек.</option>
-      </select>
     </div>
     <div id="onlineClientsStatus" class="hint">Нажми «Обновить», чтобы загрузить онлайн-клиентов.</div>
     <div id="onlineClientsList" class="dashboard-client-list online-list"></div>
   </div>
 </div>
 
-<div id="onlineClientDetailModal" class="modal hidden online-client-detail-modal" onclick="closeDashboardModal(event, 'onlineClientDetailModal')">
+<div id="onlineClientDetailModal" class="modal hidden online-client-detail-modal" onclick="closeOnlineClientDetail(event)">
   <div class="modal-card editor-modal online-client-detail-card" onclick="event.stopPropagation()">
-    <button type="button" class="modal-close" onclick="hideDashboardModal('onlineClientDetailModal')">×</button>
+    <button type="button" class="modal-close" onclick="hideOnlineClientDetail()">×</button>
     <div id="onlineClientDetailBody"></div>
   </div>
 </div>
@@ -433,7 +430,6 @@ function openDashboardModal(id) {
 }
 function hideDashboardModal(id) {
   document.getElementById(id)?.classList.add('hidden');
-  if (id === 'onlineClientsModal') stopOnlineAutoRefresh();
   syncDashboardModalState();
 }
 function closeDashboardModal(e, id) { if (e.target.id === id) hideDashboardModal(id); }
@@ -477,7 +473,8 @@ function nodeFallbackIconHtml(nodeType) {
 function renderFlag(code, fallback, nodeType) {
   const cc = String(code || '').trim().toLowerCase();
   if (/^[a-z]{2}$/.test(cc) && !['zz','xx'].includes(cc)) {
-    return `<img class="flag-badge flag-img" src="/flags/${cc}.svg" alt="${cc.toUpperCase()}" loading="lazy" onerror="this.style.display='none'">`;
+    const fallbackEmoji = flagEmojiFromCodeJs(cc);
+    return `<span class="flag-badge local-flag-shell"><img class="flag-img" src="/flags/${cc}.svg" alt="${cc.toUpperCase()}" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="flag-emoji-fallback" hidden>${escapeHtml(fallbackEmoji)}</span></span>`;
   }
   const fb = String(fallback || '').trim();
   const emoji = (fb && fb !== '🌐' && !/^[a-z]{2}$/i.test(fb)) ? fb : flagEmojiFromCodeJs(code || fb);
@@ -597,6 +594,7 @@ function renderOnlineClients(data) {
     const comment = client.comment || ((client.display_name && client.display_name !== client.login) ? client.display_name : '');
     const clientId = client.id || client.clientId || client.client_id || '';
     const until = onlineClientUntil(client);
+    const nodeCount = Array.isArray(client.nodes) ? client.nodes.length : 0;
     const renewForm = clientId ? `
       <form method="post" action="/clients/${encodeURIComponent(String(clientId))}/extend" class="online-client-renew-form js-long-action" data-loading-title="Продлеваю клиента" data-loading-text="Применяю новый срок на узлах клиента.">
         <input type="hidden" name="back" value="/dashboard" />
@@ -607,9 +605,10 @@ function renderOnlineClients(data) {
       <div class="dashboard-client-card online-client-card online-client-row online-client-card-v2">
         <div class="online-client-summary-v4">
           <div class="online-client-main-v4">
-            <strong class="online-client-login-v4">${escapeHtml(client.login || client.display_name || '-')}</strong>
+            <strong class="online-client-login-v4"><i class="online-live-dot"></i>${escapeHtml(client.login || client.display_name || '-')}</strong>
             <small class="online-client-comment-v4">${escapeHtml(comment || '-')}</small>
-            <span class="online-client-expiry-v4">до: ${escapeHtml(until)}</span>
+            <div class="online-client-meta-v5"><span>В сети</span><span>${nodeCount} ${nodeCount === 1 ? 'узел' : 'узлов'}</span><span>до: ${escapeHtml(until)}</span></div>
+            <div class="online-client-node-preview">${onlineNodeBadgesHtml({ ...client, nodes: (client.nodes || []).slice(0, 2) })}</div>
           </div>
           <button type="button" class="online-details-toggle online-details-toggle-v4" data-online-client-index="${index}" ${clientId ? `data-open-online-client="${escapeHtml(clientId)}" data-online-client-id="${escapeHtml(clientId)}"` : `data-open-online-client-fallback="1" data-online-client-detail="${escapeAttrJson(client)}"`}>Подробнее</button>
           <div class="online-client-renew-wrap-v4">${renewForm}</div>
@@ -673,10 +672,12 @@ function renderClientQuickBody(c) {
   }).join('') : '<span class="client-quick-node-chip empty">Узлы не назначены</span>';
   const subLink = c.links && c.links.sub ? String(c.links.sub) : '';
   const jsonLink = c.links && c.links.json ? String(c.links.json) : '';
+  const happLink = c.links && c.links.happ ? String(c.links.happ) : '';
   const openLink = c.links && c.links.open ? String(c.links.open) : '#';
   const editorLink = c.links && c.links.editor ? String(c.links.editor) : (c.links && c.links.search ? String(c.links.search) : '/clients');
   const clientId = String(c.id || '').trim();
-  const trafficText = c.trafficGb && Number(c.trafficGb) > 0 ? c.trafficGb + ' ГБ' : '∞';
+  const trafficLimitText = c.trafficGb && Number(c.trafficGb) > 0 ? c.trafficGb + ' ГБ' : '∞';
+  const trafficText = String(c.trafficUsedText || '0 Б') + ' / ' + trafficLimitText;
   const limitIpText = c.limitIp && Number(c.limitIp) > 0 ? String(c.limitIp) : '∞';
   const avatarLetter = String(c.login || c.title || 'U').trim().slice(0,1).toUpperCase() || 'U';
   return `
@@ -715,16 +716,18 @@ function renderClientQuickBody(c) {
     <div class="client-quick-actions modern">
       <a class="btn-secondary" href="${escapeHtml(openLink)}" target="_blank">Открыть в панели</a>
       <form method="post" action="/clients/${encodeURIComponent(String(c.id || ''))}/toggle" class="client-quick-toggle-form js-long-action" onsubmit="return confirm('Изменить статус клиента?')"><input type="hidden" name="back" value="/dashboard"><button type="submit" class="btn-secondary danger-lite">${c.statusKey === 'offline' ? 'Включить' : 'Отключить'}</button></form>
-      ${subLink ? `<button type="button" class="btn-secondary" data-copy-client-link="${escapeHtml(subLink)}">▦ SUB</button>` : ''}
-      ${jsonLink ? `<button type="button" class="btn-secondary" data-copy-client-link="${escapeHtml(jsonLink)}">{ } JSON</button>` : ''}
+      ${(subLink || jsonLink || happLink) ? `<button type="button" class="btn-secondary" data-client-link-title="${escapeHtml(c.login || c.title || '')}" data-json-link="${escapeHtml(jsonLink)}" data-sub-link="${escapeHtml(subLink)}" data-happ-link="${escapeHtml(happLink)}" onclick="openClientLinkPicker(this, 'copy')">Копировать ссылку</button>` : ''}
+      ${(subLink || jsonLink || happLink) ? `<button type="button" class="btn-secondary" data-client-link-title="${escapeHtml(c.login || c.title || '')}" data-json-link="${escapeHtml(jsonLink)}" data-sub-link="${escapeHtml(subLink)}" data-happ-link="${escapeHtml(happLink)}" onclick="openClientLinkPicker(this, 'qr')">QR-код</button>` : ''}
     </div>`;
 }
-async function openOnlineClientQuickDetail(id) {
+let activeOnlineClientId = '';
+async function openOnlineClientQuickDetail(id, silent = false) {
   const body = document.getElementById('onlineClientDetailBody');
   const modal = document.getElementById('onlineClientDetailModal');
   if (!body || !modal) return;
+  activeOnlineClientId = String(id || '');
   openDashboardModal('onlineClientDetailModal');
-  body.innerHTML = '<div class="client-quick-loading">Загружаю клиента...</div>';
+  if (!silent) body.innerHTML = '<div class="client-quick-loading">Загружаю клиента...</div>';
   try {
     const response = await fetch('/clients/' + encodeURIComponent(id) + '/summary.json', { headers: { 'Accept': 'application/json' }});
     const data = await response.json().catch(() => ({}));
@@ -746,6 +749,7 @@ function openOnlineClientDetail(client) {
   const body = document.getElementById('onlineClientDetailBody');
   const modal = document.getElementById('onlineClientDetailModal');
   if (!body || !modal) return;
+  activeOnlineClientId = String(client.id || client.clientId || client.client_id || '');
   const comment = client.comment || client.display_name || '';
   const until = onlineClientUntil(client);
   body.innerHTML = `
@@ -764,51 +768,52 @@ function openOnlineClientDetail(client) {
   openDashboardModal('onlineClientDetailModal');
 }
 
+function hideOnlineClientDetail() {
+  activeOnlineClientId = '';
+  hideDashboardModal('onlineClientDetailModal');
+}
+function closeOnlineClientDetail(event) {
+  if (event && event.target && event.target.id === 'onlineClientDetailModal') hideOnlineClientDetail();
+}
+
 let onlineRefreshTimer = null;
-let onlineRefreshInFlight = false;
+let onlineRefreshPending = false;
 async function refreshOnlineClients() {
-  if (onlineRefreshInFlight) return;
+  if (onlineRefreshPending) return;
+  onlineRefreshPending = true;
   const btn = document.getElementById('onlineRefreshBtn');
   const status = document.getElementById('onlineClientsStatus');
   try {
-    onlineRefreshInFlight = true;
     if (btn) btn.disabled = true;
     if (status) status.textContent = 'Обновляю онлайн-клиентов...';
     const response = await fetch('/dashboard/online-clients.json', { headers: { 'Accept': 'application/json' } });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'Ошибка загрузки онлайн-клиентов');
     renderOnlineClients(data);
+    const detailModal = document.getElementById('onlineClientDetailModal');
+    if (activeOnlineClientId && detailModal && !detailModal.classList.contains('hidden')) {
+      const current = onlineClientDetailsById.get(String(activeOnlineClientId));
+      if (current) {
+        window.__aggOnlineClientContext = { id: String(activeOnlineClientId), nodes: Array.isArray(current.nodes) ? current.nodes : [] };
+        await openOnlineClientQuickDetail(activeOnlineClientId, true);
+      } else {
+        hideOnlineClientDetail();
+      }
+    }
   } catch (err) {
     if (status) status.textContent = 'Ошибка: ' + (err.message || err);
   } finally {
-    onlineRefreshInFlight = false;
     if (btn) btn.disabled = false;
+    onlineRefreshPending = false;
   }
 }
-
-function stopOnlineAutoRefresh() {
-  if (onlineRefreshTimer) clearInterval(onlineRefreshTimer);
-  onlineRefreshTimer = null;
-}
-
 function startOnlineAutoRefresh() {
-  stopOnlineAutoRefresh();
-  const modal = document.getElementById('onlineClientsModal');
   const toggle = document.getElementById('onlineAutoRefreshToggle');
-  const interval = document.getElementById('onlineRefreshInterval');
-  if (!modal || modal.classList.contains('hidden') || !toggle?.checked) return;
-  const seconds = [5, 10, 30, 60].includes(Number(interval?.value)) ? Number(interval.value) : 10;
+  if (onlineRefreshTimer) clearInterval(onlineRefreshTimer);
+  if (!toggle || !toggle.checked) return;
   onlineRefreshTimer = setInterval(() => {
-    if (!document.hidden && !modal.classList.contains('hidden')) refreshOnlineClients();
-  }, seconds * 1000);
-}
-
-function readOnlineRefreshPreference(key) {
-  try { return localStorage.getItem(key); } catch (_) { return null; }
-}
-
-function writeOnlineRefreshPreference(key, value) {
-  try { localStorage.setItem(key, value); } catch (_) {}
+    if (!document.hidden) refreshOnlineClients();
+  }, 10000);
 }
 
 function setupMobileDashboardTabs() {
@@ -853,10 +858,8 @@ function openOnlineClientById(id, event) {
   window.__aggOnlineClientContext = onlineClient
     ? { id: cleanId, nodes: Array.isArray(onlineClient.nodes) ? onlineClient.nodes : [] }
     : null;
-  if (window.openClientQuickCard) {
-    window.openClientQuickCard(cleanId);
-    return false;
-  }
+  // Список остаётся открытым под карточкой. После закрытия деталей пользователь
+  // возвращается в тот же обновляемый список, а не на дашборд.
   openOnlineClientQuickDetail(cleanId);
   return false;
 }
@@ -915,21 +918,8 @@ document.addEventListener('DOMContentLoaded', () => {
     startOnlineAutoRefresh();
   });
   document.getElementById('onlineRefreshBtn')?.addEventListener('click', refreshOnlineClients);
-  const onlineAutoToggle = document.getElementById('onlineAutoRefreshToggle');
-  const onlineInterval = document.getElementById('onlineRefreshInterval');
-  const savedOnlineAuto = readOnlineRefreshPreference('agg.onlineClients.autoRefresh');
-  const savedOnlineInterval = readOnlineRefreshPreference('agg.onlineClients.refreshInterval');
-  if (onlineAutoToggle) onlineAutoToggle.checked = savedOnlineAuto === '1';
-  if (onlineInterval && ['5', '10', '30', '60'].includes(savedOnlineInterval || '')) onlineInterval.value = savedOnlineInterval;
-  onlineAutoToggle?.addEventListener('change', () => {
-    writeOnlineRefreshPreference('agg.onlineClients.autoRefresh', onlineAutoToggle.checked ? '1' : '0');
-    startOnlineAutoRefresh();
-  });
-  onlineInterval?.addEventListener('change', () => {
-    writeOnlineRefreshPreference('agg.onlineClients.refreshInterval', onlineInterval.value);
-    startOnlineAutoRefresh();
-  });
-  window.addEventListener('pagehide', stopOnlineAutoRefresh, { once: true });
+  document.getElementById('onlineAutoRefreshToggle')?.addEventListener('change', startOnlineAutoRefresh);
+  startOnlineAutoRefresh();
   setupMobileDashboardTabs();
 });
 
@@ -1009,14 +999,8 @@ function normalizeDashboardSearchText(value) {
 (function aggPulse(){
   const btn = document.getElementById('aggPulseCheckBtn');
   const list = document.getElementById('aggPulseList');
-  const updatedAt = document.getElementById('aggPulseUpdatedAt');
   if (!btn || !list) return;
-  let running = false;
-  let timer = null;
-
-  async function refreshNodeStatus() {
-    if (running || document.hidden) return;
-    running = true;
+  btn.addEventListener('click', async () => {
     const items = Array.from(list.querySelectorAll('.agg-pulse-item'));
     items.forEach(it => {
       if (it.dataset.state !== 'disabled') {
@@ -1029,47 +1013,29 @@ function normalizeDashboardSearchText(value) {
     const oldText = btn.textContent;
     btn.textContent = 'Проверяю…';
     try {
-      const res = await fetch('/dashboard/node-status.json', {
-        headers: { 'Accept': 'application/json' },
-        cache: 'no-store'
-      });
+      const res = await fetch('/dashboard/panel-check.json', { headers: { 'Accept': 'application/json' } });
       const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Не удалось проверить узлы');
-      const byId = new Map((data.checks || []).map(check => [String(check.nodeId), check]));
+      const byId = new Map();
+      (data.checks || []).forEach(c => {
+        const id = c && c.details && c.details.nodeId;
+        if (id) byId.set(String(id), c);
+      });
       items.forEach(it => {
         if (it.dataset.state === 'disabled') return;
         const c = byId.get(String(it.dataset.nodeId));
         const ms = it.querySelector('[data-pulse-ms]');
         if (!c) { it.dataset.state = 'unknown'; if (ms) ms.textContent = ''; return; }
-        it.dataset.state = c.status === 'disabled' ? 'disabled' : (c.ok ? 'online' : 'offline');
+        it.dataset.state = c.ok ? 'online' : 'offline';
         if (ms) ms.textContent = c.ok
-          ? (c.ms ? Math.round(c.ms) + ' мс' : '')
+          ? (c.details && c.details.ms ? Math.round(c.details.ms) + ' мс' : '')
           : 'нет ответа';
       });
-      if (updatedAt) {
-        const stamp = data.generatedAt ? new Date(data.generatedAt) : new Date();
-        updatedAt.textContent = 'Последняя проверка: ' + stamp.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + '.';
-      }
     } catch (_) {
       items.forEach(it => { if (it.dataset.state === 'checking') it.dataset.state = 'unknown'; });
-      if (updatedAt) updatedAt.textContent = 'Проверка временно недоступна.';
-    } finally {
-      running = false;
-      btn.disabled = false;
-      btn.textContent = oldText;
     }
-  }
-
-  btn.addEventListener('click', refreshNodeStatus);
-  timer = window.setInterval(refreshNodeStatus, 10000);
-  window.setTimeout(refreshNodeStatus, 500);
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) refreshNodeStatus();
+    btn.disabled = false;
+    btn.textContent = oldText;
   });
-  window.addEventListener('pagehide', () => {
-    if (timer) window.clearInterval(timer);
-    timer = null;
-  }, { once: true });
 })();
 
 (function aggTrafficChart(){

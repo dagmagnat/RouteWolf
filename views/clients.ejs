@@ -26,20 +26,12 @@
       : ((fb && fb !== '🌐' && !/^[a-z]{2}$/i.test(fb)) ? fb : flagEmojiFromCode(rawCode || fb));
     const cc2 = String(rawCode || (/^[a-z]{2}$/i.test(fb) ? fb : '')).trim().toLowerCase();
     if (/^[a-z]{2}$/.test(cc2) && !['zz','xx'].includes(cc2)) {
-      return '<img class="node-flag flag-img" src="/flags/' + cc2 + '.svg" alt="' + cc2.toUpperCase() + '" loading="lazy" onerror="this.style.display=\'none\'">';
+      const fallbackEmoji = emoji || flagEmojiFromCode(cc2);
+      return '<span class="node-flag local-flag-shell"><img class="flag-img" src="/flags/' + cc2 + '.svg" alt="' + cc2.toUpperCase() + '" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><span class="flag-emoji-fallback" hidden>' + fallbackEmoji + '</span></span>';
     }
     return emoji && emoji !== '🌐'
       ? '<span class="node-flag emoji-fallback" aria-label="' + rawCode + '">' + emoji + '</span>'
       : nodeFallbackIcon(nodeType);
-  }
-  function clientActionIcon(name) {
-    const paths = {
-      info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 10.7v5.1"/><path d="M12 7.6h.01"/>',
-      qr: '<rect x="3.5" y="3.5" width="6" height="6" rx=".8"/><rect x="14.5" y="3.5" width="6" height="6" rx=".8"/><rect x="3.5" y="14.5" width="6" height="6" rx=".8"/><path d="M14.5 14.5h2.2v2.2h-2.2zM18.3 14.5h2.2v2.2h-2.2zM14.5 18.3h2.2v2.2h-2.2zM18.3 18.3h2.2v2.2h-2.2z"/>',
-      copy: '<rect x="8.3" y="8.3" width="11.2" height="11.2" rx="2"/><path d="M15.7 8.3V6.5a2 2 0 0 0-2-2H6.5a2 2 0 0 0-2 2v7.2a2 2 0 0 0 2 2h1.8"/>',
-      edit: '<path d="M4.2 19.8 5 15.6 15.8 4.8a2.1 2.1 0 0 1 3 3L8 18.6l-3.8 1.2z"/><path d="m14.2 6.4 3.4 3.4M5 15.6l3 3"/>'
-    };
-    return `<svg class="client-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths[name] || paths.info}</svg>`;
   }
   function flagText(code, fallback, name) {
     return (typeof countryFlagText === 'function') ? countryFlagText(code, fallback, name) : (String(fallback || '').trim() || flagEmojiFromCode(code) || '🌐');
@@ -153,7 +145,7 @@
   }
   function clientTrafficPercent(client) {
     const limitGb = Math.max(0, Number(client.traffic_gb || 0));
-    if (!limitGb) return 42;
+    if (!limitGb) return clientUsedBytes(client) > 0 ? 100 : 0;
     return Math.max(0, Math.min(100, clientUsedBytes(client) / (limitGb * 1024 ** 3) * 100));
   }
   function clientRemainingMeta(client) {
@@ -333,13 +325,14 @@
     <% clients.forEach(client => {
       const subUrl = `${baseUrl}/sub/${client.sub_slug}`;
       const jsonUrl = `${baseUrl}/json/${client.sub_slug}`;
+      const happUrl = `${baseUrl}/happ/${client.sub_slug}`;
       const clientStatus = clientStatusMeta(client);
       const displayTitle = compactTitle(client);
       const secondaryText = secondaryClientText(client);
       const nodeLimitRows = (client.node_limits || []).filter(nl => nl.client_node_id);
       const nodeLimitTextShort = client.limit_ip && Number(client.limit_ip) > 0 ? '0/' + Number(client.limit_ip) : '∞';
       const filterKeys = mobileClientFilterKeys(client).join(' ');
-      const canShowH1Sub = Boolean(showSubLinks && Number(client.has_h1cloud_sub) === 1);
+      const hasVisibleClientLinks = Boolean(showSubLinks || showJsonLinks || showHappLinks);
     %>
       <article class="mobile-client-card status-<%= clientStatus.key %>" data-mobile-client-card data-client-entry data-client-view="mobile" data-client-id-entry="<%= client.id %>" data-client-search="<%= clientDirectorySearch(client) %>" data-client-node-ids="<%= clientDirectoryNodeIds(client) %>" data-client-name="<%= compactTitle(client) %>" data-client-order="<%= client.id %>" data-client-expiry-order="<%= Number(client.expiry_time || 0) %>" data-client-status="<%= clientDirectoryStatusFilter(client) %>" data-statuses="<%= filterKeys %>">
         <div class="mobile-client-head stage12-client-head">
@@ -359,20 +352,16 @@
         </div>
 
         <div class="mobile-client-metrics">
-          <div><span>Трафик</span><strong><%= client.traffic_gb && client.traffic_gb > 0 ? '0 / ' + client.traffic_gb + ' ГБ' : '∞' %></strong></div>
+          <div><span>Трафик</span><strong><%= formatClientBytes(clientUsedBytes(client)) %> / <%= client.traffic_gb && client.traffic_gb > 0 ? client.traffic_gb + ' ГБ' : '∞' %></strong></div>
           <div><span>Лимит дней</span><strong><%= termShort(client) %></strong></div>
           <div><span>Лимит IP</span><strong><%= client.limit_ip && Number(client.limit_ip) > 0 ? client.limit_ip : '∞' %></strong></div>
         </div>
         <div class="mobile-client-expiry">Действует до: <strong><%= expiryDateTime(client.expiry_time) %></strong></div>
 
         <div class="mobile-client-actions">
-          <% if (canShowH1Sub) { %>
-          <button type="button" class="icon-action secondary" onclick="copySubLink('<%= subUrl %>', this)"><span>SUB</span>SUB</button>
-          <button type="button" class="icon-action secondary" onclick="showQr('<%= subUrl %>', '<%= client.login %> · H1Cloud SUB')"><span>▦</span>QR SUB</button>
-          <% } %>
-          <% if (showJsonLinks) { %>
-          <button type="button" class="icon-action" onclick="copySubLink('<%= jsonUrl %>', this)"><span>{ }</span>JSON</button>
-          <button type="button" class="icon-action" onclick="showQr('<%= jsonUrl %>', '<%= client.login %> · JSON')"><span>▦</span>QR</button>
+          <% if (hasVisibleClientLinks) { %>
+          <button type="button" class="icon-action" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? jsonUrl : '' %>" data-sub-link="<%= showSubLinks ? subUrl : '' %>" data-happ-link="<%= showHappLinks ? happUrl : '' %>" onclick="openClientLinkPicker(this, 'copy')"><span>⧉</span>Копировать</button>
+          <button type="button" class="icon-action" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? jsonUrl : '' %>" data-sub-link="<%= showSubLinks ? subUrl : '' %>" data-happ-link="<%= showHappLinks ? happUrl : '' %>" onclick="openClientLinkPicker(this, 'qr')"><span>▦</span>QR-код</button>
           <% } %>
           <a class="icon-action" href="/open/<%= client.sub_slug %>" target="_blank"><span>↗</span>Открыть</a>
           <button type="button" class="icon-action secondary" onclick="openClientEditor(<%= client.id %>)"><span>✎</span>Редактор</button>
@@ -386,10 +375,11 @@
     <% clients.forEach(client => {
       const subUrl = `${baseUrl}/sub/${client.sub_slug}`;
       const jsonUrl = `${baseUrl}/json/${client.sub_slug}`;
+      const happUrl = `${baseUrl}/happ/${client.sub_slug}`;
       const clientStatus = clientStatusMeta(client);
       const displayTitle = compactTitle(client);
       const secondaryText = secondaryClientText(client);
-      const canShowH1Sub = Boolean(showSubLinks && Number(client.has_h1cloud_sub) === 1);
+      const hasVisibleClientLinks = Boolean(showSubLinks || showJsonLinks || showHappLinks);
     %>
       <article class="desktop-client-tile status-<%= clientStatus.key %>" data-client-entry data-client-view="desktop" data-client-id-entry="<%= client.id %>" data-client-search="<%= clientDirectorySearch(client) %>" data-client-node-ids="<%= clientDirectoryNodeIds(client) %>" data-client-name="<%= compactTitle(client) %>" data-client-order="<%= client.id %>" data-client-expiry-order="<%= Number(client.expiry_time || 0) %>" data-client-status="<%= clientDirectoryStatusFilter(client) %>">
         <div class="desktop-client-check">
@@ -405,14 +395,10 @@
           <button type="button" class="client-status-icon <%= clientStatus.key %>" data-status-label="<%= clientStatus.label %>" data-status-text="<%= clientStatus.text %>" title="<%= clientStatus.label %>" aria-label="<%= clientStatus.label %>"></button>
           <button type="button" class="badge quick-status <%= clientStatus.key %>" data-status-label="<%= clientStatus.label %>" data-status-text="<%= clientStatus.text %>"><%= clientStatus.label %></button>
         </div>
-        <div class="desktop-client-actions <%= canShowH1Sub ? 'has-h1cloud-sub' : 'json-only' %>">
-          <% if (canShowH1Sub) { %>
-          <button type="button" class="btn-secondary compact-copy-btn btn-sub" onclick="copySubLink('<%= subUrl %>', this)">SUB</button>
-          <button type="button" class="btn-qr btn-sub-qr" onclick="showQr('<%= subUrl %>', '<%= client.login %> · H1Cloud SUB')">QR</button>
-          <% } %>
-          <% if (showJsonLinks) { %>
-          <button type="button" class="btn-main compact-copy-btn" onclick="copySubLink('<%= jsonUrl %>', this)">JSON</button>
-          <button type="button" class="btn-qr" onclick="showQr('<%= jsonUrl %>', '<%= client.login %> · JSON')">QR</button>
+        <div class="desktop-client-actions client-unified-link-actions">
+          <% if (hasVisibleClientLinks) { %>
+          <button type="button" class="btn-main compact-copy-btn" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? jsonUrl : '' %>" data-sub-link="<%= showSubLinks ? subUrl : '' %>" data-happ-link="<%= showHappLinks ? happUrl : '' %>" onclick="openClientLinkPicker(this, 'copy')">Копировать</button>
+          <button type="button" class="btn-qr" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? jsonUrl : '' %>" data-sub-link="<%= showSubLinks ? subUrl : '' %>" data-happ-link="<%= showHappLinks ? happUrl : '' %>" onclick="openClientLinkPicker(this, 'qr')">QR</button>
           <% } %>
         </div>
       </article>
@@ -444,7 +430,7 @@
           const clientStatusClass = clientStatus.key;
           const nodeLimitRows = (client.node_limits || []).filter(nl => nl.client_node_id && ((nl.traffic_gb && nl.traffic_gb > 0) || nl.enabled === 0));
           const hasNodeLimits = nodeLimitRows.length > 0;
-          const canShowH1Sub = Boolean(showSubLinks && Number(client.has_h1cloud_sub) === 1);
+          const hasVisibleClientLinks = Boolean(showSubLinks || showJsonLinks || showHappLinks);
         %>
           <tr data-client-entry data-client-view="table" data-client-id-entry="<%= client.id %>" data-client-search="<%= clientDirectorySearch(client) %>" data-client-node-ids="<%= clientDirectoryNodeIds(client) %>" data-client-name="<%= compactTitle(client) %>" data-client-order="<%= client.id %>" data-client-expiry-order="<%= Number(client.expiry_time || 0) %>" data-client-status="<%= clientDirectoryStatusFilter(client) %>">
             <td class="check-col" data-label="Выбрать">
@@ -466,14 +452,10 @@
               <span class="badge <%= clientStatusClass %>"><%= clientStatusLabel %></span>
             </td>
             <td data-label="SUB / JSON / QR" class="link-col compact-client-json-cell">
-              <div class="btn-row compact-client-links <%= canShowH1Sub ? 'has-h1cloud-sub' : 'json-only' %>">
-                <% if (canShowH1Sub) { %>
-                <button type="button" class="btn-secondary compact-copy-btn btn-sub" onclick="copySubLink('<%= subUrl %>', this)">SUB</button>
-                <button type="button" class="btn-qr btn-sub-qr" onclick="showQr('<%= subUrl %>', '<%= client.login %> · H1Cloud SUB')">QR</button>
-                <% } %>
-                <% if (showJsonLinks) { %>
-                <button type="button" class="btn-main compact-copy-btn" onclick="copySubLink('<%= jsonUrl %>', this)">JSON</button>
-                <button type="button" class="btn-qr" onclick="showQr('<%= jsonUrl %>', '<%= client.login %> · JSON')">QR</button>
+              <div class="btn-row compact-client-links client-unified-link-actions">
+                <% if (hasVisibleClientLinks) { %>
+                <button type="button" class="btn-main compact-copy-btn" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? jsonUrl : '' %>" data-sub-link="<%= showSubLinks ? subUrl : '' %>" data-happ-link="<%= showHappLinks ? happUrl : '' %>" onclick="openClientLinkPicker(this, 'copy')">Копировать</button>
+                <button type="button" class="btn-qr" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? jsonUrl : '' %>" data-sub-link="<%= showSubLinks ? subUrl : '' %>" data-happ-link="<%= showHappLinks ? happUrl : '' %>" onclick="openClientLinkPicker(this, 'qr')">QR</button>
                 <% } %>
               </div>
             </td>
@@ -492,6 +474,7 @@
             <th>Включён</th>
             <th>В сети</th>
             <th>Клиент</th>
+            <th>Комментарий</th>
             <th>Трафик</th>
             <th>Скорость</th>
             <th>Остаток</th>
@@ -500,8 +483,12 @@
         </thead>
         <tbody>
         <% clients.forEach(client => {
+          const subUrl = `${baseUrl}/sub/${client.sub_slug}`;
           const jsonUrl = `${baseUrl}/json/${client.sub_slug}`;
+          const happUrl = `${baseUrl}/happ/${client.sub_slug}`;
+          const hasVisibleClientLinks = Boolean(showSubLinks || showJsonLinks || showHappLinks);
           const clientStatus = clientStatusMeta(client);
+          const assignedNodes = clientAssignedNodes(client);
           const usedBytes = clientUsedBytes(client);
           const trafficLimitGb = Math.max(0, Number(client.traffic_gb || 0));
           const remaining = clientRemainingMeta(client);
@@ -532,12 +519,12 @@
             </td>
             <td class="modern-actions-col">
               <div class="modern-client-actions">
-                <button type="button" data-client-quick="<%= client.id %>" title="Подробная информация" aria-label="Подробная информация"><%- clientActionIcon('info') %></button>
-                <% if (showJsonLinks) { %>
-                <button type="button" onclick="showQr('<%= jsonUrl %>', '<%= client.login %> · JSON')" title="QR-код JSON" aria-label="Показать QR-код"><%- clientActionIcon('qr') %></button>
-                <button type="button" onclick="copySubLink('<%= jsonUrl %>', this)" title="Копировать JSON-ссылку" aria-label="Копировать JSON-ссылку"><%- clientActionIcon('copy') %></button>
+                <button type="button" data-client-quick="<%= client.id %>" title="Подробная информация" aria-label="Подробная информация">ⓘ</button>
+                <% if (hasVisibleClientLinks) { %>
+                <button type="button" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? jsonUrl : '' %>" data-sub-link="<%= showSubLinks ? subUrl : '' %>" data-happ-link="<%= showHappLinks ? happUrl : '' %>" onclick="openClientLinkPicker(this, 'qr')" title="QR-коды подписок" aria-label="Показать QR-коды подписок">▦</button>
+                <button type="button" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? jsonUrl : '' %>" data-sub-link="<%= showSubLinks ? subUrl : '' %>" data-happ-link="<%= showHappLinks ? happUrl : '' %>" onclick="openClientLinkPicker(this, 'copy')" title="Копировать ссылку подписки" aria-label="Копировать ссылку подписки">⧉</button>
                 <% } %>
-                <button type="button" onclick="openClientEditor(<%= client.id %>)" title="Редактировать клиента" aria-label="Редактировать клиента"><%- clientActionIcon('edit') %></button>
+                <button type="button" onclick="openClientEditor(<%= client.id %>)" title="Редактировать клиента" aria-label="Редактировать клиента">✎</button>
               </div>
             </td>
             <td>
@@ -562,7 +549,8 @@
               <button type="button" data-client-quick="<%= client.id %>"><%= displayTitle %></button>
               <small><%= secondaryText || '—' %></small>
             </td>
-            <td class="modern-traffic-cell" data-modern-traffic-client="<%= client.id %>">
+            <td class="modern-comment-cell" title="<%= client.comment || 'Комментарий не задан' %>"><%= client.comment || '—' %></td>
+            <td class="modern-traffic-cell <%= trafficLimitGb > 0 ? '' : 'is-unlimited' %>" data-modern-traffic-client="<%= client.id %>" data-traffic-limit-gb="<%= trafficLimitGb %>">
               <div><span><%= formatClientBytes(usedBytes) %></span><b><%= trafficLimitGb > 0 ? trafficLimitGb + ' ГБ' : '∞' %></b></div>
               <div class="modern-traffic-track"><i style="width:<%= clientTrafficPercent(client).toFixed(1) %>%"></i></div>
             </td>
@@ -845,7 +833,10 @@
 <% clients.forEach(client => {
   const clientEnabled = client.enabled !== 0;
   const clientReturnPath = '/clients?' + new URLSearchParams({ ...(q ? { q } : {}), edit: String(client.id) }).toString();
-  const canShowH1SubInEditor = Boolean(showSubLinks && Number(client.has_h1cloud_sub) === 1);
+  const editorSubUrl = `${baseUrl}/sub/${client.sub_slug}`;
+  const editorJsonUrl = `${baseUrl}/json/${client.sub_slug}`;
+  const editorHappUrl = `${baseUrl}/happ/${client.sub_slug}`;
+  const hasVisibleClientLinks = Boolean(showSubLinks || showJsonLinks || showHappLinks);
 %>
   <div id="clientEditor-<%= client.id %>" class="modal hidden" onclick="closeClientEditor(event, <%= client.id %>)">
     <div class="modal-card editor-modal client-editor-modal existing-client-editor-modal" onclick="event.stopPropagation()">
@@ -860,19 +851,15 @@
         <div><span>Общий лимит</span><strong><%= client.traffic_gb && client.traffic_gb > 0 ? client.traffic_gb + ' ГБ' : '∞' %></strong></div>
         <div><span>Лимит IP</span><strong><%= client.limit_ip && Number(client.limit_ip) > 0 ? client.limit_ip : '∞' %></strong></div>
         <div>
-          <span><%= [canShowH1SubInEditor ? 'SUB' : '', showJsonLinks ? 'JSON' : ''].filter(Boolean).join(' / ') || 'Подписки' %></span>
+          <span>Подписка</span>
           <div class="client-summary-link-actions">
-            <% if (canShowH1SubInEditor) { %><button type="button" class="btn-secondary compact-copy-btn" onclick="copySubLink('<%= baseUrl %>/sub/<%= client.sub_slug %>', this)">SUB</button><% } %>
-            <% if (showJsonLinks) { %><button type="button" class="btn-secondary compact-copy-btn" onclick="copySubLink('<%= baseUrl %>/json/<%= client.sub_slug %>', this)"><%= canShowH1SubInEditor ? 'JSON' : 'Копировать JSON' %></button><% } %>
-            <% if (!canShowH1SubInEditor && !showJsonLinks) { %><small>Ссылки скрыты в настройках.</small><% } %>
+            <% if (hasVisibleClientLinks) { %><button type="button" class="btn-secondary compact-copy-btn" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? editorJsonUrl : '' %>" data-sub-link="<%= showSubLinks ? editorSubUrl : '' %>" data-happ-link="<%= showHappLinks ? editorHappUrl : '' %>" onclick="openClientLinkPicker(this, 'copy')">Копировать</button><% } else { %><span class="muted">Скрыта в настройках</span><% } %>
           </div>
         </div>
         <div>
           <span>QR</span>
           <div class="client-summary-link-actions">
-            <% if (canShowH1SubInEditor) { %><button type="button" class="btn-secondary" onclick="showQr('<%= baseUrl %>/sub/<%= client.sub_slug %>', '<%= client.login %> · Общая SUB')">SUB QR</button><% } %>
-            <% if (showJsonLinks) { %><button type="button" class="btn-secondary" onclick="showQr('<%= baseUrl %>/json/<%= client.sub_slug %>', '<%= client.login %> · JSON')"><%= canShowH1SubInEditor ? 'JSON QR' : 'Показать QR' %></button><% } %>
-            <% if (!canShowH1SubInEditor && !showJsonLinks) { %><small>QR скрыт в настройках.</small><% } %>
+            <% if (hasVisibleClientLinks) { %><button type="button" class="btn-secondary" data-client-link-title="<%= client.login %>" data-json-link="<%= showJsonLinks ? editorJsonUrl : '' %>" data-sub-link="<%= showSubLinks ? editorSubUrl : '' %>" data-happ-link="<%= showHappLinks ? editorHappUrl : '' %>" onclick="openClientLinkPicker(this, 'qr')">Показать QR</button><% } else { %><span class="muted">Скрыт</span><% } %>
           </div>
         </div>
       </div>
@@ -1069,21 +1056,12 @@
   </div>
 </div>
 
-<div id="qrModal" class="modal hidden qr-modal" role="dialog" aria-modal="true" aria-labelledby="qrTitle" onclick="hideQr(event)">
-  <div class="modal-card qr-modal-card" onclick="event.stopPropagation()">
-    <button type="button" class="modal-close" onclick="closeQr()" aria-label="Закрыть QR-код">×</button>
-    <div class="qr-modal-heading">
-      <span class="qr-modal-icon" aria-hidden="true"><%- clientActionIcon('qr') %></span>
-      <div>
-        <h2 id="qrTitle">QR-код</h2>
-        <p>Отсканируйте код в приложении или скопируйте ссылку.</p>
-      </div>
-    </div>
-    <div class="qr-modal-visual"><img id="qrImg" class="qr-modal-image" alt="QR-код подписки" /></div>
-    <div class="qr-modal-link" id="qrLinkRow">
-      <code id="qrText"></code>
-      <button type="button" class="btn-secondary" id="qrCopyButton" onclick="copyCurrentQrLink(this)">Копировать</button>
-    </div>
+<div id="qrModal" class="modal hidden" onclick="hideQr(event)">
+  <div class="modal-card" onclick="event.stopPropagation()">
+    <button class="modal-close" onclick="closeQr()">×</button>
+    <h2 id="qrTitle">QR</h2>
+    <img id="qrImg" alt="QR" />
+    <p class="muted" id="qrText"></p>
   </div>
 </div>
 
@@ -1503,32 +1481,18 @@ function showQr(text, title) {
   document.getElementById('qrTitle').textContent = title || 'QR';
   document.getElementById('qrText').textContent = text;
   document.getElementById('qrImg').src = '/qr?text=' + encodeURIComponent(text);
-  document.getElementById('qrModal').dataset.copyValue = text;
-  document.getElementById('qrLinkRow')?.classList.remove('hidden');
   document.getElementById('qrModal').classList.remove('hidden');
-  syncClientModalScrollLock();
 }
 function showVpnQr(url, title) {
   document.getElementById('qrTitle').textContent = title || 'VPN QR';
   document.getElementById('qrText').textContent = 'Отсканируйте QR-код в приложении клиента.';
   document.getElementById('qrImg').src = url;
-  document.getElementById('qrModal').dataset.copyValue = '';
-  document.getElementById('qrLinkRow')?.classList.add('hidden');
   document.getElementById('qrModal').classList.remove('hidden');
-  syncClientModalScrollLock();
 }
-async function copyCurrentQrLink(button) {
-  const value = document.getElementById('qrModal')?.dataset.copyValue || '';
-  if (!value) return;
-  await copySubLink(value, button);
-}
-function closeQr() {
-  document.getElementById('qrModal').classList.add('hidden');
-  syncClientModalScrollLock();
-}
+function closeQr() { document.getElementById('qrModal').classList.add('hidden'); }
 function hideQr(e) { if (e.target.id === 'qrModal') closeQr(); }
 function syncClientModalScrollLock() {
-  const open = Array.from(document.querySelectorAll('#createClientModal, #createVpnClientModal, #qrModal, [id^="clientEditor-"], [id^="vpnClientEditor-"]')).some(modal => !modal.classList.contains('hidden'));
+  const open = Array.from(document.querySelectorAll('#createClientModal, #createVpnClientModal, [id^="clientEditor-"], [id^="vpnClientEditor-"]')).some(modal => !modal.classList.contains('hidden'));
   document.body.classList.toggle('client-modal-open', open);
 }
 function openModalById(id) { document.getElementById(id)?.classList.remove('hidden'); syncClientModalScrollLock(); }
@@ -1628,11 +1592,13 @@ async function refreshClientOnlineSummary() {
   }
 }
 
+let clientSpeedRefreshPending = false;
 async function refreshClientSpeedSummary() {
   const cells = Array.from(document.querySelectorAll('[data-modern-speed-client]'));
-  if (!cells.length) return;
+  if (!cells.length || clientSpeedRefreshPending) return;
+  clientSpeedRefreshPending = true;
   try {
-    const response = await fetch('/dashboard/live-client-traffic.json?refresh=0&limit=500&min_mbps=0', { headers: { Accept: 'application/json' } });
+    const response = await fetch('/dashboard/live-client-traffic.json?refresh=1&limit=500&min_mbps=0', { headers: { Accept: 'application/json' } });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Ошибка загрузки скорости');
     const rows = Array.isArray(data.clients) ? data.clients : [];
@@ -1640,14 +1606,32 @@ async function refreshClientSpeedSummary() {
     cells.forEach(cell => {
       const row = byId.get(String(cell.dataset.modernSpeedClient || ''));
       if (!row) {
-        cell.textContent = '—';
+        cell.textContent = 'Нет трафика';
+        cell.classList.remove('is-active');
         return;
       }
-      cell.innerHTML = `<span>↓ ${String(row.downloadText || '0 Мбит/с')}</span><span>↑ ${String(row.uploadText || '0 Мбит/с')}</span>`;
+      const active = Number(row.totalMbps || 0) > 0.001;
+      cell.classList.toggle('is-active', active);
+      cell.innerHTML = active
+        ? `<span>↓ ${String(row.downloadText || '0 Мбит/с')}</span><span>↑ ${String(row.uploadText || '0 Мбит/с')}</span>`
+        : '<span class="modern-speed-idle">Нет трафика</span>';
       cell.title = `Всего: ${String(row.totalText || '0 Мбит/с')}`;
+
+      const traffic = cell.closest('tr')?.querySelector('[data-modern-traffic-client]');
+      if (traffic) {
+        const usedLabel = traffic.querySelector(':scope > div:first-child span');
+        if (usedLabel) usedLabel.textContent = String(row.currentTotalText || '0 Б');
+        const track = traffic.querySelector('.modern-traffic-track i');
+        const limitGb = Math.max(0, Number(traffic.dataset.trafficLimitGb || 0));
+        const used = Math.max(0, Number(row.currentUsed || 0));
+        const percent = limitGb > 0 ? Math.min(100, used / (limitGb * 1024 ** 3) * 100) : (used > 0 ? 100 : 0);
+        if (track) track.style.width = `${percent.toFixed(1)}%`;
+      }
     });
   } catch (_) {
     cells.forEach(cell => { if (!cell.textContent.trim()) cell.textContent = '—'; });
+  } finally {
+    clientSpeedRefreshPending = false;
   }
 }
 
@@ -1673,6 +1657,11 @@ document.addEventListener('DOMContentLoaded', () => {
   setupClientOverviewShortcuts();
   refreshClientOnlineSummary();
   refreshClientSpeedSummary();
+  window.setInterval(() => {
+    if (document.hidden) return;
+    refreshClientOnlineSummary();
+    refreshClientSpeedSummary();
+  }, 10000);
   document.querySelectorAll('.client-check[data-client-id]').forEach(cb => {
     cb.addEventListener('change', () => {
       syncClientCheckboxCopies(cb);
@@ -1804,7 +1793,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
-  const openModal = Array.from(document.querySelectorAll('#qrModal, #createClientModal, #createVpnClientModal, [id^="clientEditor-"], [id^="vpnClientEditor-"]')).find(modal => !modal.classList.contains('hidden'));
+  const openModal = Array.from(document.querySelectorAll('#createClientModal, #createVpnClientModal, [id^="clientEditor-"], [id^="vpnClientEditor-"]')).find(modal => !modal.classList.contains('hidden'));
   if (openModal) { openModal.classList.add('hidden'); syncClientModalScrollLock(); }
 });
 </script>

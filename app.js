@@ -200,17 +200,6 @@ function getCountryCodeByName(countryName) {
   return found ? String(found.code || '').toLowerCase() : '';
 }
 
-function getCountryCodeFromFlag(flag) {
-  const indicators = Array.from(String(flag || '').trim())
-    .map(char => char.codePointAt(0))
-    .filter(codePoint => codePoint >= 0x1F1E6 && codePoint <= 0x1F1FF);
-  if (indicators.length !== 2) return '';
-  return indicators
-    .map(codePoint => String.fromCharCode(65 + codePoint - 0x1F1E6))
-    .join('')
-    .toLowerCase();
-}
-
 function getCountryFlagFromParts(code = '', fallbackFlag = '', countryName = '') {
   const direct = normalizeEmojiFlag(fallbackFlag);
   if (direct && direct !== '🌐') return direct;
@@ -230,9 +219,6 @@ function getNodeFlag(node = {}) {
 
 function getNodeCountryCode(node = {}) {
   const rawCode = String(node?.country_code || node?.countryCode || '').trim();
-  if (rawCode && !['zz', 'xx', 'custom', '__custom__'].includes(rawCode.toLowerCase())) return rawCode.toLowerCase();
-  const flagCode = getCountryCodeFromFlag(node?.country_flag || node?.countryFlag || node?.flag || '');
-  if (flagCode) return flagCode;
   if (rawCode) return rawCode.toLowerCase();
   return getCountryCodeByName(node?.country_name_ru || node?.countryNameRu || node?.countryName || node?.name || node?.node_name || node?.nodeName || '');
 }
@@ -240,7 +226,7 @@ function getNodeCountryCode(node = {}) {
 function enrichNodeFlagFields(node = {}) {
   return {
     ...node,
-    country_code: getNodeCountryCode(node) || node.country_code || node.countryCode || '',
+    country_code: node.country_code || node.countryCode || getNodeCountryCode(node),
     country_flag: getNodeFlag(node)
   };
 }
@@ -10097,14 +10083,20 @@ async function getOnlineClientsForDashboard() {
   const items = new Map();
   const errors = [];
 
-  for (const node of nodes) {
-    let emails = [];
-    try {
-      emails = await fetchOnlineEmailsFromNode(node);
-    } catch (err) {
-      errors.push(`${getNodePublicName(node)}: ${err.message || err}`);
+  const nodeResults = await runWithConcurrency(nodes, 4, async node => {
+    const emails = await fetchOnlineEmailsFromNode(node);
+    return { node, emails };
+  });
+
+  for (let resultIndex = 0; resultIndex < nodeResults.length; resultIndex += 1) {
+    const result = nodeResults[resultIndex];
+    if (result?.status === 'rejected') {
+      const node = nodes[resultIndex];
+      errors.push(`${getNodePublicName(node)}: ${result.reason?.message || result.reason}`);
       continue;
     }
+    const node = result.value.node;
+    const emails = Array.isArray(result.value.emails) ? result.value.emails : [];
 
     for (const email of emails) {
       const client = db.prepare(`
@@ -10126,7 +10118,7 @@ async function getOnlineClientsForDashboard() {
         name: getNodeDisplayName(node),
         publicName: getNodePublicName(node),
         nodeType: String(node.node_type || '3xui'),
-        countryCode: getNodeCountryCode(node),
+        countryCode: String(node.country_code || getCountryCodeByName(node.country_name_ru || node.name) || '').toLowerCase(),
         countryNameRu: node.country_name_ru || node.name || '',
         labelSuffix: node.label_suffix || '',
         flag: getNodeFlag(node),
@@ -10845,47 +10837,6 @@ function buildHealthOverview() {
 }
 
 
-app.get('/dashboard/node-status.json', requireAuth, async (req, res) => {
-  try {
-    const nodes = db.prepare(`SELECT * FROM nodes ORDER BY ${nodeOrderSql()}`).all();
-    const activeNodes = nodes.filter(node => Number(node.enabled) !== 0);
-    const results = await runWithConcurrency(activeNodes, 4, async node => {
-      const startedAt = Date.now();
-      const probe = await checkNode(node, {
-        timeoutMs: Math.min(NODE_HEALTHCHECK_TIMEOUT_MS, 5000),
-        lightweight: true
-      });
-      return {
-        nodeId: node.id,
-        ok: !!probe.ok,
-        status: probe.ok ? 'online' : 'offline',
-        ms: Date.now() - startedAt,
-        error: probe.ok ? '' : String(probe.error || 'нет ответа')
-      };
-    });
-    const activeChecks = new Map();
-    results.forEach((result, index) => {
-      const node = activeNodes[index];
-      if (!node) return;
-      if (result?.status === 'fulfilled') activeChecks.set(String(node.id), result.value);
-      else activeChecks.set(String(node.id), {
-        nodeId: node.id,
-        ok: false,
-        status: 'offline',
-        ms: 0,
-        error: String(result?.reason?.message || result?.reason || 'нет ответа')
-      });
-    });
-    const checks = nodes.map(node => Number(node.enabled) === 0
-      ? { nodeId: node.id, ok: false, status: 'disabled', ms: 0, error: '' }
-      : (activeChecks.get(String(node.id)) || { nodeId: node.id, ok: false, status: 'unknown', ms: 0, error: 'нет данных' }));
-    res.setHeader('Cache-Control', 'no-store');
-    res.json({ ok: true, generatedAt: new Date().toISOString(), checks });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: String(err.message || err), checks: [] });
-  }
-});
-
 app.get('/dashboard/panel-check.json', requireAuth, async (req, res) => {
   const started = Date.now();
   const result = { ok: true, generatedAt: new Date().toISOString(), checks: [] };
@@ -11076,7 +11027,7 @@ app.get('/dashboard', requireAuth, async (req, res) => {
     : { clients: [], errors: [] };
 
   const limitedClients = getDashboardLimitRows();
-  const pulseNodes = db.prepare(`SELECT id, name, node_type, country_code, country_name_ru, country_flag, label_suffix, enabled, last_status FROM nodes ORDER BY ${nodeOrderSql()}`).all().map(enrichNodeFlagFields);
+  const pulseNodes = db.prepare(`SELECT id, name, node_type, country_code, country_name_ru, country_flag, label_suffix, enabled, last_status FROM nodes ORDER BY ${nodeOrderSql()}`).all();
   recordTrafficSnapshot(false, 'passive');
   const trafficReport = buildTrafficReport(req.query.traffic_period, req.query.traffic_metric);
   const nodeTrafficReport = buildNodeTrafficReport(req.query.traffic_period, req.query.traffic_metric);
@@ -11159,10 +11110,9 @@ app.get('/routing', requireAuth, (req, res) => {
 
 app.post('/routing', requireAuth, (req, res) => {
   try {
-    const presetsRaw = req.body.presets;
-    const selectedPresets = Array.isArray(presetsRaw) ? presetsRaw : (presetsRaw ? [presetsRaw] : []);
-    const allowedPresetKeys = new Set(ROUTING_PRESETS.map(p => p.key));
-    const presets = uniqueList(selectedPresets.map(v => String(v || '').trim()).filter(v => allowedPresetKeys.has(v)));
+    // Готовые сервисы удалены из панели. Маршрутизация строится только из
+    // явно введённых domain/geosite и ip/geoip правил.
+    const presets = [];
     const parsedDomains = parseRoutingLines(req.body.custom_domains || '', 'domain');
     const parsedIps = parseRoutingLines(req.body.custom_ips || '', 'ip');
     const parsedExceptDomains = parseRoutingLines(req.body.except_domains || '', 'domain');
@@ -11868,10 +11818,8 @@ app.post('/settings', requireAuth, (req, res) => {
 
     const oldSubscriptionMeta = {
       name: getSetting('subscription_name', DEFAULT_SUBSCRIPTION_NAME),
-      showSubLinks: getSetting('show_sub_links', '1'),
-      showJsonLinks: getSetting('show_json_links', '1'),
-      showLimits: getSetting('subscription_show_limits', '1'),
-      showEmptyLimits: getSetting('subscription_show_empty_limits', '0')
+      note: getSetting('subscription_support_note', ''),
+      url: getSetting('subscription_support_url', '')
     };
 
     db.prepare(`
@@ -11936,16 +11884,27 @@ app.post('/settings', requireAuth, (req, res) => {
     setSetting('panel_access_key', panelAccessKey);
 
     setSetting('subscription_show_limits', req.body.subscription_show_limits === '1' ? '1' : '0');
+    if (oldSubscriptionMeta.name !== subscriptionName) {
+      bumpSubscriptionRevision();
+    }
     setSetting('subscription_show_empty_limits', req.body.subscription_show_empty_limits === '1' ? '1' : '0');
-
-    const newSubscriptionMeta = {
-      name: subscriptionName,
-      showSubLinks: getSetting('show_sub_links', '1'),
-      showJsonLinks: getSetting('show_json_links', '1'),
-      showLimits: getSetting('subscription_show_limits', '1'),
-      showEmptyLimits: getSetting('subscription_show_empty_limits', '0')
-    };
-    if (JSON.stringify(oldSubscriptionMeta) !== JSON.stringify(newSubscriptionMeta)) bumpSubscriptionRevision();
+    // Keep paid Happ application controls disabled.
+    setSetting('happ_provider_id', '');
+    setSetting('happ_app_controls_enabled', '0');
+    setSetting('happ_ping_tcp', '0');
+    setSetting('happ_ping_result_icon', '0');
+    setSetting('happ_fragmentation_enabled', '0');
+    setSetting('happ_noises_enabled', '0');
+    setSetting('happ_mux_enabled', '0');
+    setSetting('happ_subscription_auto_update_enabled', '1');
+    setSetting('happ_update_on_open_enabled', '0');
+    setSetting('happ_ping_on_open_enabled', '0');
+    setSetting('happ_subscriptions_collapse_enabled', '1');
+    setSetting('happ_expand_now_enabled', '0');
+    setSetting('happ_check_url_via_proxy_enabled', '0');
+    setSetting('happ_sniffing_enabled', '0');
+    setSetting('happ_force_apply_on_update_enabled', '0');
+    setSetting('happ_no_limit_mode', 'off');
 
     const currentPassword = String(req.body.current_password || '');
     const newUsername = String(req.body.admin_username || '').trim();
@@ -12194,9 +12153,7 @@ app.post('/nodes/:id/clone-remnawave', requireAuth, (req, res) => {
 });
 
 app.get('/nodes', requireAuth, (req, res) => {
-  const nodes = db.prepare(`SELECT * FROM nodes ORDER BY ${nodeOrderSql()}`).all()
-    .map(enrichNodeFlagFields)
-    .map(enrichNodeWithCachedTransport);
+  const nodes = db.prepare(`SELECT * FROM nodes ORDER BY ${nodeOrderSql()}`).all().map(enrichNodeWithCachedTransport);
   const requestedTab = String(req.query.tab || 'list').trim().toLowerCase();
 
   render(res, 'nodes', {
@@ -12241,6 +12198,9 @@ app.post('/nodes', requireAuth, async (req, res) => {
     } = req.body;
 
     const normalizedNodeType = normalizeNodeTypeValue(node_type || NODE_TYPE_3XUI);
+    if ([NODE_TYPE_H1CLOUD, NODE_TYPE_H1CLOUD_3XUI].includes(normalizedNodeType)) {
+      throw new Error('Добавление H1Cloud отдельным методом удалено. Добавь эту панель как обычную 3x-ui.');
+    }
     const isH1ApiType = normalizedNodeType === NODE_TYPE_H1CLOUD;
     const isH1PanelType = normalizedNodeType === NODE_TYPE_H1CLOUD_3XUI;
     const isRemnawaveType = normalizedNodeType === NODE_TYPE_REMNAWAVE;
@@ -12572,6 +12532,9 @@ app.post('/nodes/:id/edit', requireAuth, async (req, res) => {
 
     const normalizedNodeType = normalizeNodeTypeValue(node_type || existingNode.node_type || NODE_TYPE_3XUI);
     const previousNodeType = normalizeNodeTypeValue(existingNode.node_type || NODE_TYPE_3XUI);
+    if ([NODE_TYPE_H1CLOUD, NODE_TYPE_H1CLOUD_3XUI].includes(normalizedNodeType) && normalizedNodeType !== previousNodeType) {
+      throw new Error('Создание или перевод узла в H1Cloud-тип больше не поддерживается. Используй обычный тип 3x-ui.');
+    }
     const isH1ApiType = normalizedNodeType === NODE_TYPE_H1CLOUD;
     const isH1PanelType = normalizedNodeType === NODE_TYPE_H1CLOUD_3XUI;
     const isRemnawaveType = normalizedNodeType === NODE_TYPE_REMNAWAVE;
@@ -12907,7 +12870,7 @@ app.get('/clients', requireAuth, (req, res) => {
       LEFT JOIN client_nodes cn ON cn.node_id = n.id AND cn.client_id = ?
       WHERE n.enabled = 1
       ORDER BY ${nodeOrderSql('n')}
-    `).all(client.id).map(enrichNodeFlagFields);
+    `).all(client.id);
 
     for (const row of client.node_limits) {
       if (!row.client_node_id) continue;
@@ -12936,7 +12899,7 @@ app.get('/clients', requireAuth, (req, res) => {
   }
 
   const nodes = clientType === 'xray'
-    ? db.prepare(`SELECT * FROM nodes WHERE enabled = 1 ORDER BY ${nodeOrderSql()}`).all().map(enrichNodeFlagFields).filter(isClientManagedNode)
+    ? db.prepare(`SELECT * FROM nodes WHERE enabled = 1 ORDER BY ${nodeOrderSql()}`).all().filter(isClientManagedNode)
     : [];
   const vpnData = vpnManager.listPageData({ tab: 'clients' });
   const vpnProtocolMatch = client => clientType === 'wireguard'
@@ -13399,7 +13362,7 @@ app.get('/clients/:id/summary.json', requireAuth, async (req, res) => {
           name: cleanName,
           title: cleanName,
           nodeType: String(row.node_type || '3xui'),
-          countryCode: getNodeCountryCode(row),
+          countryCode: String(row.country_code || getCountryCodeByName(row.country_name_ru || row.name) || '').toLowerCase(),
           countryName: row.country_name_ru || '',
           countryFlag: getNodeFlag(row),
           inboundId: row.inbound_id || '',
@@ -13415,10 +13378,10 @@ app.get('/clients/:id/summary.json', requireAuth, async (req, res) => {
     const comment = String(client.comment || '').trim();
     const secondary = comment && comment !== title && comment !== login ? comment : (title !== login ? login : '');
     const realtime = await getClientRealtimeConnectivity(client, mappings);
-    const showSubLinksInPanel = getSetting('show_sub_links', '1') !== '0'
-      && clientHasActiveH1CloudSubscription(client.id);
+    const showSubLinksInPanel = getSetting('show_sub_links', '1') !== '0';
     const showJsonLinksInPanel = getSetting('show_json_links', '1') !== '0';
-    const showHappLinksInPanel = getSetting('show_happ_links', '1') !== '0';
+    const showHappLinksInPanel = getSetting('show_happ_links', '0') !== '0';
+    const usedBytes = mappings.reduce((sum, row) => sum + Math.max(0, Number(row.used_bytes || 0)), 0);
 
     res.json({
       ok: true,
@@ -13441,6 +13404,8 @@ app.get('/clients/:id/summary.json', requireAuth, async (req, res) => {
         daysLeft: daysLeft === null ? '∞' : daysLeft,
         durationDays: client.duration_days || 0,
         trafficGb: client.traffic_gb || 0,
+        trafficUsedBytes: usedBytes,
+        trafficUsedText: formatTrafficBytes(usedBytes),
         limitIp: client.limit_ip ?? 0,
         nodeCount: nodes.length,
         nodes: nodes.slice(0, 12),
@@ -14417,7 +14382,7 @@ function getRoutingConfig() {
       && (!Array.isArray(parsed.adBlockIps) || parsed.adBlockIps.length === 0);
     const normalized = {
       enabled: parsed.enabled === true,
-      presets: Array.isArray(parsed.presets) ? parsed.presets : fallback.presets,
+      presets: [],
       customDomains: Array.isArray(parsed.customDomains) ? parsed.customDomains : fallback.customDomains,
       customIps: Array.isArray(parsed.customIps) ? parsed.customIps : fallback.customIps,
       mode: ['proxy-selected', 'proxy-except'].includes(parsed.mode) ? parsed.mode : (parsed.proxyExcept ? 'proxy-except' : fallback.mode),
@@ -14524,15 +14489,13 @@ function getRoutingBlockIps() {
 function getRoutingProxyDomains() {
   const cfg = getRoutingConfig();
   if (cfg.enabled === false) return [];
-  const presetDomains = ROUTING_PRESETS.filter(p => cfg.presets.includes(p.key)).flatMap(p => p.domains);
-  return uniqueList([...presetDomains, ...cfg.customDomains]);
+  return uniqueList(cfg.customDomains || []);
 }
 
 function getRoutingProxyIps() {
   const cfg = getRoutingConfig();
   if (cfg.enabled === false) return [];
-  const presetIps = ROUTING_PRESETS.filter(p => cfg.presets.includes(p.key)).flatMap(p => p.ips);
-  return uniqueList([...presetIps, ...cfg.customIps]);
+  return uniqueList(cfg.customIps || []);
 }
 
 const ROUTING_DIRECT_DOMAINS = uniqueList([
@@ -14968,7 +14931,7 @@ app.get('/json/:slug', async (req, res) => {
 
   if (isBrowserSubscriptionRequest(req)) {
     const hasH1CloudSub = clientHasActiveH1CloudSubscription(client.id);
-    const showH1CloudSubLinks = getSetting('show_sub_links', '1') !== '0' && hasH1CloudSub;
+    const showSubLinksInPanel = getSetting('show_sub_links', '1') !== '0';
     return render(res, 'open_sub', {
       client,
       subUrl: buildPublicSubUrl(client.sub_slug),
@@ -14978,7 +14941,7 @@ app.get('/json/:slug', async (req, res) => {
       happUrl: buildPublicHappUrl(client.sub_slug),
       baseUrl: getPublicSubBaseUrl(),
       hasH1CloudSub,
-      showSubLinks: showH1CloudSubLinks,
+      showSubLinks: showSubLinksInPanel,
       showJsonLinks: getSetting('show_json_links', '1') !== '0',
       showHappLinks: getSetting('show_happ_links', '0') !== '0',
       supportNote: getSubscriptionSupportNote(),
@@ -15090,7 +15053,7 @@ app.get('/open/:slug', async (req, res) => {
   if (!client) return res.status(404).send('Subscription not found');
 
   const hasH1CloudSub = clientHasActiveH1CloudSubscription(client.id);
-  const showH1CloudSubLinks = getSetting('show_sub_links', '1') !== '0' && hasH1CloudSub;
+  const showSubLinksInPanel = getSetting('show_sub_links', '1') !== '0';
 
   render(res, 'open_sub', {
     client,
@@ -15101,7 +15064,7 @@ app.get('/open/:slug', async (req, res) => {
     happUrl: buildPublicHappUrl(client.sub_slug),
     baseUrl: getPublicSubBaseUrl(),
     hasH1CloudSub,
-    showSubLinks: showH1CloudSubLinks,
+    showSubLinks: showSubLinksInPanel,
     showJsonLinks: getSetting('show_json_links', '1') !== '0',
     showHappLinks: getSetting('show_happ_links', '0') !== '0'
   });

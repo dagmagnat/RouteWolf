@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Подключение</title>
+  <link rel="stylesheet" href="/css/style.css?v=169" />
+</head>
+<body class="public-page">
+  <% const happImportUrl = (typeof jsonRawUrl !== 'undefined' && jsonRawUrl) ? jsonRawUrl : jsonUrl; %>
+  <% const compatibleSubUrl = (typeof plainSubUrl !== 'undefined' && plainSubUrl) ? plainSubUrl : subUrl; %>
+  <% const allowJson = typeof showJsonLinks === 'undefined' ? true : Boolean(showJsonLinks); %>
+  <% const allowSub = typeof showSubLinks === 'undefined' ? true : Boolean(showSubLinks); %>
+  <% const allowHapp = typeof showHappLinks === 'undefined' ? false : Boolean(showHappLinks); %>
+  <% const primaryUrl = allowJson ? happImportUrl : (allowSub ? compatibleSubUrl : (allowHapp ? happUrl : '')); %>
+  <% const primaryLabel = allowJson ? 'JSON для Happ' : (allowSub ? 'SUB' : 'HAPP SUB'); %>
+  <% const profileName = encodeURIComponent((client && (client.name || client.login)) || 'Amored VPN'); %>
+  <main class="public-card public-connect-card">
+    <h1>Подключение</h1>
+    <p class="muted">Отсканируй QR-код, скопируй ссылку или выбери приложение. Для каждого приложения используется совместимый формат подписки.</p>
+
+    <% if (primaryUrl) { %>
+      <div class="qr-box">
+        <img src="/qr?text=<%= encodeURIComponent(primaryUrl) %>" alt="QR" />
+      </div>
+    <% } else { %>
+      <div class="alert err">Администратор временно отключил отображение ссылок подписки.</div>
+    <% } %>
+    <% if ((typeof supportNote !== 'undefined' && supportNote) || (typeof supportUrl !== 'undefined' && supportUrl)) { %>
+      <section class="public-support-note">
+        <% if (supportNote) { %><div><%= supportNote %></div><% } %>
+        <% if (supportUrl) { %><a class="link-btn secondary" href="<%= supportUrl %>" target="_blank" rel="noopener">Открыть поддержку</a><% } %>
+      </section>
+    <% } %>
+
+    <div class="public-actions public-actions-grid">
+      <% if (allowSub) { %><a class="link-btn secondary" href="<%= compatibleSubUrl %>">Открыть совместимую SUB</a><% } %>
+      <% if (allowJson) { %><a class="link-btn" href="<%= happImportUrl %>">Открыть JSON Happ</a><% } %>
+      <% if (allowHapp) { %><a class="link-btn secondary" href="<%= happUrl %>">Открыть HAPP SUB</a><% } %>
+      <% if (primaryUrl) { %><button type="button" class="btn-main" onclick="copyPublicUrl('<%= primaryUrl %>', this)">Скопировать <%= primaryLabel %></button><% } %>
+    </div>
+
+    <% if (allowJson || allowSub) { %>
+    <section class="public-app-section">
+      <h2>Добавить в приложение</h2>
+      <p class="muted">Кнопка пытается открыть установленное приложение и сразу передать подписку. Если приложение не открылось, ссылка автоматически копируется для ручной вставки.</p>
+      <div id="appLaunchStatus" class="alert ok" hidden></div>
+
+      <h3>iOS / macOS</h3>
+      <div class="app-link-grid">
+        <% if (allowJson) { %><a class="link-btn" href="happ://add/<%= happImportUrl %>" data-app-name="Happ" data-subscription-url="<%= happImportUrl %>" onclick="return launchSubscriptionApp(event, this)">Happ</a><% } %>
+        <% if (allowSub) { %><a class="link-btn secondary" href="hiddify://import/<%= compatibleSubUrl %>#<%= profileName %>" data-app-name="Hiddify" data-subscription-url="<%= compatibleSubUrl %>" onclick="return launchSubscriptionApp(event, this)">Hiddify</a><% } %>
+        <% if (allowSub) { %><a class="link-btn secondary" href="streisand://import/<%= encodeURIComponent(compatibleSubUrl) %>" data-app-name="Streisand" data-subscription-url="<%= compatibleSubUrl %>" onclick="return launchSubscriptionApp(event, this)">Streisand</a><% } %>
+        <% if (allowSub) { %><a class="link-btn secondary" href="v2box://install-sub?url=<%= encodeURIComponent(compatibleSubUrl) %>" data-app-name="V2Box" data-subscription-url="<%= compatibleSubUrl %>" onclick="return launchSubscriptionApp(event, this)">V2Box</a><% } %>
+      </div>
+
+      <h3>Android</h3>
+      <div class="app-link-grid">
+        <% if (allowJson) { %><a class="link-btn" href="happ://add/<%= happImportUrl %>" data-app-name="Happ" data-subscription-url="<%= happImportUrl %>" onclick="return launchSubscriptionApp(event, this)">Happ</a><% } %>
+        <% if (allowSub) { %><a class="link-btn secondary" href="hiddify://import/<%= compatibleSubUrl %>#<%= profileName %>" data-app-name="Hiddify" data-subscription-url="<%= compatibleSubUrl %>" onclick="return launchSubscriptionApp(event, this)">Hiddify</a><% } %>
+        <% if (allowSub) { %><a class="link-btn secondary" href="v2rayng://install-config?url=<%= encodeURIComponent(compatibleSubUrl) %>" data-app-name="v2rayNG" data-subscription-url="<%= compatibleSubUrl %>" onclick="return launchSubscriptionApp(event, this)">v2rayNG</a><% } %>
+        <% if (allowSub) { %><a class="link-btn secondary" href="nekobox://import?url=<%= encodeURIComponent(compatibleSubUrl) %>" data-app-name="NekoBox" data-subscription-url="<%= compatibleSubUrl %>" onclick="return launchSubscriptionApp(event, this)">NekoBox</a><% } %>
+      </div>
+
+      <h3>Windows / Linux</h3>
+      <div class="app-link-grid">
+        <% if (allowJson) { %><a class="link-btn" href="happ://add/<%= happImportUrl %>" data-app-name="Happ" data-subscription-url="<%= happImportUrl %>" onclick="return launchSubscriptionApp(event, this)">Happ</a><% } %>
+        <% if (allowSub) { %><a class="link-btn secondary" href="hiddify://import/<%= compatibleSubUrl %>#<%= profileName %>" data-app-name="Hiddify" data-subscription-url="<%= compatibleSubUrl %>" onclick="return launchSubscriptionApp(event, this)">Hiddify</a><% } %>
+        <% if (allowSub) { %><a class="link-btn secondary" href="nekobox://import?url=<%= encodeURIComponent(compatibleSubUrl) %>" data-app-name="NekoRay/NekoBox" data-subscription-url="<%= compatibleSubUrl %>" onclick="return launchSubscriptionApp(event, this)">NekoRay/NekoBox</a><% } %>
+      </div>
+    </section>
+    <% } %>
+
+    <% if (primaryUrl) { %><div class="public-url-box">
+      <code id="publicSubUrl"><%= primaryUrl %></code>
+    </div><% } %>
+  </main>
+  <script>
+    async function copyText(value) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const input = document.createElement('textarea');
+      input.value = value;
+      input.setAttribute('readonly', '');
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      input.remove();
+    }
+    function showAppStatus(text, isError) {
+      const status = document.getElementById('appLaunchStatus');
+      if (!status) return;
+      status.hidden = false;
+      status.classList.toggle('ok', !isError);
+      status.classList.toggle('err', !!isError);
+      status.textContent = text;
+      status.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    async function copyPublicUrl(value, btn) {
+      try {
+        await copyText(value);
+        const old = btn.textContent;
+        btn.textContent = 'Скопировано';
+        setTimeout(() => btn.textContent = old, 1200);
+      } catch (err) { alert('Не удалось скопировать. Скопируй ссылку снизу вручную.'); }
+    }
+    function launchSubscriptionApp(event, link) {
+      event && event.preventDefault();
+      const deepLink = String(link && link.href || '');
+      const subscriptionUrl = String(link && link.dataset.subscriptionUrl || '');
+      const appName = String(link && link.dataset.appName || 'приложение');
+      if (!deepLink || !subscriptionUrl) return false;
+
+      showAppStatus(`Открываю ${appName} и передаю подписку…`, false);
+      let leftPage = false;
+      const markLeft = () => { if (document.visibilityState === 'hidden') leftPage = true; };
+      document.addEventListener('visibilitychange', markLeft, { once: true });
+      window.location.href = deepLink;
+
+      setTimeout(async () => {
+        document.removeEventListener('visibilitychange', markLeft);
+        if (leftPage || document.visibilityState === 'hidden') return;
+        try {
+          await copyText(subscriptionUrl);
+          showAppStatus(`${appName} не открылся автоматически. Ссылка подписки скопирована — открой приложение и выбери импорт из URL/буфера.`, true);
+        } catch (_) {
+          showAppStatus(`${appName} не открылся автоматически. Скопируй ссылку внизу страницы и добавь её в приложение вручную.`, true);
+        }
+      }, 1600);
+      return false;
+    }
+  </script>
+</body>
+</html>

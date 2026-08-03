@@ -1,0 +1,810 @@
+<%- include('partials_header', { pageTitle: 'Редактировать узел', pageSubtitle: 'Изменение параметров подключения 3x-ui, H1Cloud или Remnawave', activePage: 'nodes' }) %>
+
+<% if (message) { %>
+  <div class="alert ok"><%= message %></div>
+<% } %>
+
+<% if (error) { %>
+  <div class="alert err"><%= error %></div>
+<% } %>
+
+<%
+  const nodeType = String(node.node_type || '3xui');
+  const isH1 = nodeType === 'h1cloud';
+  const isH1Panel = nodeType === 'h1cloud_3xui';
+  const isRemnawave = nodeType === 'remnawave';
+  const is3xuiFamily = nodeType === '3xui' || isH1Panel;
+  const apiMode = (isH1 || isRemnawave) ? 'token' : (String(node.api_auth_mode || 'token') === 'password' ? 'password' : 'token');
+  const h1LinkMode = String(node.h1cloud_link_mode || 'vless_reality');
+  let h1LinkTypes = String(node.h1cloud_link_types || '').split(',').map(v => v.trim()).filter(Boolean);
+  if (!h1LinkTypes.length) {
+    if (['all','vless_all'].includes(h1LinkMode)) h1LinkTypes = ['reality','xhttp','xhttp_cdn'];
+    else if (['vless_ws','xhttp'].includes(h1LinkMode)) h1LinkTypes = ['xhttp'];
+    else if (h1LinkMode === 'xhttp_cdn') h1LinkTypes = ['xhttp_cdn'];
+    else h1LinkTypes = ['reality'];
+  }
+  const h1Fp = String(node.h1cloud_fingerprint || '').trim();
+  const h1RealityPort = Number(node.h1cloud_reality_port || 0);
+  const h1RealityPublicPort = Number(node.h1cloud_reality_public_port || 0);
+  const h1RealitySni = String(node.h1cloud_reality_sni || 'proxy11.h1guro.ovh');
+  const h1RealityDest = String(node.h1cloud_reality_dest || (h1RealitySni ? h1RealitySni + ':443' : ''));
+  const h1RealityCommand = h1RealityPort
+    ? ['vpn reality', h1RealityPort, h1RealityPublicPort || h1RealityPort, h1RealitySni, h1RealityDest].filter(Boolean).join(' ')
+    : 'vpn reality PORT [PUBLIC_PORT] [SNI] [DEST]';
+  const h1BackendPath = String(node.h1cloud_xhttp_backend_path || '/api/v1/sync/');
+  const h1Method = String(node.h1cloud_xhttp_method || 'GET');
+  const h1Alpn = String(node.h1cloud_xhttp_alpn || 'h2,http1');
+  const h1CdnHost = String(node.h1cloud_cdn_host || '');
+  const h1CdnSni = String(node.h1cloud_cdn_sni || h1CdnHost || '');
+  const h1CdnPort = Number(node.h1cloud_cdn_port || 443);
+  const h1CdnTag = String(node.h1cloud_cdn_tag || 'CDN');
+  const h1CdnPublicPath = String(node.h1cloud_cdn_public_path || h1BackendPath);
+  const h1XhttpCommands = [
+    `vpn xhttp on ${h1BackendPath} ${h1Method}`,
+    `vpn xhttp alpn ${h1Alpn}`,
+    h1CdnHost ? `vpn cdn xhttp ${h1CdnHost} ${h1CdnSni || h1CdnHost} ${h1CdnPort} ${h1CdnTag} ${h1CdnPublicPath}` : 'vpn cdn xhttp HOST SNI 443 CDN /api/v1/public/sync/',
+    'vpn restart'
+  ].join('\n');
+  const knownUtlsFp = ['chrome','firefox','safari','ios','android','edge','360','qq','random','randomized'];
+  const h1FpSelect = h1Fp ? (knownUtlsFp.includes(h1Fp) ? h1Fp : 'custom') : 'keep';
+  const inboundFp = inboundPreview ? String(inboundPreview.fingerprint || '').trim() : '';
+  const inboundFpSelect = inboundFp ? (knownUtlsFp.includes(inboundFp) ? inboundFp : 'custom') : 'keep';
+%>
+
+<div class="grid node-edit-layout">
+  <section class="card span-8 node-edit-main">
+    <h2>Параметры узла</h2>
+    <div class="actions node-edit-top-actions" style="margin-bottom:14px;">
+      <% if (is3xuiFamily) { %>
+        <a class="link-btn secondary" href="/nodes/<%= node.id %>/edit?load_inbound=1">Загрузить параметры из 3x-ui</a>
+      <% } %>
+      <% if (isRemnawave) { %>
+        <button type="submit" class="btn-secondary" form="nodeEditForm" formaction="/nodes/<%= node.id %>/clone-remnawave" formmethod="post" formnovalidate onclick="return confirm('Создать отдельную копию подключения для ещё одной физической Remnawave-ноды? Копия будет выключена до настройки.');">Добавить ещё Remnawave-ноду</button>
+      <% } %>
+      <% if (!isRemnawave) { %>
+        <form method="post" action="/nodes/<%= node.id %>/sync-clients" class="inline-form js-long-action" data-loading-title="Импортирую клиентов" data-loading-text="Читаю клиентов из выбранного узла и добавляю недостающих в агрегатор." onsubmit="return confirm('Импортировать клиентов из этого узла в агрегатор?')">
+          <button type="submit" class="secondary">Импорт клиентов из <%= isH1 ? 'H1Cloud' : '3x-ui' %></button>
+        </form>
+      <% } %>
+    </div>
+    <form id="nodeEditForm" method="post" action="/nodes/<%= node.id %>/edit" class="<%= apiMode === 'password' ? 'auth-password-active' : 'auth-token-active' %>">
+      <div class="form-grid">
+        <div class="field">
+          <label>Страна</label>
+          <select name="country_code" required>
+            <% countries.forEach(country => { %>
+              <option value="<%= country.code %>" <%= country.code === node.country_code ? 'selected' : '' %>>
+                <%= country.name_ru %>
+              </option>
+            <% }) %>
+          </select>
+        </div>
+
+        <div class="field half">
+          <label>Свой регион</label>
+          <input name="custom_country_name_ru" value="<%= node.country_code === 'ZZ' ? (node.country_name_ru || '') : '' %>" placeholder="если выбрано Другое" />
+        </div>
+        <div class="field half">
+          <label>Свой флаг / emoji</label>
+          <input name="custom_country_flag" value="<%= node.country_code === 'ZZ' ? (node.country_flag || '') : '' %>" placeholder="🇪🇺 или 🌐" maxlength="8" />
+        </div>
+
+        <div class="field">
+          <label>Доп. название узла</label>
+          <input name="label_suffix" value="<%= node.label_suffix || '' %>" placeholder="например: 1, 2, Frankfurt, Hetzner" />
+          <small class="hint">Например: Германия + 1 = 🇩🇪 Германия-1.</small>
+        </div>
+
+        <div class="field">
+          <label>Тип узла</label>
+          <select name="node_type" class="js-node-type-select" data-original-node-type="<%= nodeType %>">
+            <option value="3xui" <%= nodeType === '3xui' ? 'selected' : '' %>>3x-ui (обычная панель)</option>
+            <% if (isH1Panel) { %><option value="h1cloud_3xui" selected>H1Cloud 3x-ui (устаревший сохранённый тип)</option><% } %>
+            <% if (isH1) { %><option value="h1cloud" selected>H1Cloud VLESS API (устаревший сохранённый тип)</option><% } %>
+            <option value="remnawave" <%= isRemnawave ? 'selected' : '' %>>Remnawave Panel (API)</option>
+          </select>
+          <small class="hint">Новые подключения добавляются только как обычная 3x-ui или Remnawave. Сохранённый устаревший тип можно отредактировать либо перевести на 3x-ui.</small>
+        </div>
+
+        <div class="field half" data-node-endpoint-field>
+          <label data-node-endpoint-label><%= isRemnawave ? 'Remnawave Panel URL' : (isH1 ? 'H1Cloud API Base URL' : '3x-ui Panel URL') %></label>
+          <input name="panel_url" value="<%= node.panel_url %>" required data-node-endpoint-input placeholder="<%= isRemnawave ? 'https://rw.nl.amored.ru' : (isH1 ? 'https://IP:API_PORT/api' : 'https://panel.example.com:2053') %>" />
+          <small class="hint" data-node-endpoint-hint><%= isRemnawave ? 'Корневой HTTPS URL панели Remnawave, без /api.' : (isH1 ? 'API отдельного H1Cloud VLESS-скрипта.' : (isH1Panel ? 'Адрес ограниченной панели H1Cloud 3x-ui. Inbound не изменяется.' : 'Адрес обычной панели 3x-ui.')) %></small>
+        </div>
+
+        <div class="field half js-node-h1-only <%= isH1 ? '' : 'hidden' %>" <%= isH1 ? '' : 'hidden style="display:none!important"' %>>
+          <label>H1Cloud SUB Base URL</label>
+          <input name="sub_base_url" value="<%= node.sub_base_url || '' %>" placeholder="http://IP:SUB_PORT" />
+          <small class="hint">Используется для получения готовых ссылок <code>/sub/UUID/local</code>. Если пусто, берётся API-порт + 1.</small>
+        </div>
+
+        <div class="field half js-node-h1panel-only <%= isH1Panel ? '' : 'hidden' %>" <%= isH1Panel ? '' : 'hidden style="display:none!important"' %>>
+          <label>Порт подписки H1Cloud 3x-ui</label>
+          <input name="h1cloud_3xui_sub_port" type="number" min="1" max="65535" value="<%= Number(node.h1cloud_3xui_sub_port || 25555) %>" />
+          <small class="hint">Обычно <code>25555</code>.</small>
+        </div>
+
+        <div class="field half js-node-h1panel-only <%= isH1Panel ? '' : 'hidden' %>" <%= isH1Panel ? '' : 'hidden style="display:none!important"' %>>
+          <label>SUB Base URL, если отличается</label>
+          <input name="h1cloud_3xui_sub_base_url" value="<%= isH1Panel ? (node.sub_base_url || '') : '' %>" placeholder="http://31.76.103.96:25555" />
+          <small class="hint">Агрегатор сначала читает готовую ссылку провайдера, а при недоступности собирает совместимый XHTTP CDN fallback из External Proxy.</small>
+        </div>
+
+        <div class="field full js-node-h1panel-only <%= isH1Panel ? '' : 'hidden' %>" <%= isH1Panel ? '' : 'hidden style="display:none!important"' %>>
+          <div class="alert warn" style="margin:0;">
+            <strong>Inbound H1Cloud полностью защищён от записи.</strong> Порт, протокол, XHTTP/Reality, TLS, SNI, External Proxy, fingerprint, flow и sniffing никогда не отправляются обратно. Проверка, синхронизация и перезапуск агрегатора только читают готовую конфигурацию. Управляются только клиенты и их привязка к inbound.<br><small>При старом дубле/<code>record not found</code> удали все записи логина в оригинальной H1Cloud 3x-ui и затем привяжи узел повторно.</small>
+          </div>
+        </div>
+
+        <div class="field full js-node-h1panel-only h1panel-policy-card <%= isH1Panel ? '' : 'hidden' %>" <%= isH1Panel ? '' : 'hidden style="display:none!important"' %>>
+          <input type="hidden" name="h1cloud_3xui_shared_traffic" value="0" />
+          <div class="h1panel-policy-grid">
+            <div class="h1panel-policy-info">
+              <strong>Изменяются только клиентские лимиты</strong>
+              <small>ГБ, срок, статус, IP-лимит, имя и комментарий отправляются только после явного действия администратора. Автоматическая проверка и синхронизация не перезаписывают существующего клиента.</small>
+            </div>
+            <label class="checkbox-card h1panel-expiry-option">
+              <input type="checkbox" name="h1cloud_3xui_local_expiry" value="1" <%= Number(node.h1cloud_3xui_local_expiry ?? 1) !== 0 ? 'checked' : '' %> />
+              <span><strong>Срок хранить в агрегаторе</strong><small>Удалённая дата может оставаться безлимитной; агрегатор отключает клиента по своему сроку.</small></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="field full js-node-h1panel-only <%= isH1Panel ? '' : 'hidden' %>" <%= isH1Panel ? '' : 'hidden style="display:none!important"' %>>
+          <label>JSON-подписка H1Cloud 3x-ui, опционально</label>
+          <input name="h1cloud_3xui_json_url_template" value="<%= node.h1cloud_3xui_json_url_template || '' %>" placeholder="25556 или http://31.76.103.96:25556/json/{subId}" />
+          <small class="hint">Можно указать только JSON-порт, Base URL или полный шаблон с <code>{subId}</code>. Готовый JSON H1Cloud объединится с основными узлами в одной ссылке агрегатора.</small>
+        </div>
+
+        <div class="field full js-node-h1-only <%= isH1 ? '' : 'hidden' %> h1cloud-link-filter" <%= isH1 ? '' : 'hidden style="display:none!important"' %> data-h1-link-filter>
+          <div class="h1cloud-link-filter-head">
+            <div>
+              <label>Ссылки H1Cloud в общей подписке</label>
+              <small class="hint">Выбранные типы публикуются независимо. В приложении все варианты сохраняют обычное название узла; тип транспорта виден отдельной строкой.</small>
+            </div>
+            <label class="h1cloud-select-all">
+              <input type="checkbox" data-h1-select-all />
+              <span>Выбрать все</span>
+            </label>
+          </div>
+          <div class="h1cloud-link-options">
+            <label class="h1cloud-link-option">
+              <input type="checkbox" name="h1cloud_link_types" value="reality" <%= h1LinkTypes.includes('reality') ? 'checked' : '' %> />
+              <span><strong>Reality</strong><small>VLESS / TCP / REALITY</small></span>
+            </label>
+            <label class="h1cloud-link-option">
+              <input type="checkbox" name="h1cloud_link_types" value="xhttp" <%= h1LinkTypes.includes('xhttp') ? 'checked' : '' %> />
+              <span><strong>XHTTP</strong><small>Прямой VLESS / XHTTP без TLS</small></span>
+            </label>
+            <label class="h1cloud-link-option">
+              <input type="checkbox" name="h1cloud_link_types" value="xhttp_cdn" <%= h1LinkTypes.includes('xhttp_cdn') ? 'checked' : '' %> />
+              <span><strong>XHTTP CDN</strong><small>VLESS / XHTTP / TLS через CDN</small></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="field half js-node-h1-only <%= isH1 ? '' : 'hidden' %>" <%= isH1 ? '' : 'hidden style="display:none!important"' %>>
+          <label>uTLS browser / fingerprint</label>
+          <select name="h1cloud_fingerprint_select" class="js-h1cloud-fingerprint-select">
+            <option value="keep" <%= h1FpSelect === 'keep' ? 'selected' : '' %>>Не менять, как отдаёт H1Cloud</option>
+            <option value="firefox" <%= h1FpSelect === 'firefox' ? 'selected' : '' %>>firefox</option>
+            <option value="edge" <%= h1FpSelect === 'edge' ? 'selected' : '' %>>edge</option>
+            <option value="android" <%= h1FpSelect === 'android' ? 'selected' : '' %>>android</option>
+            <option value="ios" <%= h1FpSelect === 'ios' ? 'selected' : '' %>>ios</option>
+            <option value="random" <%= h1FpSelect === 'random' ? 'selected' : '' %>>random</option>
+            <option value="randomized" <%= h1FpSelect === 'randomized' ? 'selected' : '' %>>randomized</option>
+            <option value="safari" <%= h1FpSelect === 'safari' ? 'selected' : '' %>>safari</option>
+            <option value="chrome" <%= h1FpSelect === 'chrome' ? 'selected' : '' %>>chrome</option>
+            <option value="360" <%= h1FpSelect === '360' ? 'selected' : '' %>>360</option>
+            <option value="qq" <%= h1FpSelect === 'qq' ? 'selected' : '' %>>qq</option>
+            <option value="custom" <%= h1FpSelect === 'custom' ? 'selected' : '' %>>Вручную / uTLS Hello...</option>
+          </select>
+          <small class="hint">Если выбрано не «Не менять», агрегатор заменит или добавит параметр <code>fp=...</code> в VLESS-ссылках.</small>
+        </div>
+
+        <div class="field half js-node-h1-only js-h1cloud-custom-fingerprint <%= isH1 && h1FpSelect === 'custom' ? '' : 'hidden' %>" <%= isH1 && h1FpSelect === 'custom' ? '' : 'hidden style="display:none!important"' %>>
+          <label>Свой uTLS fingerprint</label>
+          <input name="h1cloud_fingerprint_custom" value="<%= h1FpSelect === 'custom' ? h1Fp : '' %>" placeholder="например: HelloFirefox_105 или HelloRandomizedNoALPN" <%= isH1 && h1FpSelect === 'custom' ? 'required' : '' %> />
+          <small class="hint">Работают только значения, которые понимает клиентский Xray/uTLS. Обычное название любого браузера не всегда допустимо.</small>
+        </div>
+
+        <div class="field half js-node-3xui-only <%= is3xuiFamily ? '' : 'hidden' %>" <%= is3xuiFamily ? '' : 'hidden style="display:none!important"' %>>
+          <label>Panel Path</label>
+          <input name="panel_path" value="<%= node.panel_path || '' %>" />
+        </div>
+
+        <div class="field js-node-3xui-only <%= is3xuiFamily ? '' : 'hidden' %>" <%= is3xuiFamily ? '' : 'hidden style="display:none!important"' %>>
+          <label>Метод API 3x-ui</label>
+          <select name="api_auth_mode" class="js-api-auth-mode" data-target="edit-node-auth-fields">
+            <option value="token" <%= apiMode === 'token' ? 'selected' : '' %>>API Token</option>
+            <option value="password" <%= apiMode === 'password' ? 'selected' : '' %>>3x-ui старый метод: логин и пароль</option>
+          </select>
+          <small class="hint">Для 3x-ui выбери новый API Token или старый способ с логином и паролем.</small>
+        </div>
+
+        <div id="edit-node-auth-fields" class="auth-mode-fields field full">
+          <div class="auth-password-fields form-grid <%= apiMode === 'password' ? '' : 'hidden' %>">
+            <div class="field half">
+              <label>Логин панели</label>
+              <input name="username" value="<%= node.username || '' %>" data-required-when="password" <%= apiMode === 'password' ? 'required' : '' %> />
+            </div>
+
+            <div class="field half">
+              <label>Новый пароль панели</label>
+              <input name="password" type="password" placeholder="Оставь пустым, чтобы не менять" data-required-when="password" data-has-saved-secret="<%= node.password_enc ? '1' : '0' %>" data-has-saved-secret-original="<%= node.password_enc ? '1' : '0' %>" />
+              <small class="hint">Пароль можно оставить пустым, если он не меняется.</small>
+            </div>
+          </div>
+
+          <div class="auth-token-fields <%= apiMode === 'token' ? '' : 'hidden' %>">
+            <label data-node-token-label><%= isRemnawave ? 'Remnawave API Token' : (isH1 ? 'H1Cloud API Token' : 'API Token 3x-ui') %></label>
+            <input name="api_token" type="password" placeholder="<%= node.api_token_enc ? 'Токен уже сохранён. Заполни только для замены.' : (isRemnawave ? 'Bearer token из Remnawave → API Tokens' : (isH1 ? 'Токен из команды vpn api token' : 'API Token удалённой панели 3x-ui')) %>" data-required-when="token" data-has-saved-secret="<%= node.api_token_enc ? '1' : '0' %>" data-has-saved-secret-original="<%= node.api_token_enc ? '1' : '0' %>" data-node-token-input <%= apiMode === 'token' && !node.api_token_enc ? 'required' : '' %> />
+            <small class="hint" data-node-token-hint><%= node.api_token_enc ? 'Токен уже сохранён. При смене типа узла вставь новый токен выбранной системы.' : (isRemnawave ? 'Создай токен в Remnawave → API Tokens с правами list/create/update/delete для Users; для выбора по Host UUID также разреши чтение Hosts.' : (isH1 ? 'Возьми токен командой vpn api token.' : 'Токен находится в удалённой панели 3x-ui.')) %></small>
+          </div>
+        </div>
+
+        <div class="field full js-node-remnawave-only <%= isRemnawave ? '' : 'hidden' %>" <%= isRemnawave ? '' : 'hidden style="display:none!important"' %>>
+          <div class="alert ok" style="margin:0;">
+            <strong>Remnawave API работает как полноценный провайдер клиентов.</strong> VLESS UUID берётся из клиента Aggregator, указанный Internal Squad назначается автоматически, а subscription URL пользователя используется для общей SUB/JSON подписки.
+          </div>
+        </div>
+        <div class="field full js-node-remnawave-only <%= isRemnawave ? '' : 'hidden' %>" <%= isRemnawave ? '' : 'hidden style="display:none!important"' %>>
+          <div class="btn-row" style="align-items:center;gap:10px;flex-wrap:wrap;">
+            <button type="button" class="btn-secondary" data-load-remnawave-resources data-node-id="<%= node.id %>">Загрузить ноды, Hosts и сквады из Remnawave</button>
+            <span class="hint" data-remnawave-resource-status>Поля ниже принимают UUID. Домен в поле Host UUID указывать нельзя.</span>
+          </div>
+        </div>
+        <div class="field half js-node-remnawave-only <%= isRemnawave ? '' : 'hidden' %>" <%= isRemnawave ? '' : 'hidden style="display:none!important"' %>>
+          <label>Internal Squad UUID</label>
+          <input name="remnawave_internal_squad_uuid" list="remnawaveSquadOptions" value="<%= node.remnawave_internal_squad_uuid || '' %>" placeholder="UUID сквада bee1" data-remnawave-squad-input <%= isRemnawave ? 'required' : '' %> />
+          <datalist id="remnawaveSquadOptions"></datalist>
+          <small class="hint">Определяет доступ пользователя. Все разрешённые inbound этого squad могут сформировать Hosts подписки.</small>
+        </div>
+        <div class="field half js-node-remnawave-only <%= isRemnawave ? '' : 'hidden' %>" <%= isRemnawave ? '' : 'hidden style="display:none!important"' %>>
+          <label>Физическая Remnawave-нода</label>
+          <input name="remnawave_node_uuid" list="remnawaveNodeOptions" value="<%= node.remnawave_node_uuid || '' %>" placeholder="UUID физической ноды" data-remnawave-node-uuid-input />
+          <datalist id="remnawaveNodeOptions"></datalist>
+          <small class="hint">Это UUID из Remnawave → Ноды → Copy UUID. Он не является доменом и не заменяет Host.</small>
+        </div>
+        <div class="field half js-node-remnawave-only <%= isRemnawave ? '' : 'hidden' %>" <%= isRemnawave ? '' : 'hidden style="display:none!important"' %>>
+          <label>Клиентский Host UUID</label>
+          <input name="remnawave_host_uuid" list="remnawaveHostOptions" value="<%= node.remnawave_host_uuid || '' %>" placeholder="UUID нужного Host" data-remnawave-host-uuid-input />
+          <datalist id="remnawaveHostOptions"></datalist>
+          <small class="hint">Host задаёт адрес, порт, SNI и транспорт, которые увидит клиент. Для отдельной физической ноды обычно создаётся отдельная запись Aggregator с её Node UUID и Host UUID.</small>
+        </div>
+        <div class="field half js-node-remnawave-only <%= isRemnawave ? '' : 'hidden' %>" <%= isRemnawave ? '' : 'hidden style="display:none!important"' %>>
+          <label>Какие Hosts добавлять в общую подписку</label>
+          <select name="remnawave_link_mode">
+            <option value="first" <%= String(node.remnawave_link_mode || 'first') === 'first' ? 'selected' : '' %>>Один Host — первый подходящий</option>
+            <option value="unique" <%= String(node.remnawave_link_mode || '') === 'unique' ? 'selected' : '' %>>Все уникальные Hosts</option>
+            <option value="all" <%= String(node.remnawave_link_mode || '') === 'all' ? 'selected' : '' %>>Все записи Remnawave без отбора</option>
+          </select>
+          <small class="hint">Режим «Один Host» устраняет двойные серверы, когда один Internal Squad содержит несколько видимых Hosts.</small>
+        </div>
+        <div class="field half js-node-remnawave-only <%= isRemnawave ? '' : 'hidden' %>" <%= isRemnawave ? '' : 'hidden style="display:none!important"' %>>
+          <label>Название Remnawave-сервера в подписке</label>
+          <select name="remnawave_remark_mode">
+            <option value="aggregator" <%= String(node.remnawave_remark_mode || 'aggregator') === 'aggregator' ? 'selected' : '' %>>Название узла Aggregator</option>
+            <option value="provider" <%= String(node.remnawave_remark_mode || '') === 'provider' ? 'selected' : '' %>>Оригинальное имя Host из Remnawave</option>
+            <option value="combined" <%= String(node.remnawave_remark_mode || '') === 'combined' ? 'selected' : '' %>>Aggregator + имя Host</option>
+          </select>
+        </div>
+        <div class="field half js-node-remnawave-only <%= isRemnawave ? '' : 'hidden' %>" <%= isRemnawave ? '' : 'hidden style="display:none!important"' %>>
+          <label>Фильтр Host или адреса</label>
+          <input name="remnawave_link_filter" value="<%= node.remnawave_link_filter || '' %>" placeholder="например cdn.amored.ru или beet" />
+          <small class="hint">Необязательно. Можно указать несколько частей через запятую. Останутся ссылки, где совпало имя, адрес, SNI, Host или путь.</small>
+        </div>
+        <div class="field half js-node-remnawave-only <%= isRemnawave ? '' : 'hidden' %>" <%= isRemnawave ? '' : 'hidden style="display:none!important"' %>>
+          <label>Новый дополнительный X-Api-Key</label>
+          <input name="remnawave_caddy_token" type="password" placeholder="<%= node.remnawave_caddy_token_enc ? 'Ключ уже сохранён. Заполни только для замены.' : 'не нужен при обычном Nginx' %>" />
+          <small class="hint">Дополнительный ключ Caddy Auth сохраняется зашифрованно. Обычный Remnawave API Token находится выше.</small>
+        </div>
+
+        <div class="field half js-node-3xui-only <%= is3xuiFamily ? '' : 'hidden' %>" <%= is3xuiFamily ? '' : 'hidden style="display:none!important"' %>>
+          <label>Inbound ID</label>
+          <input name="inbound_id" type="number" min="1" value="<%= node.inbound_id || 1 %>" <%= is3xuiFamily ? 'required' : '' %> />
+        </div>
+
+        <div class="field js-node-3xui-only js-node-3xui-editable-only <%= nodeType === '3xui' ? '' : 'hidden' %>" <%= nodeType === '3xui' ? '' : 'hidden style="display:none!important"' %>>
+          <h3 style="margin:10px 0 0;">SNI в подписках</h3>
+          <small class="hint">Можно оставить SNI из 3x-ui, выбрать сохранённый профиль или задать ручной SNI. Если поставишь галочку сохранения параметров inbound, выбранный SNI будет записан и в 3x-ui вместе с Target=SNI:443.</small>
+        </div>
+        <div class="field third js-node-3xui-only js-node-3xui-editable-only <%= nodeType === '3xui' ? '' : 'hidden' %>" <%= nodeType === '3xui' ? '' : 'hidden style="display:none!important"' %>>
+          <label>Источник SNI</label>
+          <select name="sni_mode" data-sni-source>
+            <option value="inbound" <%= (node.sni_mode || 'inbound') === 'inbound' ? 'selected' : '' %>>Из 3x-ui inbound</option>
+            <option value="profile" <%= node.sni_mode === 'profile' ? 'selected' : '' %>>SNI-профиль</option>
+            <option value="manual" <%= node.sni_mode === 'manual' ? 'selected' : '' %>>Ручной ввод</option>
+          </select>
+        </div>
+        <div class="field third js-node-3xui-only js-node-3xui-editable-only <%= nodeType === '3xui' ? '' : 'hidden' %>" <%= nodeType === '3xui' ? '' : 'hidden style="display:none!important"' %> data-sni-profile-field>
+          <label>SNI-профиль</label>
+          <select name="sni_profile_id">
+            <option value="">Не выбран</option>
+            <% (sniProfiles || []).forEach(profile => { %>
+              <option value="<%= profile.id %>" <%= Number(node.sni_profile_id || 0) === Number(profile.id) ? 'selected' : '' %>><%= profile.name %> · <%= profile.sni %></option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="field third js-node-3xui-only js-node-3xui-editable-only <%= nodeType === '3xui' ? '' : 'hidden' %>" <%= nodeType === '3xui' ? '' : 'hidden style="display:none!important"' %> data-sni-manual-field>
+          <label>Ручной SNI</label>
+          <input name="sni_override" value="<%= node.sni_override || '' %>" placeholder="m.vk.com" />
+        </div>
+      </div>
+
+      <% if (isH1Panel && inboundPreview) { %>
+        <div class="field full js-node-h1panel-only">
+          <div class="kv-list" style="margin-top:16px;">
+            <div class="kv-item"><strong>Inbound H1Cloud (только чтение)</strong><div class="muted">ID <%= node.inbound_id %> · порт <%= inboundPreview.port || '—' %> · <%= inboundPreview.protocol || 'vless' %> / <%= inboundPreview.network || '—' %> / <%= inboundPreview.security || 'none' %></div></div>
+            <div class="kv-item"><strong>Публикация ссылки</strong><div class="muted">Если inbound содержит <code>externalProxy</code>, агрегатор использует адрес CDN и TLS из него, а не внутренний порт backend.</div></div>
+          </div>
+        </div>
+      <% } %>
+
+      <% if (nodeType === '3xui' && inboundPreview) { %>
+        <div class="field">
+          <h3 style="margin:18px 0 0;">Частые параметры inbound из 3x-ui</h3>
+          <small class="hint">Изменяй только то, что реально нужно для соединения. Перед сохранением лучше иметь backup 3x-ui. Поддержка API зависит от версии 3x-ui.</small>
+        </div>
+        <div class="form-grid inbound-editor-box">
+          <div class="field third"><label>Port</label><input name="inbound_port" type="number" min="1" max="65535" value="<%= inboundPreview.port || '' %>" /><small class="hint">80 и 443 запрещены для inbound: они зарезервированы под панель/Caddy.</small></div>
+          <div class="field third">
+            <label>Protocol</label>
+            <select name="inbound_protocol" id="inboundProtocolSelect">
+              <% ['vless','trojan','shadowsocks','wireguard','hysteria','http','mixed','tunnel'].forEach(p => { %>
+                <option value="<%= p %>" <%= String(inboundPreview.protocol || 'vless').toLowerCase() === p ? 'selected' : '' %>><%= p %></option>
+              <% }) %>
+            </select>
+            <small class="hint">Можно оставить как в оригинальной 3x-ui панели. Клиенты будут добавляться в выбранный inbound.</small>
+          </div>
+          <div class="field third">
+            <label>Transport / Security</label>
+            <div class="inline-select-grid">
+              <select name="inbound_network" id="inboundNetworkSelect">
+                <% const currentNet = String(inboundPreview.network || 'raw').toLowerCase(); %>
+                <option value="raw" <%= currentNet === 'raw' ? 'selected' : '' %>>RAW</option>
+                <option value="kcp" <%= currentNet === 'kcp' ? 'selected' : '' %>>mKCP</option>
+                <option value="ws" <%= currentNet === 'ws' ? 'selected' : '' %>>WebSocket</option>
+                <option value="grpc" <%= currentNet === 'grpc' ? 'selected' : '' %>>gRPC</option>
+                <option value="httpupgrade" <%= currentNet === 'httpupgrade' ? 'selected' : '' %>>HTTP Upgrade</option>
+                <option value="xhttp" <%= currentNet === 'xhttp' ? 'selected' : '' %>>xHTTP</option>
+              </select>
+              <input value="<%= inboundPreview.security || '-' %>" readonly />
+            </div>
+            <small class="hint">RAW, WebSocket, gRPC, HTTP Upgrade, xHTTP и mKCP сохраняются как в новой 3x-ui. В Xray RAW технически хранится как tcp, но в панели показывается RAW.</small>
+          </div>
+          <div class="field">
+            <div class="alert ok">Новый режим совместимости: создай inbound в оригинальной 3x-ui с нужным Protocol/Transport, затем загрузи параметры сюда. Агрегатор будет добавлять/импортировать клиентов в этот inbound.</div>
+          </div>
+          <div class="field full protocol-recommend-card" data-protocol-recommend-root>
+            <h3>Рекомендуемые параметры для выбранного Protocol / Transport</h3>
+            <small class="hint">Можно нажать «Установить рекомендуемые значения», затем вручную поправить поля и поставить галочку «Сохранить эти параметры в 3x-ui».</small>
+            <div class="recommend-grid">
+              <label>Protocol<select data-rec-protocol data-sync-select="inboundProtocolSelect"><option value="vless">VLESS</option><option value="trojan">Trojan</option><option value="shadowsocks">Shadowsocks</option><option value="wireguard">WireGuard</option><option value="hysteria">Hysteria / Hysteria2</option><option value="http">HTTP</option><option value="mixed">Mixed</option><option value="tunnel">Tunnel</option></select></label>
+              <label>Transport<select data-rec-network data-sync-select="inboundNetworkSelect"><option value="raw">RAW</option><option value="ws">WebSocket</option><option value="grpc">gRPC</option><option value="httpupgrade">HTTP Upgrade</option><option value="xhttp">xHTTP</option><option value="kcp">mKCP</option></select></label>
+              <label>Домен / SNI / Host<input data-rec-domain value="<%= inboundPreview.sni || inboundPreview.transportHost || inboundPreview.xhttpHost || '' %>" placeholder="www.cloudflare.com" /></label>
+            </div>
+            <div class="protocol-recommend-output" data-rec-output></div>
+            <button type="button" class="secondary small" data-apply-recommendations>Установить рекомендуемые значения</button>
+          </div>
+          <div class="field half"><label>Remark</label><input name="inbound_remark" value="<%= inboundPreview.remark || '' %>" /></div>
+          <div class="field half"><label>SNI / ServerName</label><input id="inboundSniInput" name="inbound_sni" value="<%= inboundPreview.sni || '' %>" placeholder="www.apple.com" /></div>
+          <div class="field half"><label>Target / dest</label><input id="inboundTargetInput" name="inbound_target" value="<%= inboundPreview.target || '' %>" placeholder="www.apple.com:443" /><small class="hint">Для REALITY обычно совпадает с SNI и портом 443. При изменении SNI target обновится автоматически.</small></div>
+          <div class="field half">
+            <label>uTLS browser / fingerprint</label>
+            <select name="inbound_fingerprint_select" class="js-inbound-fingerprint-select">
+              <option value="keep" <%= inboundFpSelect === 'keep' ? 'selected' : '' %>>Не менять, как в 3x-ui</option>
+              <option value="firefox" <%= inboundFpSelect === 'firefox' ? 'selected' : '' %>>firefox</option>
+              <option value="edge" <%= inboundFpSelect === 'edge' ? 'selected' : '' %>>edge</option>
+              <option value="android" <%= inboundFpSelect === 'android' ? 'selected' : '' %>>android</option>
+              <option value="ios" <%= inboundFpSelect === 'ios' ? 'selected' : '' %>>ios</option>
+              <option value="random" <%= inboundFpSelect === 'random' ? 'selected' : '' %>>random</option>
+              <option value="randomized" <%= inboundFpSelect === 'randomized' ? 'selected' : '' %>>randomized</option>
+              <option value="safari" <%= inboundFpSelect === 'safari' ? 'selected' : '' %>>safari</option>
+              <option value="chrome" <%= inboundFpSelect === 'chrome' ? 'selected' : '' %>>chrome</option>
+              <option value="360" <%= inboundFpSelect === '360' ? 'selected' : '' %>>360</option>
+              <option value="qq" <%= inboundFpSelect === 'qq' ? 'selected' : '' %>>qq</option>
+              <option value="custom" <%= inboundFpSelect === 'custom' ? 'selected' : '' %>>Вручную / uTLS Hello...</option>
+            </select>
+            <small class="hint">С галочкой «Сохранить эти параметры в 3x-ui» выбранное значение будет записано в оригинальный inbound.</small>
+          </div>
+          <div class="field half js-inbound-custom-fingerprint <%= inboundFpSelect === 'custom' ? '' : 'hidden' %>">
+            <label>Свой uTLS fingerprint для 3x-ui</label>
+            <input name="inbound_fingerprint_custom" value="<%= inboundFpSelect === 'custom' ? inboundFp : '' %>" placeholder="например: HelloFirefox_105 или HelloRandomizedNoALPN" <%= inboundFpSelect === 'custom' ? 'required' : '' %> />
+            <small class="hint">Нельзя писать любое имя браузера. Значение должно поддерживаться Xray/uTLS.</small>
+          </div>
+          <div class="field half"><label>Short ID</label><input name="inbound_short_id" value="<%= inboundPreview.shortId || '' %>" /></div>
+          <div class="field half"><label>SpiderX</label><input name="inbound_spider_x" value="<%= inboundPreview.spiderX || '/' %>" /></div>
+
+          <div id="transportCommonBox" class="field full transport-settings-box">
+            <h3 style="margin:8px 0 0;">Параметры транспорта</h3>
+            <small class="hint">Поля применяются только к выбранному транспорту. Пустые значения сохраняют текущие настройки inbound.</small>
+          </div>
+          <div class="field half js-transport-field" data-networks="ws httpupgrade xhttp"><label>Path</label><input name="inbound_path" value="<%= inboundPreview.transportPath || inboundPreview.xhttpPath || '' %>" placeholder="/path" /></div>
+          <div class="field half js-transport-field" data-networks="ws httpupgrade xhttp"><label>Host</label><input name="inbound_host" value="<%= inboundPreview.transportHost || inboundPreview.xhttpHost || '' %>" placeholder="пусто, если не нужен" /></div>
+          <div class="field half js-transport-field" data-networks="grpc"><label>gRPC serviceName</label><input name="inbound_service_name" value="<%= inboundPreview.serviceName || '' %>" placeholder="service" /></div>
+          <div class="field half js-transport-field" data-networks="grpc"><label>gRPC mode</label><select name="inbound_grpc_mode"><option value="" <%= !inboundPreview.grpcMode ? 'selected' : '' %>>Не менять</option><option value="gun" <%= inboundPreview.grpcMode === 'gun' ? 'selected' : '' %>>gun</option><option value="multi" <%= inboundPreview.grpcMode === 'multi' ? 'selected' : '' %>>multi</option></select></div>
+          <div class="field half js-transport-field" data-networks="raw kcp"><label>Header type</label><input name="inbound_header_type" value="<%= inboundPreview.headerType || 'none' %>" placeholder="none / http / srtp / utp ..." /></div>
+          <div class="field half js-transport-field" data-networks="kcp"><label>mKCP seed</label><input name="inbound_kcp_seed" value="<%= inboundPreview.kcpSeed || '' %>" placeholder="пусто, если не нужен" /></div>
+
+          <div id="xhttpSettingsBox" class="xhttp-settings-box <%= (inboundPreview.network || '').toLowerCase() === 'xhttp' ? '' : 'hidden-soft' %>">
+            <div class="field half"><label>XHTTP mode</label><input name="inbound_xhttp_mode" value="<%= inboundPreview.xhttpMode || 'stream-one' %>" placeholder="stream-one" /></div>
+            <div class="field half"><label>XHTTP legacy posts / bytes / interval (необязательно)</label><input name="inbound_xhttp_sc" value="<%= [inboundPreview.scMaxConcurrentPosts ?? '', inboundPreview.scMaxEachPostBytes ?? '', inboundPreview.scMinPostsIntervalMs ?? ''].join(', ') %>" placeholder="пусто; либо 0, 500000-1000000, 10-50" /></div>
+            <div class="field">
+              <label class="switch-row compact">
+                <input type="checkbox" name="inbound_xhttp_fragment" value="1" <%= inboundPreview.dialerProxy === 'fragment' ? 'checked' : '' %> />
+                <span><strong>XHTTP через fragment outbound</strong><small>Сохраняет/убирает sockopt.dialerProxy=fragment в inbound. Сам fragment outbound добавляется в JSON-подписку автоматически, если он нужен.</small></span>
+              </label>
+            </div>
+          </div>
+          <div class="field half"><label>Sniffing destOverride</label><input name="inbound_sniffing_dest" value="<%= inboundPreview.sniffingDestOverride || 'http, tls' %>" /></div>
+          <div class="field">
+            <label class="switch-row compact">
+              <input type="checkbox" name="inbound_sniffing_enabled" value="1" <%= inboundPreview.sniffingEnabled ? 'checked' : '' %> />
+              <span><strong>Sniffing в inbound</strong><small>Настройка именно 3x-ui/Xray, не Happ. Если не уверен — не меняй.</small></span>
+            </label>
+          </div>
+          <div class="field">
+            <label class="switch-row compact danger-option">
+              <input type="checkbox" name="apply_inbound_settings" value="1" />
+              <span><strong>Сохранить эти параметры в 3x-ui</strong><small>Без этой галочки параметры выше только показываются. С галочкой агрегатор отправит изменения в 3x-ui.</small></span>
+            </label>
+          </div>
+        </div>
+      <% } else if (isH1) { %>
+        <div class="alert ok">H1Cloud не использует inbound editor: клиенты создаются через API, а ссылки берутся из H1Cloud subscription <code>/sub/UUID/local</code>. Фильтр выше управляет тем, какие ссылки попадут в общую подписку; uTLS fingerprint переписывается в параметре <code>fp</code>.</div>
+      <% } else if (isRemnawave) { %>
+        <div class="alert ok">Remnawave не использует inbound editor Aggregator. После сохранения нажми «Проверить». Создание, обновление и удаление пользователей выполняются через API, а ссылки из их Remnawave subscription добавляются в общую SUB/JSON.</div>
+      <% } else { %>
+        <div class="alert ok">Нажми «Загрузить параметры из 3x-ui», чтобы увидеть порт, REALITY/SNI/Short ID и sniffing текущего inbound.</div>
+      <% } %>
+
+    </form>
+
+    <% if (isH1) { %>
+      <div class="h1cloud-control-panel">
+        <div class="h1cloud-control-head">
+          <div>
+            <h2>Управление транспортами H1Cloud</h2>
+            <p class="muted">Параметры повторяют безопасные команды из H1Cloud. XHTTP CDN применяется через официальный API узла. Reality применяется через API только на версиях H1Cloud, где доступен соответствующий endpoint; иначе панель покажет готовую команду без изменения сервера.</p>
+          </div>
+          <span class="status-pill online">SUB/API</span>
+        </div>
+
+        <form method="post" action="/nodes/<%= node.id %>/h1cloud-transport" class="h1cloud-transport-form">
+          <div class="h1cloud-control-section">
+            <h3>XHTTP</h3>
+            <div class="form-grid">
+              <div class="field half">
+                <label>Локальный XHTTP path</label>
+                <input name="h1cloud_xhttp_backend_path" value="<%= h1BackendPath %>" placeholder="/api/v1/sync/" />
+              </div>
+              <div class="field quarter">
+                <label>HTTP-метод</label>
+                <select name="h1cloud_xhttp_method">
+                  <% ['GET','POST','PUT'].forEach(method => { %>
+                    <option value="<%= method %>" <%= h1Method === method ? 'selected' : '' %>><%= method %></option>
+                  <% }) %>
+                </select>
+              </div>
+              <div class="field quarter">
+                <label>ALPN</label>
+                <input name="h1cloud_xhttp_alpn" value="<%= h1Alpn %>" placeholder="h2,http1" />
+              </div>
+            </div>
+          </div>
+
+          <div class="h1cloud-control-section">
+            <h3>XHTTP CDN</h3>
+            <div class="form-grid">
+              <div class="field half"><label>CDN host</label><input name="h1cloud_cdn_host" value="<%= h1CdnHost %>" placeholder="proxy.h1cloud.su" /></div>
+              <div class="field half"><label>SNI / Host</label><input name="h1cloud_cdn_sni" value="<%= h1CdnSni %>" placeholder="proxy.h1cloud.su" /></div>
+              <div class="field quarter"><label>Публичный порт</label><input type="number" min="1" max="65535" name="h1cloud_cdn_port" value="<%= h1CdnPort %>" /></div>
+              <div class="field quarter"><label>Метка</label><input name="h1cloud_cdn_tag" value="<%= h1CdnTag %>" placeholder="CDN" /></div>
+              <div class="field half"><label>Публичный CDN path</label><input name="h1cloud_cdn_public_path" value="<%= h1CdnPublicPath %>" placeholder="/api/v1/bs1229/sync/" /></div>
+            </div>
+            <div class="h1cloud-command-box">
+              <code data-copy-text><%= h1XhttpCommands %></code>
+              <button type="button" class="secondary small" data-copy-command>Копировать команды</button>
+            </div>
+          </div>
+
+          <div class="h1cloud-control-section">
+            <h3>Reality</h3>
+            <div class="form-grid">
+              <div class="field quarter"><label>PORT</label><input type="number" min="1" max="65535" name="h1cloud_reality_port" value="<%= h1RealityPort || '' %>" placeholder="25041" /></div>
+              <div class="field quarter"><label>PUBLIC_PORT</label><input type="number" min="1" max="65535" name="h1cloud_reality_public_port" value="<%= h1RealityPublicPort || '' %>" placeholder="25041" /></div>
+              <div class="field quarter"><label>SNI</label><input name="h1cloud_reality_sni" value="<%= h1RealitySni %>" placeholder="proxy11.h1guro.ovh" /></div>
+              <div class="field quarter"><label>DEST</label><input name="h1cloud_reality_dest" value="<%= h1RealityDest %>" placeholder="proxy11.h1guro.ovh:443" /></div>
+            </div>
+            <div class="h1cloud-command-box">
+              <code data-copy-text><%= h1RealityCommand %></code>
+              <button type="button" class="secondary small" data-copy-command>Копировать команду</button>
+            </div>
+          </div>
+
+          <div class="actions h1cloud-control-actions">
+            <button type="submit" name="action" value="save" class="secondary">Сохранить параметры</button>
+            <button type="submit" name="action" value="check" class="secondary">Проверить H1Cloud</button>
+            <button type="submit" name="action" value="apply_xhttp_cdn">Применить XHTTP CDN</button>
+            <button type="submit" name="action" value="apply_reality" class="secondary">Применить Reality / команда</button>
+            <button type="submit" name="action" value="reality_off" class="danger" onclick="return confirm('Отключить Reality на H1Cloud-сервере?')">Отключить Reality</button>
+          </div>
+        </form>
+      </div>
+    <% } %>
+
+    <div class="node-edit-final-actions">
+      <button type="submit" form="nodeEditForm" class="btn-main">Сохранить</button>
+      <a href="/nodes" class="link-btn secondary">Назад</a>
+      <form method="post" action="/nodes/<%= node.id %>/delete" class="node-delete-form" onsubmit="return confirm('Вы действительно хотите удалить узел из панели?')">
+        <button type="submit" class="danger">Удалить узел</button>
+      </form>
+    </div>
+  </section>
+
+  <aside class="card span-4 node-edit-help-card">
+    <h2>Что меняется</h2>
+    <div class="kv-list">
+      <div class="kv-item">
+        <strong>Доп. название</strong>
+        <div class="muted">Добавляется к стране в названии сервера для клиента.</div>
+      </div>
+      <div class="kv-item">
+        <strong>API / Panel URL</strong>
+        <div class="muted">Для 3x-ui используется адрес панели. Для H1Cloud используется API Base URL. Для Remnawave указывается корень панели без /api.</div>
+      </div>
+      <div class="kv-item">
+        <strong>Inbound ID / SUB Base URL</strong>
+        <div class="muted">3x-ui добавляет клиентов в inbound. Remnawave создаёт пользователя через API, сохраняет тот же VLESS UUID, назначает Internal Squad и отдаёт свои Hosts через subscription URL. H1Cloud создаёт клиента через API и отдаёт готовые ссылки через SUB Base URL.</div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+
+<script>
+(function(){
+  const network = document.getElementById('inboundNetworkSelect');
+  const box = document.getElementById('xhttpSettingsBox');
+  const fields = Array.from(document.querySelectorAll('.js-transport-field'));
+  function syncTransportBoxes(){
+    const value = network ? String(network.value || '').toLowerCase() : '';
+    if (box) box.classList.toggle('hidden-soft', value !== 'xhttp');
+    fields.forEach(field => {
+      const allowed = String(field.dataset.networks || '').split(/\s+/).filter(Boolean);
+      field.classList.toggle('hidden-soft', allowed.length && !allowed.includes(value));
+    });
+  }
+  if (network) { network.addEventListener('change', syncTransportBoxes); syncTransportBoxes(); }
+  const sni = document.getElementById('inboundSniInput');
+  const target = document.getElementById('inboundTargetInput');
+  let lastSni = sni ? sni.value.trim() : '';
+  if (sni && target) {
+    sni.addEventListener('input', () => {
+      const current = sni.value.trim();
+      const oldTarget = lastSni ? `${lastSni}:443` : '';
+      if (!target.value.trim() || target.value.trim() === oldTarget) target.value = current ? `${current}:443` : '';
+      lastSni = current;
+    });
+  }
+})();
+</script>
+
+<%- include('partials_footer') %>
+
+<script>
+(function() {
+  function updateApiMode(select) {
+    const targetId = select.dataset.target;
+    const root = targetId ? document.getElementById(targetId) : select.closest('form');
+    const form = select.closest('form');
+    if (!root) return;
+    const mode = select.value === 'token' ? 'token' : 'password';
+    if (form) {
+      form.classList.toggle('auth-token-active', mode === 'token');
+      form.classList.toggle('auth-password-active', mode === 'password');
+    }
+    root.querySelectorAll('.auth-password-fields').forEach(el => {
+      const hide = mode !== 'password';
+      el.classList.toggle('hidden', hide);
+      el.hidden = hide;
+      if (hide) el.style.setProperty('display', 'none', 'important');
+      else el.style.removeProperty('display');
+    });
+    root.querySelectorAll('.auth-token-fields').forEach(el => {
+      const hide = mode !== 'token';
+      el.classList.toggle('hidden', hide);
+      el.hidden = hide;
+      if (hide) el.style.setProperty('display', 'none', 'important');
+      else el.style.removeProperty('display');
+    });
+    root.querySelectorAll('[data-required-when]').forEach(input => {
+      const hasSavedSecret = input.dataset.hasSavedSecret === '1';
+      input.required = input.dataset.requiredWhen === mode && !hasSavedSecret;
+      input.disabled = input.dataset.requiredWhen !== mode;
+    });
+  }
+  function updateH1CloudFingerprint(select) {
+    const form = select.closest('form');
+    if (!form) return;
+    const isCustom = select.value === 'custom';
+    const isH1 = form.querySelector('.js-node-type-select')?.value === 'h1cloud';
+    form.querySelectorAll('.js-h1cloud-custom-fingerprint').forEach(el => el.classList.toggle('hidden', !isH1 || !isCustom));
+    form.querySelectorAll('input[name="h1cloud_fingerprint_custom"]').forEach(input => {
+      input.disabled = !isH1 || !isCustom;
+      input.required = isH1 && isCustom;
+    });
+  }
+  function updateInboundFingerprint(select) {
+    const form = select.closest('form');
+    if (!form) return;
+    const isCustom = select.value === 'custom';
+    form.querySelectorAll('.js-inbound-custom-fingerprint').forEach(el => el.classList.toggle('hidden', !isCustom));
+    form.querySelectorAll('input[name="inbound_fingerprint_custom"]').forEach(input => {
+      input.disabled = !isCustom;
+      input.required = isCustom;
+    });
+  }
+  function setNodeTypeGroup(form, selector, visible) {
+    form.querySelectorAll(selector).forEach(el => {
+      el.classList.toggle('hidden', !visible);
+      el.hidden = !visible;
+      if (visible) el.style.removeProperty('display');
+      else el.style.setProperty('display', 'none', 'important');
+      el.querySelectorAll('input, select, textarea, button').forEach(control => {
+        control.disabled = !visible;
+      });
+    });
+  }
+  function updateNodeTypeText(form, type) {
+    const isH1Api = type === 'h1cloud';
+    const isH1Panel = type === 'h1cloud_3xui';
+    const isRemnawave = type === 'remnawave';
+    const endpointLabel = form.querySelector('[data-node-endpoint-label]');
+    const endpointInput = form.querySelector('[data-node-endpoint-input]');
+    const endpointHint = form.querySelector('[data-node-endpoint-hint]');
+    const tokenLabel = form.querySelector('[data-node-token-label]');
+    const tokenInput = form.querySelector('[data-node-token-input]');
+    const tokenHint = form.querySelector('[data-node-token-hint]');
+    if (endpointLabel) endpointLabel.textContent = isRemnawave ? 'Remnawave Panel URL' : (isH1Api ? 'H1Cloud API Base URL' : '3x-ui Panel URL');
+    if (endpointInput) endpointInput.placeholder = isRemnawave ? 'https://rw.nl.amored.ru' : (isH1Api ? 'https://IP:API_PORT/api' : 'https://panel.example.com:2053');
+    if (endpointHint) endpointHint.innerHTML = isRemnawave
+      ? 'Корневой HTTPS URL панели Remnawave, без <code>/api</code>.'
+      : (isH1Api ? 'API отдельного H1Cloud VLESS-скрипта.' : (isH1Panel ? 'Ограниченная панель H1Cloud 3x-ui: inbound только читается.' : 'Адрес обычной панели 3x-ui.'));
+    if (tokenLabel) tokenLabel.textContent = isRemnawave ? 'Remnawave API Token' : (isH1Api ? 'H1Cloud API Token' : 'API Token 3x-ui');
+    if (tokenInput && !tokenInput.dataset.hasSavedSecret) tokenInput.placeholder = isRemnawave ? 'Bearer token из Remnawave → API Tokens' : (isH1Api ? 'Токен из команды vpn api token' : 'API Token удалённой панели 3x-ui');
+    if (tokenHint) tokenHint.textContent = tokenInput?.dataset.hasSavedSecret === '1'
+      ? 'Токен уже сохранён. При смене типа вставь токен выбранной системы.'
+      : (isRemnawave ? 'Создай токен в Remnawave → API Tokens с правами list/create/update/delete для Users; для выбора по Host UUID также разреши чтение Hosts.' : (isH1Api ? 'Возьми токен командой vpn api token.' : (isH1Panel ? 'Нужен API Token панели H1Cloud 3x-ui.' : 'Токен находится в панели 3x-ui.')));
+  }
+  function updateNodeType(select) {
+    const form = select.closest('form');
+    if (!form) return;
+    const type = select.value;
+    const isH1Api = type === 'h1cloud';
+    const isH1Panel = type === 'h1cloud_3xui';
+    const isRemnawave = type === 'remnawave';
+    const originalType = select.dataset.originalNodeType || select.value;
+    const typeChanged = select.value !== originalType;
+    const is3xuiType = type === '3xui' || isH1Panel;
+    setNodeTypeGroup(form, '.js-node-3xui-only', is3xuiType);
+    setNodeTypeGroup(form, '.js-node-h1-only', isH1Api);
+    setNodeTypeGroup(form, '.js-node-h1panel-only', isH1Panel);
+    setNodeTypeGroup(form, '.js-node-remnawave-only', isRemnawave);
+    setNodeTypeGroup(form, '.js-node-3xui-editable-only', type === '3xui');
+    updateNodeTypeText(form, type);
+    const authSelect = form.querySelector('.js-api-auth-mode');
+    if (authSelect) {
+      if (isH1Api || isRemnawave) authSelect.value = 'token';
+      authSelect.disabled = isH1Api || isRemnawave;
+    }
+    const apiToken = form.querySelector('input[name="api_token"]');
+    const passwordInput = form.querySelector('input[name="password"]');
+    if (apiToken) apiToken.dataset.hasSavedSecret = typeChanged ? '0' : (apiToken.getAttribute('data-has-saved-secret-original') || apiToken.dataset.hasSavedSecret || '0');
+    if (passwordInput) passwordInput.dataset.hasSavedSecret = typeChanged ? '0' : (passwordInput.getAttribute('data-has-saved-secret-original') || passwordInput.dataset.hasSavedSecret || '0');
+    if (authSelect) updateApiMode(authSelect);
+    const inbound = form.querySelector('input[name="inbound_id"]');
+    if (inbound) inbound.required = is3xuiType;
+    const squadInput = form.querySelector('[data-remnawave-squad-input]');
+    if (squadInput) squadInput.required = isRemnawave;
+    if (apiToken) apiToken.disabled = false;
+    form.querySelectorAll('.js-h1cloud-fingerprint-select').forEach(fpSelect => updateH1CloudFingerprint(fpSelect));
+  }
+  document.querySelectorAll('.js-api-auth-mode').forEach(select => {
+    select.addEventListener('change', () => updateApiMode(select));
+    updateApiMode(select);
+  });
+  document.querySelectorAll('.js-h1cloud-fingerprint-select').forEach(select => {
+    select.addEventListener('change', () => updateH1CloudFingerprint(select));
+    updateH1CloudFingerprint(select);
+  });
+  document.querySelectorAll('.js-inbound-fingerprint-select').forEach(select => {
+    select.addEventListener('change', () => updateInboundFingerprint(select));
+    updateInboundFingerprint(select);
+  });
+  document.querySelectorAll('.js-node-type-select').forEach(select => {
+    select.addEventListener('change', () => updateNodeType(select));
+    updateNodeType(select);
+  });
+
+  document.querySelectorAll('[data-h1-link-filter]').forEach(group => {
+    const boxes = Array.from(group.querySelectorAll('input[name="h1cloud_link_types"]'));
+    const all = group.querySelector('[data-h1-select-all]');
+    const syncAll = () => {
+      if (!all) return;
+      const checked = boxes.filter(box => box.checked).length;
+      all.checked = checked === boxes.length;
+      all.indeterminate = checked > 0 && checked < boxes.length;
+    };
+    boxes.forEach(box => box.addEventListener('change', syncAll));
+    if (all) all.addEventListener('change', () => {
+      boxes.forEach(box => { box.checked = all.checked; });
+      syncAll();
+    });
+    const form = group.closest('form');
+    if (form) form.addEventListener('submit', event => {
+      const isH1 = form.querySelector('.js-node-type-select')?.value === 'h1cloud';
+      if (isH1 && !boxes.some(box => box.checked)) {
+        event.preventDefault();
+        alert('Выбери хотя бы один тип ссылки H1Cloud.');
+      }
+    });
+    syncAll();
+  });
+
+  document.querySelectorAll('[data-load-remnawave-resources]').forEach(button => {
+    button.addEventListener('click', async () => {
+      const nodeId = button.dataset.nodeId;
+      const form = button.closest('form');
+      const status = form?.querySelector('[data-remnawave-resource-status]');
+      const oldText = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Загружаю...';
+      if (status) status.textContent = 'Запрашиваю /api/nodes, /api/hosts и /api/internal-squads...';
+      try {
+        const response = await fetch('/nodes/' + encodeURIComponent(nodeId) + '/remnawave-resources.json', { headers: { Accept: 'application/json' } });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Не удалось получить ресурсы Remnawave');
+        const fill = (id, items) => {
+          const list = document.getElementById(id);
+          if (!list) return;
+          list.innerHTML = '';
+          (items || []).forEach(item => {
+            const option = document.createElement('option');
+            option.value = item.uuid;
+            option.label = item.label || item.uuid;
+            option.textContent = item.label || item.uuid;
+            list.appendChild(option);
+          });
+        };
+        fill('remnawaveNodeOptions', data.nodes);
+        fill('remnawaveHostOptions', data.hosts);
+        fill('remnawaveSquadOptions', data.squads);
+        if (status) status.textContent = `Загружено: нод ${data.nodes?.length || 0}, Hosts ${data.hosts?.length || 0}, сквадов ${data.squads?.length || 0}` + (data.errors?.length ? `. Ограничения токена: ${data.errors.join(' | ')}` : '. Выбери значение из подсказки поля.');
+      } catch (err) {
+        if (status) status.textContent = err.message || String(err);
+        alert(err.message || err);
+      } finally {
+        button.disabled = false;
+        button.textContent = oldText;
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-copy-command]').forEach(button => {
+    button.addEventListener('click', async () => {
+      const text = button.closest('.h1cloud-command-box')?.querySelector('[data-copy-text]')?.textContent?.trim() || '';
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        const old = button.textContent;
+        button.textContent = 'Скопировано';
+        setTimeout(() => { button.textContent = old; }, 1400);
+      } catch (_) {
+        window.prompt('Скопируй команду:', text);
+      }
+    });
+  });
+})();
+</script>

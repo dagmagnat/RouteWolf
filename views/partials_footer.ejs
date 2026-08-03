@@ -1,0 +1,2002 @@
+    </main>
+  </div>
+<script>
+(function(){
+  const body = document.body;
+
+  const themeModes = ['dark', 'light'];
+  const themeLabels = { light: 'светлая', dark: 'тёмная' };
+  const themeIcons = { light: '☀', dark: '☾' };
+  function applyTheme(mode, persist) {
+    const cleanMode = mode === 'light' ? 'light' : 'dark';
+    document.documentElement.dataset.colorMode = cleanMode;
+    document.documentElement.dataset.colorTheme = cleanMode;
+    if (persist) {
+      try { localStorage.setItem('agg.color-theme.v1', cleanMode); } catch (_) {}
+    }
+    document.querySelectorAll('[data-theme-toggle]').forEach(button => {
+      const icon = button.querySelector('[data-theme-icon]');
+      if (icon && !icon.querySelector('svg')) icon.textContent = themeIcons[cleanMode];
+      button.title = 'Тема: ' + themeLabels[cleanMode] + '. Нажмите, чтобы переключить';
+      button.setAttribute('aria-label', button.title);
+      button.dataset.themeMode = cleanMode;
+    });
+  }
+  applyTheme(document.documentElement.dataset.colorMode || 'light', false);
+  document.querySelectorAll('[data-theme-toggle]').forEach(button => {
+    button.addEventListener('click', () => {
+      const current = document.documentElement.dataset.colorMode || 'dark';
+      applyTheme(current === 'dark' ? 'light' : 'dark', true);
+    });
+  });
+
+  const toggle = document.querySelector('.mobile-menu-toggle');
+  const backdrop = document.querySelector('[data-close-mobile-menu]');
+  const sidebar = document.getElementById('panelSidebar');
+
+  function setOpen(open){
+    body.classList.toggle('mobile-menu-open', open);
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  if (toggle) toggle.addEventListener('click', function(){
+    const bottomMode = body.classList.contains('mobile-nav-bottom');
+    const isPhone = window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+    if (bottomMode && isPhone) {
+      window.location.href = '/more';
+      return;
+    }
+    setOpen(!body.classList.contains('mobile-menu-open'));
+  });
+  if (backdrop) backdrop.addEventListener('click', function(){ setOpen(false); });
+  if (sidebar) sidebar.addEventListener('click', function(e){
+    if (e.target.closest('a')) setOpen(false);
+  });
+  window.addEventListener('keydown', function(e){ if (e.key === 'Escape') setOpen(false); });
+
+  // Mobile Lite: turn wide tables into readable card rows on phones.
+  // Headers are copied into data-label attributes so every cell can show its label.
+  document.querySelectorAll('table').forEach(function(table){
+    const headers = Array.from(table.querySelectorAll('thead th')).map(function(th){
+      return (th.textContent || '').replace(/\s+/g, ' ').trim();
+    });
+    if (!headers.length) return;
+    table.querySelectorAll('tbody tr').forEach(function(row){
+      Array.from(row.children).forEach(function(cell, index){
+        if (!cell.getAttribute('data-label') && headers[index]) {
+          cell.setAttribute('data-label', headers[index]);
+        }
+      });
+    });
+  });
+
+  // Mobile Lite: make very long action rows easier to tap.
+  document.querySelectorAll('.actions, .button-row, .inline-actions').forEach(function(row){
+    if (row.children.length > 2) row.classList.add('mobile-actions-stack');
+  });
+
+  function syncMobileLitePreference(){
+    const preferMobileLite = body.classList.contains('mobile-lite-auto');
+    if (!preferMobileLite) return;
+    const isPhone = window.matchMedia('(max-width: 900px)').matches;
+    body.classList.toggle('theme-mobile_lite', isPhone);
+    body.classList.toggle('theme-classic', !isPhone);
+  }
+  syncMobileLitePreference();
+
+  // Mobile Lite: long cards become real accordions on phones only.
+  // v6: wrap the whole card content, not only siblings of a nested title.
+  function setupMobileAccordions(){
+    syncMobileLitePreference();
+    if (!body.classList.contains('theme-mobile_lite')) return;
+    const isPhone = window.matchMedia('(max-width: 900px)').matches;
+    document.querySelectorAll('.mobile-collapsible').forEach(function(card){
+      card.classList.toggle('mobile-collapse-enabled', isPhone);
+    });
+    if (!isPhone) return;
+
+    const path = location.pathname;
+    const densePages = /\/(dashboard|diagnostics|telegram-bot|settings|routing|redirects|nodes|clients)/.test(path);
+    const skipSelectors = [
+      '.stats-card', '.modal-card', '.clients-toolbar', '.clients-card', '.modal',
+      '.mobile-never-collapse', '.node-card', '.node-row', '.node-item'
+    ];
+    const skipTitleRe = /^(Список узлов|Поддержка)$/i;
+    const cards = Array.from(document.querySelectorAll('main .card')).filter(function(card){
+      return !skipSelectors.some(function(sel){ return card.matches(sel) || card.closest(sel); });
+    });
+
+    cards.forEach(function(card, index){
+      if (card.dataset.mobileAccordionReady === '1') {
+        const content = card.querySelector(':scope > .mobile-collapse-content');
+        if (content) content.hidden = card.classList.contains('is-collapsed');
+        return;
+      }
+
+      const title = card.querySelector(':scope > h1, :scope > h2, :scope > h3, :scope > .card-title, :scope > .section-title-row h2, :scope > .section-title-row h3');
+      if (!title) return;
+      function cleanSectionTitle(el){
+        const clone = el.cloneNode(true);
+        clone.querySelectorAll('.section-icon').forEach(function(icon){ icon.remove(); });
+        return (clone.textContent || 'Раздел')
+          .replace(/^[\s\p{Extended_Pictographic}\uFE0F]+/u, '')
+          .replace(/\s+/g, ' ')
+          .trim() || 'Раздел';
+      }
+      const titleText = cleanSectionTitle(title);
+      if (skipTitleRe.test(titleText)) return;
+
+      const formFields = card.querySelectorAll('input, select, textarea').length;
+      const rows = card.querySelectorAll('tbody tr').length;
+      const actionCount = card.querySelectorAll('button, .btn, .btn-secondary, .link-btn').length;
+      const itemCount = Math.max(
+        rows,
+        card.querySelectorAll('.kv-item, .diagnostic-card, .top-usage-item, .online-client-row, .order-card, .ticket-card, .live-client-card, .dashboard-client-card').length
+      );
+      const measuredHeight = Math.max(card.scrollHeight, card.getBoundingClientRect().height || 0);
+      const longEnough = measuredHeight > 460 || formFields >= 5 || rows >= 5 || actionCount >= 6 || itemCount > 3;
+      const shouldCollapse = longEnough || (densePages && index > 0 && measuredHeight > 340);
+      if (!shouldCollapse) return;
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'mobile-collapse-toggle';
+      button.innerHTML = '<span class="mobile-collapse-title"></span><span class="mobile-collapse-action" aria-hidden="true">Открыть</span>';
+      button.querySelector('.mobile-collapse-title').textContent = titleText;
+
+      const content = document.createElement('div');
+      content.className = 'mobile-collapse-content';
+
+      while (card.firstChild) content.appendChild(card.firstChild);
+      const titleInContent = Array.from(content.querySelectorAll('h1,h2,h3,.card-title')).find(function(el){
+        return cleanSectionTitle(el) === titleText;
+      });
+      if (titleInContent) titleInContent.classList.add('mobile-original-title-hidden');
+
+      card.appendChild(button);
+      card.appendChild(content);
+      card.classList.add('mobile-collapsible', 'mobile-collapse-enabled', 'is-collapsed');
+      card.dataset.mobileAccordionReady = '1';
+      button.setAttribute('aria-expanded', 'false');
+      const action = button.querySelector('.mobile-collapse-action');
+      function syncCollapseLabel(){
+        const collapsed = card.classList.contains('is-collapsed');
+        content.hidden = collapsed;
+        button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        if (action) action.textContent = collapsed ? 'Открыть' : 'Скрыть';
+      }
+      button.addEventListener('click', function(e){
+        e.preventDefault();
+        card.classList.toggle('is-collapsed');
+        syncCollapseLabel();
+      });
+      syncCollapseLabel();
+    });
+  }
+
+  function setupMobileClientCompact(){
+    if (!body.classList.contains('theme-mobile_lite')) return;
+    document.querySelectorAll('.clients-table tbody tr').forEach(function(row){
+      if (row.dataset.mobileClientReady === '1') return;
+      const td = document.createElement('td');
+      td.className = 'mobile-client-more-cell';
+      td.setAttribute('data-label', '');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn-secondary mobile-client-more-btn';
+      btn.textContent = 'ℹ️ Подробнее';
+      btn.addEventListener('click', function(){
+        const expanded = row.classList.toggle('is-mobile-expanded');
+        btn.textContent = expanded ? 'Свернуть' : 'ℹ️ Подробнее';
+      });
+      td.appendChild(btn);
+      row.appendChild(td);
+      row.dataset.mobileClientReady = '1';
+    });
+  }
+
+  setupMobileAccordions();
+  setupMobileClientCompact();
+  window.addEventListener('resize', function(){ syncMobileLitePreference(); setupMobileAccordions(); setupMobileClientCompact(); setupDesktopPageTabs(); setupPagedLists(); });
+
+  // Mobile Lite v7: final repair pass. Some pages have nested headers and the
+  // automatic wrapper can miss content; this makes every generated accordion
+  // hide/show the actual body consistently.
+  function repairMobileAccordionsV7(){
+    syncMobileLitePreference();
+    if (!body.classList.contains('theme-mobile_lite')) return;
+    if (!window.matchMedia('(max-width: 900px)').matches) return;
+
+    document.querySelectorAll('.mobile-collapsible, .mobile-collapse-enabled').forEach(function(card){
+      const button = card.querySelector(':scope > .mobile-collapse-toggle');
+      if (!button) return;
+      let content = card.querySelector(':scope > .mobile-collapse-content');
+      if (!content) {
+        content = document.createElement('div');
+        content.className = 'mobile-collapse-content';
+        Array.from(card.childNodes).forEach(function(node){
+          if (node === button) return;
+          content.appendChild(node);
+        });
+        card.appendChild(content);
+      }
+
+      const action = button.querySelector('.mobile-collapse-action');
+      function sync(){
+        const collapsed = card.classList.contains('is-collapsed');
+        content.hidden = collapsed;
+        content.style.display = collapsed ? 'none' : '';
+        button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        if (action) action.textContent = collapsed ? 'Открыть' : 'Скрыть';
+      }
+
+      if (button.dataset.v7Bound !== '1') {
+        button.dataset.v7Bound = '1';
+        button.addEventListener('click', function(e){
+          e.preventDefault();
+          e.stopPropagation();
+          card.classList.toggle('is-collapsed');
+          sync();
+        }, true);
+      }
+      sync();
+    });
+  }
+
+  repairMobileAccordionsV7();
+  window.addEventListener('resize', repairMobileAccordionsV7);
+
+
+  // Stage 1 mobile UX: section icons, inline SNI check, floating save and status tips.
+  const sectionIconMap = {
+    'Настройка панели': '🎛️',
+    'Общие настройки': '⚙️',
+    'SNI-профили REALITY': '🛡️',
+    'SNI-профили': '🛡️',
+    'Резервная копия': '💾',
+    'Обновление проекта': '🔄',
+    'Сервер и обслуживание': '🖥️',
+    'Telegram-уведомления': '✈️',
+    'Безопасность': '🔒',
+    'Health Check': '🩺',
+    'Создать перенаправление': '🔀',
+    'Результат проверки соединения': '📶',
+    'Статус helper': '〽️',
+    'Активные правила': '📋',
+    'Опасная зона': '⚠️',
+    'Добавить узел': '🧩',
+    'Подсказка': '💡',
+    'Список узлов': '🗂️',
+    'Проверка узла: напрямую / через редирект': '🧭',
+    'Расхождения клиентов между агрегатором и узлами': '⇄',
+    'Подозрительные клиенты по трафику': '⚠️',
+    'iOS-safe routing / размер JSON': '📱',
+    'Настройки Telegram-бота': '🤖',
+    'Быстрая привязка Telegram ID к клиенту': '🔗',
+    'Объявление': '📣',
+    'Пользователи бота': '👥',
+    'Заявки': '🧾',
+    'Поддержка': '💬',
+    'Сколько было скачано': '📥',
+    'Потребление по узлам': '🖧',
+    'Кто больше всего потратил трафика': '🏆',
+    'Сроки заканчиваются в ближайшие 7 дней': '🗓️',
+    'Все клиенты': '👥'
+  };
+
+  function applySectionIcons(){
+    document.querySelectorAll('h2, h3, .mobile-collapse-title').forEach(function(title){
+      if (title.querySelector('.section-icon')) return;
+      const clone = title.cloneNode(true);
+      clone.querySelectorAll('.section-icon').forEach(function(icon){ icon.remove(); });
+      const text = (clone.textContent || '').replace(/^[\s\p{Extended_Pictographic}\uFE0F]+/u, '').replace(/\s+/g,' ').trim();
+      const icon = sectionIconMap[text];
+      if (!icon) return;
+      const span = document.createElement('span');
+      span.className = 'section-icon';
+      span.setAttribute('aria-hidden', 'true');
+      span.textContent = icon;
+      title.insertBefore(span, title.firstChild);
+    });
+  }
+
+  async function runInlineSniCheck(form){
+    const input = form && form.querySelector('input[name="sni"]');
+    const resultBox = form && form.querySelector('[data-sni-check-result]');
+    if (!input || !resultBox) return;
+    const sni = (input.value || '').trim();
+    resultBox.className = 'sni-check-result pending';
+    resultBox.textContent = 'Проверяю SNI...';
+    try {
+      const response = await fetch('/sni-profiles/check.json', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sni })
+      });
+      const data = await response.json().catch(function(){ return {}; });
+      if (!response.ok || !data.ok) throw new Error(data.error || 'SNI недоступен');
+      const r = data.result || {};
+      resultBox.className = 'sni-check-result ok';
+      resultBox.innerHTML = '✅ SNI доступен<small>TLS: OK · ответ: ' + (r.latencyMs || '—') + ' мс' + (r.validTo ? ' · сертификат до ' + r.validTo : '') + '</small>';
+    } catch (err) {
+      resultBox.className = 'sni-check-result err';
+      resultBox.innerHTML = '⛔ SNI недоступен<small>' + String(err.message || err).replace(/[<>]/g, '') + '</small>';
+    }
+  }
+
+  document.querySelectorAll('[data-sni-check-button]').forEach(function(button){
+    if (button.dataset.bound === '1') return;
+    button.dataset.bound = '1';
+    button.addEventListener('click', function(){ runInlineSniCheck(button.closest('form')); });
+  });
+
+
+  function setupGlobalFloatingSave(){
+    if (document.querySelector('.global-floating-save')) return;
+
+    function isProbablyDangerForm(form){
+      const action = String(form.getAttribute('action') || '').toLowerCase();
+      if (form.matches('.logout-form, .sidebar-logout, .bulk-delete-form')) return true;
+      if (/delete|remove|logout|toggle|check|extend|sync|import|backup|reorder|revision/.test(action)) return true;
+      const text = String(form.textContent || '').toLowerCase();
+      if (/удалить всех|удалить выбранных|отключить|включить|проверить|импортировать|синхронизация|продлить|logout|выйти/.test(text)) return true;
+      return false;
+    }
+    function findSubmit(form){
+      const buttons = Array.from(form.querySelectorAll('button[type="submit"], input[type="submit"]'));
+      return buttons.find(function(btn){
+        if (btn.disabled) return false;
+        if (btn.classList.contains('danger') || btn.classList.contains('btn-danger')) return false;
+        const label = String(btn.value || btn.textContent || '').toLowerCase();
+        if (/удал|отключ|включ|провер|импорт|синхрон|продл|обновить список|backup/.test(label)) return false;
+        return true;
+      }) || buttons.find(function(btn){ return !btn.disabled; }) || null;
+    }
+    function isTrackable(form){
+      if (!form || form.dataset.globalFloatingSave === 'off') return false;
+      if (String(form.method || '').toLowerCase() !== 'post') return false;
+      if (!form.querySelector('input, select, textarea')) return false;
+      if (isProbablyDangerForm(form)) return false;
+      return !!findSubmit(form);
+    }
+    const forms = Array.from(document.querySelectorAll('main form')).filter(isTrackable);
+    if (!forms.length) return;
+
+    function serialize(form){
+      const fd = new FormData(form);
+      return Array.from(fd.entries())
+        .filter(function(pair){ return !String(pair[0]).startsWith('_'); })
+        .map(function(pair){ return pair[0] + '=' + pair[1]; })
+        .sort()
+        .join('&');
+    }
+
+    const initial = new WeakMap();
+    forms.forEach(function(form){ initial.set(form, serialize(form)); });
+    let activeForm = null;
+    const bar = document.createElement('div');
+    bar.className = 'global-floating-save';
+    bar.innerHTML = '<div><strong>Есть несохранённые изменения</strong><small data-global-save-count>Можно сохранить или отменить правки</small></div><button type="button" class="btn-secondary" data-global-save-reset>Отменить изменения</button><button type="button" class="btn-main" data-global-save-submit>Сохранить</button>';
+    document.body.appendChild(bar);
+    const count = bar.querySelector('[data-global-save-count]');
+
+    function changed(form){ return serialize(form) !== initial.get(form); }
+    function changedForms(){ return forms.filter(changed); }
+    function update(form){
+      const dirty = changedForms();
+      activeForm = form && changed(form) ? form : (dirty[dirty.length - 1] || null);
+      document.body.classList.toggle('has-global-floating-save', dirty.length > 0);
+      bar.classList.toggle('is-visible', dirty.length > 0);
+      forms.forEach(function(f){
+        const isDirty = changed(f);
+        f.querySelectorAll('input, select, textarea').forEach(function(el){ el.classList.toggle('form-dirty-field', isDirty && el.matches(':focus')); });
+      });
+      if (count) count.textContent = dirty.length > 1 ? ('Несохранённых форм: ' + dirty.length) : 'Нажми «Сохранить», чтобы применить изменения';
+    }
+    forms.forEach(function(form){
+      form.addEventListener('input', function(){ update(form); }, true);
+      form.addEventListener('change', function(){ setTimeout(function(){ update(form); }, 0); }, true);
+      form.addEventListener('submit', function(){ bar.classList.remove('is-visible'); document.body.classList.remove('has-global-floating-save'); }, true);
+    });
+    bar.querySelector('[data-global-save-reset]').addEventListener('click', function(){ window.location.reload(); });
+    bar.querySelector('[data-global-save-submit]').addEventListener('click', function(){
+      if (!activeForm) return;
+      const submit = findSubmit(activeForm);
+      if (submit && typeof submit.click === 'function') submit.click();
+      else activeForm.submit();
+    });
+    update(null);
+  }
+
+  function setupMobileFloatingSave(){
+    if (!window.matchMedia || !window.matchMedia('(max-width: 900px)').matches) return;
+    if (document.querySelector('.mobile-floating-save')) return;
+
+    function findMobileSaveSubmit(form){
+      const submits = Array.from(form.querySelectorAll('button[type="submit"], input[type="submit"]'));
+      return submits.find(function(btn){
+        const action = String(btn.getAttribute('formaction') || form.getAttribute('action') || '').toLowerCase();
+        const text = String(btn.value || btn.textContent || '').toLowerCase();
+        if (btn.classList.contains('danger')) return false;
+        if (/delete|remove|logout|toggle|check|test|refresh|sync|import/.test(action)) return false;
+        if (/удал|выйти|отключ|включ|провер|тест|обнов|импорт|синхрон|продлить|создать|отправить|привязать/.test(text)) return false;
+        return true;
+      }) || null;
+    }
+
+    function isSafeSaveForm(form){
+      if (!form || form.dataset.mobileFloatingSave === 'off') return false;
+      if (form.matches('.logout-form, .sidebar-logout, .bulk-delete-form')) return false;
+      if (!form.querySelector('input, textarea, select')) return false;
+      return !!findMobileSaveSubmit(form);
+    }
+
+    const forms = Array.from(document.querySelectorAll('main form[method="post"]')).filter(isSafeSaveForm);
+    if (!forms.length) return;
+    function serializeForm(form){
+      const fd = new FormData(form);
+      return Array.from(fd.entries()).map(function(pair){ return pair[0] + '=' + pair[1]; }).sort().join('&');
+    }
+    const initial = new WeakMap();
+    forms.forEach(function(form){ initial.set(form, serializeForm(form)); form.classList.add('mobile-floating-save-source'); });
+    let activeForm = null;
+    const bar = document.createElement('div');
+    bar.className = 'mobile-floating-save hidden-soft';
+    bar.innerHTML = '<div class="mobile-floating-save-actions"><button type="button" class="btn-secondary" data-mobile-save-reset>Отменить изменения</button><button type="button" class="icon-btn" data-mobile-save-submit>💾 Сохранить</button></div><small>Есть несохранённые изменения</small>';
+    document.body.appendChild(bar);
+    const saveBtn = bar.querySelector('[data-mobile-save-submit]') || bar.querySelector('button');
+    const cancelBtn = bar.querySelector('[data-mobile-save-reset]');
+    if (cancelBtn) cancelBtn.addEventListener('click', function(){ window.location.reload(); });
+    function changed(form){ return serializeForm(form) !== initial.get(form); }
+    function changedForms(){ return forms.filter(changed); }
+    function hide(){
+      activeForm = null;
+      bar.classList.add('hidden-soft');
+      document.body.classList.remove('has-mobile-floating-save');
+    }
+    function showFor(form){
+      const dirty = changedForms();
+      if (!dirty.length) { hide(); return; }
+      activeForm = form && changed(form) ? form : dirty[dirty.length - 1];
+      bar.classList.remove('hidden-soft');
+      document.body.classList.add('has-mobile-floating-save');
+      const small = bar.querySelector('small');
+      if (small) small.textContent = dirty.length > 1 ? ('Несохранённых форм: ' + dirty.length) : 'Есть несохранённые изменения';
+    }
+    forms.forEach(function(form){
+      form.addEventListener('input', function(){ showFor(form); }, true);
+      form.addEventListener('change', function(){ setTimeout(function(){ showFor(form); }, 0); }, true);
+      form.addEventListener('submit', hide, true);
+    });
+    saveBtn.addEventListener('click', function(){
+      if (!activeForm) return;
+      const submit = findMobileSaveSubmit(activeForm) || activeForm.querySelector('button[type="submit"], input[type="submit"]');
+      if (submit && typeof submit.click === 'function') submit.click();
+      else activeForm.submit();
+    });
+  }
+
+  function setupDesktopSettingsTabs(){
+    if (!location.pathname.startsWith('/settings')) return;
+    if (!window.matchMedia || !window.matchMedia('(min-width: 901px)').matches) return;
+    const grid = document.querySelector('main > .grid');
+    if (!grid || grid.dataset.tabsReady === '1') return;
+    const sections = Array.from(grid.querySelectorAll(':scope > section.card'));
+    if (sections.length < 3) return;
+    grid.dataset.tabsReady = '1';
+    grid.classList.add('desktop-settings-grid');
+    const tabMeta = sections.map(function(section, index){
+      const title = (section.querySelector('h2') && section.querySelector('h2').textContent || ('Раздел ' + (index + 1))).replace(/\s+/g,' ').trim();
+      const id = 'settings-tab-' + index;
+      section.id = section.id || id;
+      section.classList.add('settings-tab-panel');
+      section.dataset.settingsTab = id;
+      return { id: id, title: title, section: section };
+    });
+    const tabs = document.createElement('div');
+    tabs.className = 'settings-tabs';
+    tabs.setAttribute('role', 'tablist');
+    tabs.innerHTML = tabMeta.map(function(item, index){
+      return '<button type="button" class="settings-tab-btn" role="tab" data-settings-tab="' + item.id + '">' + item.title + '</button>';
+    }).join('');
+    grid.parentNode.insertBefore(tabs, grid);
+    function activate(id){
+      tabMeta.forEach(function(item){
+        const active = item.id === id;
+        item.section.classList.toggle('is-active', active);
+        item.section.classList.toggle('settings-tab-hidden', !active);
+      });
+      tabs.querySelectorAll('[data-settings-tab]').forEach(function(btn){
+        btn.classList.toggle('is-active', btn.getAttribute('data-settings-tab') === id);
+      });
+      // Вкладки настроек не запоминаются при переходе из левого меню.
+    }
+    tabs.addEventListener('click', function(e){
+      const btn = e.target.closest('[data-settings-tab]');
+      if (!btn) return;
+      activate(btn.getAttribute('data-settings-tab'));
+    });
+    const fromUrl = (function(){ try { return new URL(location.href).searchParams.get('settings_tab') || ''; } catch(e) { return ''; } })();
+    activate(tabMeta.some(function(x){ return x.id === fromUrl; }) ? fromUrl : tabMeta[0].id);
+
+    setupGeneralSettingsSubtabs(sections[0]);
+  }
+
+  function setupGeneralSettingsSubtabs(section){
+    if (!section || section.dataset.subtabsReady === '1') return;
+    const formGrid = section.querySelector('form .form-grid');
+    if (!formGrid) return;
+    section.dataset.subtabsReady = '1';
+    const children = Array.from(formGrid.children).filter(function(el){ return el.classList && el.classList.contains('field'); });
+    const groups = [];
+    let current = { title: 'Основное', icon: '⚙️', nodes: [] };
+    function pushCurrent(){ if (current.nodes.length) groups.push(current); }
+    children.forEach(function(el){
+      const h3 = el.querySelector('h3');
+      if (h3) {
+        const text = (h3.textContent || '').trim();
+        pushCurrent();
+        if (text.indexOf('Адреса') >= 0) current = { title: 'Адреса', icon: '🔗', nodes: [el] };
+        else if (text.indexOf('Текст помощи') >= 0) current = { title: 'Текст помощи', icon: '💬', nodes: [el] };
+        else if (text.indexOf('Happ-инфо') >= 0) current = { title: 'Happ-инфо', icon: '📱', nodes: [el] };
+        else if (text.indexOf('JSON/Xray') >= 0) current = { title: 'JSON/Xray', icon: '🧩', nodes: [el] };
+        else if (text.indexOf('Happ:') >= 0) current = { title: 'Happ', icon: '⚡', nodes: [el] };
+        else if (text.indexOf('Доступ') >= 0) current = { title: 'Админка', icon: '🔒', nodes: [el] };
+        else current = { title: text || 'Раздел', icon: '•', nodes: [el] };
+      } else {
+        current.nodes.push(el);
+      }
+    });
+    pushCurrent();
+    if (groups.length < 2) return;
+    const nav = document.createElement('div');
+    nav.className = 'settings-subtabs';
+    const panels = [];
+    groups.forEach(function(group, idx){
+      const id = 'general-subtab-' + idx;
+      const panel = document.createElement('div');
+      panel.className = 'settings-subpanel';
+      panel.dataset.generalSubtab = id;
+      group.nodes.forEach(function(node){ panel.appendChild(node); });
+      formGrid.insertBefore(panel, formGrid.firstChild);
+      panels.push(panel);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'settings-subtab-btn';
+      btn.dataset.generalSubtab = id;
+      btn.innerHTML = '<span>' + group.icon + '</span>' + group.title;
+      nav.appendChild(btn);
+    });
+    formGrid.insertBefore(nav, formGrid.firstChild);
+    function activateSub(id){
+      panels.forEach(function(panel){ panel.classList.toggle('is-active', panel.dataset.generalSubtab === id); });
+      nav.querySelectorAll('button').forEach(function(btn){ btn.classList.toggle('is-active', btn.dataset.generalSubtab === id); });
+    }
+    nav.addEventListener('click', function(e){
+      const btn = e.target.closest('button[data-general-subtab]');
+      if (btn) activateSub(btn.dataset.generalSubtab);
+    });
+    activateSub('general-subtab-0');
+  }
+
+  function ensureStatusInfoModal(){
+    let modal = document.getElementById('clientStatusInfoModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'clientStatusInfoModal';
+    modal.className = 'modal hidden client-status-info-modal';
+    modal.innerHTML = '<div class="modal-card client-status-info-card" role="dialog" aria-modal="true">' +
+      '<button type="button" class="modal-close" data-status-info-close>×</button>' +
+      '<div class="client-status-info-icon" data-status-info-icon></div>' +
+      '<h2 data-status-info-title>Статус клиента</h2>' +
+      '<p data-status-info-text></p>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(e){ if (e.target === modal || e.target.closest('[data-status-info-close]')) modal.classList.add('hidden'); });
+    return modal;
+  }
+  document.querySelectorAll('.client-status-icon, .mobile-status-pill, .quick-status').forEach(function(button){
+    if (button.dataset.bound === '1') return;
+    button.dataset.bound = '1';
+    button.addEventListener('click', function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      const text = button.getAttribute('data-status-text') || button.getAttribute('title') || button.textContent || 'Статус клиента';
+      const label = button.getAttribute('data-status-label') || button.getAttribute('title') || button.textContent || 'Статус клиента';
+      const key = ['online','warning','expired','offline'].find(function(k){ return button.classList.contains(k); }) || 'online';
+      const modal = ensureStatusInfoModal();
+      modal.querySelector('[data-status-info-icon]').className = 'client-status-info-icon ' + key;
+      modal.querySelector('[data-status-info-title]').textContent = label.trim() || 'Статус клиента';
+      modal.querySelector('[data-status-info-text]').textContent = text.trim();
+      modal.classList.remove('hidden');
+    });
+  });
+
+
+
+
+  function htmlEscapeClientModal(value){
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function ensureClientLinkPickerModal(){
+    let modal = document.getElementById('clientLinkPickerModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'clientLinkPickerModal';
+    modal.className = 'modal hidden client-link-picker-modal';
+    modal.innerHTML = '<div class="modal-card client-link-picker-card" role="dialog" aria-modal="true" aria-labelledby="clientLinkPickerTitle">' +
+      '<button type="button" class="modal-close" data-client-link-close aria-label="Закрыть">×</button>' +
+      '<h2 id="clientLinkPickerTitle">Ссылки клиента</h2>' +
+      '<p class="muted">Выберите формат. Доступны только форматы, включённые в настройках панели.</p>' +
+      '<div class="client-link-picker-list" data-client-link-list></div>' +
+      '<div class="client-link-qr-preview" data-client-link-qr-preview hidden>' +
+        '<strong data-client-link-qr-title>QR-код</strong>' +
+        '<img data-client-link-qr alt="QR-код подписки">' +
+        '<code data-client-link-qr-text></code>' +
+      '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    modal.addEventListener('click', async function(event){
+      if (event.target === modal || event.target.closest('[data-client-link-close]')) {
+        modal.classList.add('hidden');
+        return;
+      }
+      const action = event.target.closest('[data-client-link-action]');
+      if (!action) return;
+      event.preventDefault();
+      const url = String(action.dataset.url || '');
+      const label = String(action.dataset.label || 'Подписка');
+      if (!url) return;
+      if (action.dataset.clientLinkAction === 'qr') {
+        const preview = modal.querySelector('[data-client-link-qr-preview]');
+        const image = modal.querySelector('[data-client-link-qr]');
+        modal.querySelector('[data-client-link-qr-title]').textContent = label + ' · QR-код';
+        modal.querySelector('[data-client-link-qr-text]').textContent = url;
+        image.src = '/qr?text=' + encodeURIComponent(url);
+        preview.hidden = false;
+        preview.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        return;
+      }
+      try {
+        if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(url);
+        else {
+          const input = document.createElement('textarea');
+          input.value = url;
+          input.setAttribute('readonly', '');
+          input.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand('copy');
+          input.remove();
+        }
+        const previous = action.textContent;
+        action.textContent = 'Скопировано';
+        setTimeout(function(){ action.textContent = previous; }, 1200);
+      } catch (_) {
+        window.prompt('Скопируйте ссылку:', url);
+      }
+    });
+    return modal;
+  }
+
+  function openClientLinkPicker(source, preferredAction){
+    const element = source && source.dataset ? source : null;
+    if (!element) return false;
+    const entries = [
+      { label: 'JSON', description: 'JSON/Xray — для Happ и совместимых клиентов', url: element.dataset.jsonLink || '' },
+      { label: 'SUB', description: 'Универсальная подписка — для Hiddify, v2rayNG и других', url: element.dataset.subLink || '' },
+      { label: 'HAPP', description: 'Отдельная HAPP-ссылка панели', url: element.dataset.happLink || '' }
+    ].filter(function(item){ return String(item.url || '').trim(); });
+    if (!entries.length) return false;
+
+    const modal = ensureClientLinkPickerModal();
+    const clientTitle = String(element.dataset.clientLinkTitle || '').trim();
+    modal.querySelector('#clientLinkPickerTitle').textContent = clientTitle ? ('Ссылки: ' + clientTitle) : 'Ссылки клиента';
+    modal.querySelector('[data-client-link-list]').innerHTML = entries.map(function(item){
+      const url = htmlEscapeClientModal(item.url);
+      const label = htmlEscapeClientModal(item.label);
+      return '<article class="client-link-option-card">' +
+        '<div><strong>' + label + '</strong><small>' + htmlEscapeClientModal(item.description) + '</small><code>' + url + '</code></div>' +
+        '<div class="client-link-option-actions">' +
+          '<button type="button" class="btn-main" data-client-link-action="copy" data-label="' + label + '" data-url="' + url + '">Копировать</button>' +
+          '<button type="button" class="btn-secondary" data-client-link-action="qr" data-label="' + label + '" data-url="' + url + '">QR-код</button>' +
+        '</div>' +
+      '</article>';
+    }).join('');
+    modal.querySelector('[data-client-link-qr-preview]').hidden = true;
+    modal.classList.remove('hidden');
+    const preferred = preferredAction === 'qr' ? 'qr' : 'copy';
+    setTimeout(function(){ modal.querySelector('[data-client-link-action="' + preferred + '"]')?.focus(); }, 0);
+    return false;
+  }
+  window.openClientLinkPicker = openClientLinkPicker;
+
+  function setClientQuickModalOpen(modal, isOpen){
+    if (!modal) return;
+    modal.classList.toggle('hidden', !isOpen);
+    document.body.classList.toggle('client-quick-open', !!isOpen);
+    if (isOpen) {
+      const card = modal.querySelector('.client-quick-card');
+      if (card) card.scrollTop = 0;
+    }
+  }
+
+  function ensureClientQuickModal(){
+    let modal = document.getElementById('clientQuickModal');
+    if (modal) return modal;
+    modal = document.createElement('div');
+    modal.id = 'clientQuickModal';
+    modal.className = 'modal hidden client-quick-modal';
+    modal.innerHTML = '<div class="modal-card client-quick-card" role="dialog" aria-modal="true">' +
+      '<button type="button" class="modal-close" data-client-quick-close aria-label="Закрыть">×</button>' +
+      '<div data-client-quick-body></div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(e){
+      if (e.target === modal || e.target.closest('[data-client-quick-close]')) setClientQuickModalOpen(modal, false);
+    });
+    window.addEventListener('keydown', function(e){
+      if (e.key === 'Escape' && !modal.classList.contains('hidden')) setClientQuickModalOpen(modal, false);
+    });
+    return modal;
+  }
+
+  async function openClientQuickCard(id){
+    const modal = ensureClientQuickModal();
+    const bodyEl = modal.querySelector('[data-client-quick-body]');
+    const pendingOnlineContext = window.__aggOnlineClientContext;
+    const onlineContext = pendingOnlineContext && String(pendingOnlineContext.id || '') === String(id || '')
+      ? pendingOnlineContext
+      : null;
+    if (onlineContext) window.__aggOnlineClientContext = null;
+    setClientQuickModalOpen(modal, true);
+    bodyEl.innerHTML = '<div class="client-quick-loading">Загружаю клиента...</div>';
+    try {
+      const response = await fetch('/clients/' + encodeURIComponent(id) + '/summary.json', { headers: { 'Accept': 'application/json' }});
+      const data = await response.json().catch(function(){ return {}; });
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Не удалось открыть клиента');
+      const c = data.client || {};
+      const nodes = onlineContext && Array.isArray(onlineContext.nodes)
+        ? onlineContext.nodes
+        : (Array.isArray(c.nodes) ? c.nodes : []);
+      function nodeLabel(n){
+        if (typeof n === 'string') return String(n || '').replace(/^🌐\s*/u, '').trim();
+        const name = String((n && (n.title || n.name || n.label)) || '').replace(/^🌐\s*/u, '').trim();
+        const country = String((n && (n.countryName || n.countryNameRu)) || '').trim();
+        const label = (name && name !== 'Узел') ? name : country;
+        return String(label || '').replace(/^🌐\s*/u, '').trim();
+      }
+      function nodeFlag(n){
+        const raw = typeof n === 'object' && n ? n : {};
+        function emojiFromCode(code){
+          const cc = String(code || '').trim().toUpperCase();
+          if (!/^[A-Z]{2}$/.test(cc) || ['ZZ','XX'].indexOf(cc) >= 0) return '';
+          return Array.from(cc).map(function(ch){ return String.fromCodePoint(0x1F1E6 + ch.charCodeAt(0) - 65); }).join('');
+        }
+        const textFlag = String(raw.countryFlag || raw.country_flag || raw.flag || '').trim();
+        const code = String(raw.countryCode || raw.country_code || '').trim();
+        const emoji = (textFlag && textFlag !== '🌐' && !/^[a-z]{2}$/i.test(textFlag)) ? textFlag : emojiFromCode(code || textFlag);
+        if (emoji) return htmlEscapeClientModal(emoji);
+        const kindRaw = String(raw.nodeType || raw.node_type || '');
+        const kind = ['remnawave', 'h1cloud', 'h1cloud_3xui'].indexOf(kindRaw) >= 0 ? kindRaw : '3xui';
+        const glyph = kind === 'remnawave'
+          ? '<circle cx="12" cy="12" r="2.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M5 19a10 10 0 0 1 0-14M19 5a10 10 0 0 1 0 14"/>'
+          : (kind.indexOf('h1cloud') === 0
+            ? '<path d="M5 17.5h14"/><path d="M8 17.5v-4.2a4 4 0 0 1 8 0v4.2"/><circle cx="12" cy="6" r="2"/><path d="M4.5 9.5a8.5 8.5 0 0 1 15 0"/>'
+            : '<rect x="4" y="5" width="16" height="5.5" rx="1.6"/><rect x="4" y="13.5" width="16" height="5.5" rx="1.6"/><path d="M7 7.8h.01M7 16.2h.01"/>');
+        return '<span class="node-type-fallback node-type-' + kind + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + glyph + '</svg></span>';
+      }
+      const cleanNodes = nodes.filter(function(n){ const label = nodeLabel(n); return label && label !== 'Узел'; });
+      const nodesHtml = cleanNodes.length ? cleanNodes.map(function(n){
+        const flag = nodeFlag(n);
+        return '<span class="client-quick-node-chip">' + (flag ? '<span class="client-quick-node-flag">' + flag + '</span>' : '') + '<b>' + htmlEscapeClientModal(nodeLabel(n)) + '</b></span>';
+      }).join('') : '<span class="client-quick-node-chip empty">' + (onlineContext ? 'Онлайн-узлы не определены' : 'Узлы не назначены') + '</span>';
+      const trafficLimitText = c.trafficGb && Number(c.trafficGb) > 0 ? c.trafficGb + ' ГБ' : '∞';
+      const trafficText = String(c.trafficUsedText || '0 Б') + ' / ' + trafficLimitText;
+      const limitIpText = c.limitIp && Number(c.limitIp) > 0 ? String(c.limitIp) : '∞';
+      const subLink = c.links && c.links.sub ? String(c.links.sub) : '';
+      const jsonLink = c.links && c.links.json ? String(c.links.json) : '';
+      const happLink = c.links && c.links.happ ? String(c.links.happ) : '';
+      const openLink = c.links && c.links.open ? String(c.links.open) : '#';
+      const editorLink = c.links && c.links.editor ? String(c.links.editor) : (c.links && c.links.search ? String(c.links.search) : '/clients');
+      const clientId = String(c.id || '').trim();
+      const backPath = location.pathname === '/dashboard' ? '/dashboard' : '/clients';
+      const avatarLetter = String(c.login || c.title || 'U').trim().slice(0,1).toUpperCase() || 'U';
+      const createdText = c.createdText || c.createdAt || '—';
+      const connectedText = onlineContext ? 'Да' : (c.connectedNow ? 'Да' : 'Нет');
+      const lastOnlineText = c.lastOnlineText || 'Нет данных';
+      bodyEl.innerHTML =
+        '<div class="client-quick-hero">' +
+          '<div class="client-quick-avatar">' + htmlEscapeClientModal(avatarLetter) + '</div>' +
+          '<div class="client-quick-title"><h2>' + htmlEscapeClientModal(c.title || c.login || 'Клиент') + '</h2><p>@' + htmlEscapeClientModal(c.login || '-') + '</p></div>' +
+        '</div>' +
+        '<div class="client-quick-status-row"><button type="button" class="client-quick-status-strip quick-status ' + htmlEscapeClientModal(c.statusKey || 'online') + '" data-status-label="' + htmlEscapeClientModal(c.statusLabel || 'Статус') + '" data-status-text="' + htmlEscapeClientModal(c.statusText || '') + '">' + htmlEscapeClientModal(c.statusLabel || 'Статус') + '</button></div>' +
+        (c.comment ? '<div class="client-quick-comment">' + htmlEscapeClientModal(c.comment) + '</div>' : '') +
+        '<div class="client-quick-note ' + htmlEscapeClientModal(c.statusKey || '') + '">' + htmlEscapeClientModal(c.statusText || '') + '</div>' +
+        '<div class="client-quick-primary-actions">' +
+          '<a class="btn-main" href="' + htmlEscapeClientModal(editorLink) + '">Перейти к клиенту</a>' +
+          (clientId ? '<form method="post" action="/clients/' + encodeURIComponent(clientId) + '/extend" class="client-quick-renew-form js-long-action" data-loading-title="Продлеваю клиента" data-loading-text="Срок продлевается на узлах клиента.">' +
+            '<input type="hidden" name="back" value="' + htmlEscapeClientModal(backPath) + '">' +
+            '<input name="days" type="number" min="1" value="30" inputmode="numeric" aria-label="Количество дней продления">' +
+            '<button type="submit" class="btn-secondary">Продлить</button>' +
+          '</form>' : '') +
+        '</div>' +
+        '<div class="client-quick-section-title">Общая информация</div>' +
+        '<div class="client-quick-info-grid">' +
+          '<div><span>ID клиента</span><strong>#' + htmlEscapeClientModal(c.id || '-') + '</strong></div>' +
+          '<div><span>Логин</span><strong>' + htmlEscapeClientModal(c.login || '-') + '</strong></div>' +
+          '<div><span>Статус</span><strong>' + htmlEscapeClientModal(c.statusLabel || '-') + '</strong></div>' +
+          '<div><span>Тип</span><strong>Основной</strong></div>' +
+          '<div><span>Сейчас в сети</span><strong>' + htmlEscapeClientModal(connectedText) + '</strong></div>' +
+          '<div><span>Последний раз в сети</span><strong>' + htmlEscapeClientModal(lastOnlineText) + '</strong></div>' +
+          '<div><span>Действует до</span><strong>' + htmlEscapeClientModal(c.expiryText || '∞') + '</strong></div>' +
+          '<div><span>Осталось</span><strong>' + htmlEscapeClientModal(c.daysLeft) + ' дн.</strong></div>' +
+          '<div><span>Трафик</span><strong>' + htmlEscapeClientModal(trafficText) + '</strong></div>' +
+          '<div><span>Лимит дней</span><strong>' + htmlEscapeClientModal(c.durationDays || '∞') + '</strong></div>' +
+          '<div><span>Лимит IP</span><strong>' + htmlEscapeClientModal(limitIpText) + '</strong></div>' +
+          '<div><span>' + (onlineContext ? 'Узлов онлайн сейчас' : 'Узлов') + '</span><strong>' + htmlEscapeClientModal(onlineContext ? cleanNodes.length : (c.nodeCount || 0)) + '</strong></div>' +
+          '<div><span>Создан</span><strong>' + htmlEscapeClientModal(createdText) + '</strong></div>' +
+          '<div><span>UUID</span><strong>' + htmlEscapeClientModal(c.uuid || '—') + '</strong></div>' +
+        '</div>' +
+        '<div class="client-quick-section-title">' + (onlineContext ? 'Узлы, где клиент онлайн сейчас' : 'Узлы') + '</div>' +
+        '<div class="client-quick-nodes-grid">' + nodesHtml + '</div>' +
+        '<div class="client-quick-actions modern">' +
+          '<a class="btn-secondary" href="' + htmlEscapeClientModal(openLink) + '" target="_blank">Открыть в панели</a>' +
+          '<form method="post" action="/clients/' + encodeURIComponent(String(c.id || '')) + '/toggle" class="client-quick-toggle-form js-long-action" onsubmit="return confirm(&quot;Изменить статус клиента?&quot;)"><button type="submit" class="btn-secondary danger-lite">' + (c.statusKey === 'offline' ? 'Включить' : 'Отключить') + '</button></form>' +
+          ((subLink || jsonLink || happLink) ? '<button type="button" class="btn-main" data-client-link-title="' + htmlEscapeClientModal(c.login || c.title || '') + '" data-json-link="' + htmlEscapeClientModal(jsonLink) + '" data-sub-link="' + htmlEscapeClientModal(subLink) + '" data-happ-link="' + htmlEscapeClientModal(happLink) + '" onclick="openClientLinkPicker(this, &quot;copy&quot;)">Копировать ссылку</button>' : '') +
+          ((subLink || jsonLink || happLink) ? '<button type="button" class="btn-secondary" data-client-link-title="' + htmlEscapeClientModal(c.login || c.title || '') + '" data-json-link="' + htmlEscapeClientModal(jsonLink) + '" data-sub-link="' + htmlEscapeClientModal(subLink) + '" data-happ-link="' + htmlEscapeClientModal(happLink) + '" onclick="openClientLinkPicker(this, &quot;qr&quot;)">QR-код</button>' : '') +
+        '</div>';
+      bodyEl.querySelectorAll('form.js-long-action').forEach(function(form){
+        form.addEventListener('submit', function(){
+          if (typeof showLoading === 'function') showLoading(form.dataset.loadingTitle, form.dataset.loadingText);
+        }, { once: true });
+      });
+    } catch (err) {
+      bodyEl.innerHTML = '<div class="client-quick-error">' + htmlEscapeClientModal(err.message || err) + '<br><a class="btn-main" href="/clients">Открыть клиентов</a></div>';
+    }
+  }
+
+  window.openClientQuickCard = openClientQuickCard;
+
+  document.addEventListener('click', function(e){
+    const statusBtn = e.target.closest('.client-status-icon, .mobile-status-pill, .quick-status');
+    if (statusBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const text = statusBtn.getAttribute('data-status-text') || statusBtn.getAttribute('title') || statusBtn.textContent || 'Статус клиента';
+      const label = statusBtn.getAttribute('data-status-label') || statusBtn.getAttribute('title') || statusBtn.textContent || 'Статус клиента';
+      const key = ['online','warning','expired','offline'].find(function(k){ return statusBtn.classList.contains(k); }) || 'online';
+      const modal = ensureStatusInfoModal();
+      modal.querySelector('[data-status-info-icon]').className = 'client-status-info-icon ' + key;
+      modal.querySelector('[data-status-info-title]').textContent = label.trim() || 'Статус клиента';
+      modal.querySelector('[data-status-info-text]').textContent = text.trim();
+      modal.classList.remove('hidden');
+      return;
+    }
+    const quick = e.target.closest('[data-client-quick]');
+    if (quick) {
+      e.preventDefault();
+      openClientQuickCard(quick.getAttribute('data-client-quick'));
+      return;
+    }
+    const copy = e.target.closest('[data-copy-client-link]');
+    if (copy) {
+      const text = copy.getAttribute('data-copy-client-link') || '';
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(function(){ const oldCopyHtml = copy.innerHTML; copy.textContent = 'Скопировано'; setTimeout(function(){ copy.innerHTML = oldCopyHtml; }, 1000); }).catch(function(){ alert('Не удалось скопировать'); });
+    }
+  });
+
+  function setupDesktopPageTabs(){
+    document.querySelectorAll('[data-page-tabs]').forEach(function(tabbar){
+      if (tabbar.dataset.bound === '1') return;
+      tabbar.dataset.bound = '1';
+      const scope = tabbar.parentElement || document;
+      const tabKey = tabbar.dataset.pageTabs || location.pathname.replace(/[^a-z0-9_-]+/gi, '_');
+      const buttons = Array.from(tabbar.querySelectorAll('[data-tab-target]'));
+      const panels = Array.from(scope.querySelectorAll('[data-tab-panel]'));
+      function activate(target, persist){
+        if (!target || !buttons.some(function(btn){ return btn.dataset.tabTarget === target; })) {
+          target = (buttons.find(function(btn){ return btn.classList.contains('is-active'); }) || buttons[0] || {}).dataset?.tabTarget;
+        }
+        if (!target) return;
+        buttons.forEach(function(btn){ btn.classList.toggle('is-active', btn.dataset.tabTarget === target); });
+        panels.forEach(function(panel){ panel.classList.toggle('is-active', panel.dataset.tabPanel === target); });
+        // Не запоминаем вкладку между переходами из левого меню: новый вход в раздел открывает первую вкладку.
+      }
+      tabbar.addEventListener('click', function(e){
+        const btn = e.target.closest('[data-tab-target]');
+        if (!btn) return;
+        e.preventDefault();
+        activate(btn.dataset.tabTarget, true);
+        try {
+          const url = new URL(location.href);
+          url.searchParams.set('tab', btn.dataset.tabTarget);
+          history.replaceState(null, '', url.toString());
+        } catch (_) {}
+      });
+      let initial = '';
+      try {
+        const url = new URL(location.href);
+        initial = url.searchParams.get('tab') || (location.hash || '').replace(/^#tab-/, '');
+        // localStorage намеренно не используем: сохранение вкладки работает только через URL/возврат после формы.
+      } catch (_) {}
+      const current = buttons.find(function(btn){ return btn.dataset.tabTarget === initial; }) || buttons.find(function(btn){ return btn.classList.contains('is-active'); }) || buttons[0];
+      if (current) activate(current.dataset.tabTarget, false);
+    });
+  }
+
+  function setupReturnPositionRestore(){
+    const key = 'agg.return.' + location.pathname;
+    document.addEventListener('submit', function(e){
+      const form = e.target;
+      if (!form || !form.matches || !form.matches('form')) return;
+      try {
+        const activeTabs = {};
+        document.querySelectorAll('[data-page-tabs]').forEach(function(tabbar){
+          const tabKey = tabbar.dataset.pageTabs || 'page';
+          const active = tabbar.querySelector('[data-tab-target].is-active');
+          if (active) activeTabs[tabKey] = active.dataset.tabTarget;
+        });
+        localStorage.setItem(key, JSON.stringify({ y: window.scrollY || 0, tabs: activeTabs, t: Date.now() }));
+      } catch (_) {}
+    }, true);
+    window.addEventListener('load', function(){
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        localStorage.removeItem(key);
+        if (!saved || Date.now() - Number(saved.t || 0) > 120000) return;
+        if (saved.tabs) {
+          Object.keys(saved.tabs).forEach(function(tabKey){
+            const esc = (window.CSS && CSS.escape) ? CSS.escape : function(v){ return String(v).replace(/\"/g, '\\"'); };
+            const tabbar = document.querySelector('[data-page-tabs="' + esc(tabKey) + '"]');
+            const target = saved.tabs[tabKey];
+            const btn = tabbar && tabbar.querySelector('[data-tab-target="' + esc(target) + '"]');
+            if (btn) btn.click();
+          });
+        }
+        const y = Number(saved.y || 0);
+        if (y > 0) setTimeout(function(){ window.scrollTo({ top: y, behavior: 'auto' }); }, 40);
+      } catch (_) {}
+    });
+  }
+
+  function setupPagedLists(){
+    document.querySelectorAll('.paged-list').forEach(function(list){
+      if (list.dataset.pagedReady === '1') return;
+      const pageSize = Math.max(1, Number(list.dataset.pageSize || 6));
+      const items = Array.from(list.children).filter(function(el){ return el.nodeType === 1; });
+      if (items.length <= pageSize) return;
+      list.dataset.pagedReady = '1';
+      let page = 0;
+      const controls = document.createElement('div');
+      controls.className = 'pager-controls';
+      controls.innerHTML = '<button type="button" class="secondary" data-prev>←</button><span></span><button type="button" class="secondary" data-next>→</button>';
+      list.after(controls);
+      const label = controls.querySelector('span');
+      const prev = controls.querySelector('[data-prev]');
+      const next = controls.querySelector('[data-next]');
+      const totalPages = Math.ceil(items.length / pageSize);
+      function renderPage(){
+        items.forEach(function(item, idx){ item.style.display = (idx >= page * pageSize && idx < (page + 1) * pageSize) ? '' : 'none'; });
+        label.textContent = 'Страница ' + (page + 1) + ' из ' + totalPages;
+        prev.disabled = page === 0;
+        next.disabled = page >= totalPages - 1;
+      }
+      prev.addEventListener('click', function(){ if (page > 0) { page -= 1; renderPage(); } });
+      next.addEventListener('click', function(){ if (page < totalPages - 1) { page += 1; renderPage(); } });
+      renderPage();
+    });
+  }
+
+  applySectionIcons();
+  setupDesktopSettingsTabs();
+  setupDesktopPageTabs();
+  setupReturnPositionRestore();
+  setupPagedLists();
+  // stage63: legacy floating-save disabled; strict tracker is initialized below.
+  setTimeout(applySectionIcons, 80);
+
+})();
+</script>
+<script>
+(function(){
+  function sanitizeDomain(v){ return String(v || '').trim().replace(/^https?:\/\//,'').replace(/[\/].*$/,'').replace(/:\d+$/,''); }
+  const REC = {
+    vless: {
+      raw: ['REALITY обычно использует <strong>RAW/TCP + security=reality</strong>. Рекомендуется домен с TLS 443.', 'SNI: <code>{domain}</code>', 'Target/dest: <code>{domain}:443</code>', 'uTLS: <code>firefox</code> или выбери другой fingerprint из списка', 'Header type: <code>none</code>'],
+      tcp: ['TCP для VLESS обычно аналогичен RAW.', 'SNI: <code>{domain}</code>', 'Target/dest: <code>{domain}:443</code>', 'uTLS: <code>firefox</code> или выбери другой fingerprint из списка'],
+      ws: ['WebSocket чаще используют с CDN/доменом.', 'Path: <code>/{slug}</code>', 'Host: <code>{domain}</code>', 'TLS/SNI: <code>{domain}</code>'],
+      grpc: ['gRPC требует serviceName и домен.', 'serviceName: <code>{slug}</code>', 'mode: <code>gun</code>', 'SNI/Host: <code>{domain}</code>'],
+      httpupgrade: ['HTTP Upgrade похож на WebSocket.', 'Path: <code>/{slug}</code>', 'Host: <code>{domain}</code>'],
+      xhttp: ['xHTTP: для современных обходов обычно нужен путь и домен.', 'Path: <code>/xhttp-{slug}</code>', 'Host/SNI: <code>{domain}</code>', 'Mode: <code>auto</code> (или проверенный режим провайдера)', 'Не фиксируйте <code>scMinPostsIntervalMs=30</code> и <code>scMaxEachPostBytes=1000000</code>: оставьте поле пустым, чтобы использовать актуальные значения Xray. Для свежего XMUX upstream использует <code>maxConnections=6</code>.'],
+      kcp: ['mKCP лучше использовать только если понимаешь ограничения UDP.', 'Header type: <code>none</code>', 'Seed: можно оставить пустым']
+    },
+    trojan: { raw: ['Trojan обычно использует TLS и домен.', 'SNI: <code>{domain}</code>', 'Transport RAW/TCP или WS', 'Flow Vision не используется.'], ws: ['Trojan + WS: Path <code>/{slug}</code>, Host <code>{domain}</code>.'] },
+    shadowsocks: { raw: ['Shadowsocks обычно не требует SNI/Target.', 'Проверь method/password в оригинальной 3x-ui.', 'Для клиентов агрегатор будет использовать пароль из 3x-ui, если он отдан API.'] },
+    wireguard: { raw: ['WireGuard маршрутизирует по IP/CIDR, не по доменам напрямую.', 'Рекомендуется домен панели/endpoint только если он реально резолвится на сервер.', 'Проверь public/private key, IP peer и AllowedIPs в оригинальной 3x-ui.'] },
+    hysteria: { raw: ['Hysteria/Hysteria2 работает поверх UDP и чаще требует домен с TLS-сертификатом.', 'Рекомендуется использовать домен сервера, а не голый IP, если включена TLS-проверка.', 'Порт должен быть UDP и открыт в firewall.'] },
+    http: { raw: ['HTTP inbound обычно без SNI. Используй только для доверенных сценариев.'] },
+    mixed: { raw: ['Mixed/SOCKS/HTTP inbound обычно без SNI. Проверь авторизацию и порт.'] },
+    tunnel: { raw: ['Tunnel/Dokodemo-door требует target address/port в оригинальной 3x-ui. В агрегаторе лучше загрузить готовый inbound из панели.'] }
+  };
+  function slug(){ return Math.random().toString(36).slice(2, 9); }
+  function lines(protocol, network, domain){
+    const p = REC[protocol] || REC.vless;
+    const arr = p[network] || p.raw || REC.vless.raw;
+    const s = slug();
+    const d = sanitizeDomain(domain) || (protocol === 'hysteria' ? 'vpn.example.com' : 'www.cloudflare.com');
+    return arr.map(x => x.replaceAll('{domain}', d).replaceAll('{slug}', s));
+  }
+  function renderRec(root){
+    const pSel = root.querySelector('[data-rec-protocol]');
+    const nSel = root.querySelector('[data-rec-network]');
+    const dInp = root.querySelector('[data-rec-domain]');
+    const out = root.querySelector('[data-rec-output]');
+    if (!out) return;
+    const protocol = String(pSel && pSel.value || 'vless').toLowerCase();
+    const network = String(nSel && nSel.value || 'raw').toLowerCase();
+    const domain = sanitizeDomain(dInp && dInp.value || '');
+    const items = lines(protocol, network, domain);
+    out.innerHTML = '<strong>Рекомендуется:</strong><ul><li>' + items.join('</li><li>') + '</li></ul>';
+  }
+  function setValue(name, value){
+    const el = document.querySelector('[name="' + name + '"]');
+    if (el && value !== undefined && value !== null) { el.value = value; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
+  }
+  function applyRec(root){
+    const pSel = root.querySelector('[data-rec-protocol]');
+    const nSel = root.querySelector('[data-rec-network]');
+    const dInp = root.querySelector('[data-rec-domain]');
+    const protocol = String(pSel && pSel.value || 'vless').toLowerCase();
+    const network = String(nSel && nSel.value || 'raw').toLowerCase();
+    const domain = sanitizeDomain(dInp && dInp.value || '') || 'www.cloudflare.com';
+    const s = slug();
+    setValue('inbound_protocol', protocol);
+    setValue('inbound_network', network);
+    if (['vless','trojan','hysteria'].includes(protocol)) {
+      setValue('inbound_sni', domain);
+      setValue('inbound_target', domain + ':443');
+      setValue('inbound_fingerprint_select', 'firefox');
+    }
+    if (network === 'ws' || network === 'httpupgrade') { setValue('inbound_path', '/' + s); setValue('inbound_host', domain); }
+    if (network === 'grpc') { setValue('inbound_service_name', s); setValue('inbound_grpc_mode', 'gun'); }
+    if (network === 'xhttp') { setValue('inbound_path', '/xhttp-' + s); setValue('inbound_host', domain); setValue('inbound_xhttp_mode', 'auto'); setValue('inbound_xhttp_sc', ''); }
+    if (network === 'raw' || network === 'tcp' || network === 'kcp') setValue('inbound_header_type', 'none');
+    renderRec(root);
+  }
+  function initRecommendations(){
+    document.querySelectorAll('[data-protocol-recommend-root]').forEach(root => {
+      const pSel = root.querySelector('[data-rec-protocol]');
+      const nSel = root.querySelector('[data-rec-network]');
+      const dInp = root.querySelector('[data-rec-domain]');
+      const syncP = pSel && pSel.dataset.syncSelect ? document.getElementById(pSel.dataset.syncSelect) : null;
+      const syncN = nSel && nSel.dataset.syncSelect ? document.getElementById(nSel.dataset.syncSelect) : null;
+      if (syncP && pSel) pSel.value = String(syncP.value || pSel.value || 'vless').toLowerCase();
+      if (syncN && nSel) nSel.value = String(syncN.value || nSel.value || 'raw').toLowerCase();
+      [pSel,nSel,dInp,syncP,syncN].filter(Boolean).forEach(el => el.addEventListener('input', () => { if (el === syncP && pSel) pSel.value = syncP.value; if (el === syncN && nSel) nSel.value = syncN.value; renderRec(root); }));
+      [pSel,nSel,dInp,syncP,syncN].filter(Boolean).forEach(el => el.addEventListener('change', () => { if (el === syncP && pSel) pSel.value = syncP.value; if (el === syncN && nSel) nSel.value = syncN.value; renderRec(root); }));
+      const btn = root.querySelector('[data-apply-recommendations]');
+      if (btn) btn.addEventListener('click', () => applyRec(root));
+      renderRec(root);
+    });
+  }
+  function initSniModeLocks(){
+    document.querySelectorAll('select[data-sni-source], select[name="sni_mode"]').forEach(select => {
+      const form = select.closest('form') || document;
+      const profileWrap = form.querySelector('[data-sni-profile-field]');
+      const manualWrap = form.querySelector('[data-sni-manual-field]');
+      function sync(){
+        const mode = String(select.value || 'inbound');
+        const profileActive = mode === 'profile';
+        const manualActive = mode === 'manual';
+        if (profileWrap) {
+          profileWrap.classList.toggle('is-disabled-by-sni-mode', !profileActive);
+          profileWrap.querySelectorAll('select,input,textarea').forEach(el => el.disabled = !profileActive);
+        }
+        if (manualWrap) {
+          manualWrap.classList.toggle('is-disabled-by-sni-mode', !manualActive);
+          manualWrap.querySelectorAll('select,input,textarea').forEach(el => el.disabled = !manualActive);
+        }
+      }
+      select.addEventListener('change', sync); sync();
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ initRecommendations(); initSniModeLocks(); });
+  else { initRecommendations(); initSniModeLocks(); }
+})();
+</script>
+
+
+
+<div id="orderEditorModal" class="modal hidden order-modal" onclick="window.closeOrderEditorModal && window.closeOrderEditorModal(event)">
+  <div class="modal-card order-modal-card" onclick="event.stopPropagation()">
+    <button type="button" class="modal-close" data-order-modal-close>×</button>
+    <h2>Настроить порядок</h2>
+    <p class="muted">Перетащи пункты или используй стрелки. Сохрани порядок или верни стандартный.</p>
+    <div class="order-modal-sections" id="orderModalSections"></div>
+    <div class="modal-actions order-modal-actions">
+      <button type="button" class="secondary" data-order-reset-all>По умолчанию</button>
+      <button type="button" class="btn-main" data-order-save-all>Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const configs = [
+    { root: () => document.querySelector('.desktop-modern-nav'), selector: ':scope > a', key: 'agg.order.sidebar.v1', title: 'Левое меню', id: el => el.getAttribute('href') || el.textContent.trim(), label: el => el.textContent.trim() },
+    { root: () => document.querySelector('.desktop-page-tabs[data-page-tabs]'), selector: ':scope > button[data-tab-target]', key: () => 'agg.order.tabs.' + (document.querySelector('.desktop-page-tabs[data-page-tabs]')?.dataset.pageTabs || 'page') + '.v1', title: 'Вкладки страницы', id: el => el.dataset.tabTarget || el.textContent.trim(), label: el => el.textContent.trim() },
+    { root: () => document.querySelector('.settings-tabs'), selector: ':scope > button[data-settings-tab]', key: 'agg.order.settings.tabs.v1', title: 'Вкладки настроек', id: el => el.dataset.settingsTab || el.textContent.trim(), label: el => el.textContent.trim() }
+  ];
+  function keyOf(cfg){ return typeof cfg.key === 'function' ? cfg.key() : cfg.key; }
+  function items(cfg){ const root = cfg.root(); return root ? Array.from(root.querySelectorAll(cfg.selector)) : []; }
+  function applySaved(cfg){
+    const root = cfg.root(); if (!root) return;
+    let order = [];
+    try { order = JSON.parse(localStorage.getItem(keyOf(cfg)) || '[]'); } catch(_) {}
+    if (!Array.isArray(order) || !order.length) return;
+    const map = new Map(items(cfg).map(el => [cfg.id(el), el]));
+    order.forEach(id => { const el = map.get(id); if (el) root.appendChild(el); });
+  }
+  function applyAllSaved(){ configs.forEach(applySaved); }
+  function moveModalRow(row, dir){
+    const parent = row && row.parentElement; if (!parent) return;
+    if (dir < 0 && row.previousElementSibling) parent.insertBefore(row, row.previousElementSibling);
+    if (dir > 0 && row.nextElementSibling) parent.insertBefore(row.nextElementSibling, row);
+  }
+  function buildModal(){
+    const box = document.getElementById('orderModalSections'); if (!box) return;
+    box.innerHTML = '';
+    configs.forEach((cfg, cfgIndex) => {
+      const els = items(cfg); if (!els.length) return;
+      const section = document.createElement('section');
+      section.className = 'order-modal-section';
+      section.dataset.cfgIndex = String(cfgIndex);
+      section.innerHTML = '<h3>' + cfg.title + '</h3><div class="order-modal-list"></div>';
+      const list = section.querySelector('.order-modal-list');
+      els.forEach(el => {
+        const row = document.createElement('div');
+        row.className = 'order-modal-row';
+        row.draggable = true;
+        row.dataset.orderId = cfg.id(el);
+        row.innerHTML = '<span class="order-grip">⠿</span><strong></strong><button type="button" class="secondary" data-order-up>↑</button><button type="button" class="secondary" data-order-down>↓</button>';
+        row.querySelector('strong').textContent = cfg.label(el).replace(/\s+/g, ' ').trim();
+        list.appendChild(row);
+      });
+      box.appendChild(section);
+    });
+  }
+  function saveModal(){
+    document.querySelectorAll('.order-modal-section').forEach(section => {
+      const cfg = configs[Number(section.dataset.cfgIndex)]; if (!cfg) return;
+      const order = Array.from(section.querySelectorAll('.order-modal-row')).map(row => row.dataset.orderId).filter(Boolean);
+      localStorage.setItem(keyOf(cfg), JSON.stringify(order));
+      applySaved(cfg);
+    });
+  }
+  window.openOrderEditorModal = function(){ buildModal(); document.getElementById('orderEditorModal')?.classList.remove('hidden'); };
+  window.closeOrderEditorModal = function(e){ if (!e || e.target.id === 'orderEditorModal' || e.target.closest('[data-order-modal-close]')) document.getElementById('orderEditorModal')?.classList.add('hidden'); };
+  document.addEventListener('DOMContentLoaded', () => {
+    applyAllSaved();
+    document.querySelectorAll('[data-open-order-modal]').forEach(btn => btn.addEventListener('click', window.openOrderEditorModal));
+    document.addEventListener('click', e => {
+      if (e.target.closest('[data-order-modal-close]')) window.closeOrderEditorModal(e);
+      if (e.target.closest('[data-order-save-all]')) { saveModal(); window.closeOrderEditorModal({target:{id:'orderEditorModal'}}); }
+      if (e.target.closest('[data-order-reset-all]')) { configs.forEach(cfg => localStorage.removeItem(keyOf(cfg))); location.reload(); }
+      const up = e.target.closest('[data-order-up]'); if (up) moveModalRow(up.closest('.order-modal-row'), -1);
+      const down = e.target.closest('[data-order-down]'); if (down) moveModalRow(down.closest('.order-modal-row'), 1);
+    });
+    let dragged = null;
+    document.addEventListener('dragstart', e => { const row = e.target.closest('.order-modal-row'); if (!row) return; dragged = row; row.classList.add('dragging'); });
+    document.addEventListener('dragend', () => { if (dragged) dragged.classList.remove('dragging'); dragged = null; });
+    document.addEventListener('dragover', e => {
+      if (!dragged) return;
+      const list = e.target.closest('.order-modal-list'); if (!list || !list.contains(dragged)) return;
+      e.preventDefault();
+      const rows = Array.from(list.querySelectorAll('.order-modal-row')).filter(r => r !== dragged);
+      const next = rows.find(row => e.clientY <= row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2);
+      list.insertBefore(dragged, next || null);
+    });
+  });
+})();
+</script>
+
+<script>
+(function(){
+  // stage57 final: direct close handlers for order editor.
+  function closeOrderModalNow(){ document.getElementById('orderEditorModal')?.classList.add('hidden'); }
+  document.addEventListener('click', function(e){
+    if (e.target.closest('[data-order-modal-close]')) { e.preventDefault(); e.stopPropagation(); closeOrderModalNow(); }
+  }, true);
+  window.closeOrderEditorModal = function(e){
+    if (!e || e.target?.id === 'orderEditorModal' || e.target?.closest?.('[data-order-modal-close]')) closeOrderModalNow();
+  };
+
+  // stage57 final: reliable API auth visibility in add/edit node forms.
+  function syncApiAuth(select){
+    if (!select) return;
+    const form = select.closest('form');
+    if (!form) return;
+    const mode = String(select.value || 'token') === 'password' ? 'password' : 'token';
+    form.classList.toggle('auth-token-active', mode === 'token');
+    form.classList.toggle('auth-password-active', mode === 'password');
+    const root = select.dataset.target ? document.getElementById(select.dataset.target) : form;
+    const scope = root || form;
+    scope.querySelectorAll('.auth-token-fields').forEach(function(el){
+      const hide = mode !== 'token'; el.hidden = hide; el.classList.toggle('hidden', hide); el.style.setProperty('display', hide ? 'none' : 'flex', 'important');
+    });
+    scope.querySelectorAll('.auth-password-fields').forEach(function(el){
+      const hide = mode !== 'password'; el.hidden = hide; el.classList.toggle('hidden', hide); el.style.setProperty('display', hide ? 'none' : 'grid', 'important');
+    });
+    scope.querySelectorAll('[data-required-when]').forEach(function(input){
+      const need = input.dataset.requiredWhen === mode;
+      const saved = input.dataset.hasSavedSecret === '1';
+      input.disabled = !need;
+      input.required = need && !saved;
+    });
+  }
+  function syncAllAuth(){ document.querySelectorAll('.js-api-auth-mode').forEach(syncApiAuth); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', syncAllAuth); else syncAllAuth();
+  document.addEventListener('change', function(e){ if (e.target.matches && e.target.matches('.js-api-auth-mode')) syncApiAuth(e.target); }, true);
+  setTimeout(syncAllAuth, 120);
+
+  // stage57 final: simple robust dirty-save fallback for configuration forms.
+  function ensureBar(){
+    let bar = document.querySelector('.global-floating-save');
+    if (bar) return bar;
+    bar = document.createElement('div');
+    bar.className = 'global-floating-save';
+    bar.innerHTML = '<div><strong>Есть несохранённые изменения</strong><small>Сохрани или отмени правки</small></div><button type="button" class="btn-secondary" data-global-save-reset>Отменить изменения</button><button type="button" class="btn-main" data-global-save-submit>Сохранить</button>';
+    document.body.appendChild(bar);
+    return bar;
+  }
+  function safeSubmit(form){
+    if (!form) return null;
+    return Array.from(form.querySelectorAll('button[type="submit"],input[type="submit"]')).find(function(btn){
+      const txt = String(btn.textContent || btn.value || '').toLowerCase();
+      return !/удал|отключ|включ|провер|импорт|синхрон|продл|обновить список|выйти/.test(txt) && !btn.classList.contains('danger') && !btn.classList.contains('btn-danger');
+    }) || null;
+  }
+  function isConfigForm(form){
+    if (!form || form.matches('.logout-form,.sidebar-logout,.bulk-delete-form')) return false;
+    if (form.dataset.globalFloatingSave === 'off') return false;
+    if (String(form.method || '').toLowerCase() !== 'post') return false;
+    if (!form.querySelector('input,select,textarea')) return false;
+    if (!safeSubmit(form)) return false;
+    const path = location.pathname;
+    return /\/(routing|redirects|settings|telegram-bot|nodes|clients|diagnostics)/.test(path);
+  }
+  function serialize(form){
+    return Array.from(new FormData(form).entries()).map(function(pair){ return pair[0] + '=' + pair[1]; }).sort().join('&');
+  }
+  function bindDirtyFallback(){
+    const forms = Array.from(document.querySelectorAll('main form')).filter(isConfigForm);
+    if (!forms.length) return;
+    const initial = new WeakMap();
+    forms.forEach(function(form){ if (!initial.has(form)) initial.set(form, serialize(form)); });
+    let active = null;
+    const bar = ensureBar();
+    function dirtyForms(){ return forms.filter(function(f){ return serialize(f) !== initial.get(f); }); }
+    function update(form){
+      const dirty = dirtyForms();
+      active = form && dirty.includes(form) ? form : dirty[dirty.length - 1] || null;
+      document.body.classList.toggle('has-global-floating-save', dirty.length > 0);
+      bar.classList.toggle('is-visible', dirty.length > 0);
+      const small = bar.querySelector('small'); if (small) small.textContent = dirty.length > 1 ? 'Несохранённых форм: ' + dirty.length : 'Сохрани или отмени правки';
+    }
+    forms.forEach(function(form){
+      if (form.dataset.stage57DirtyBound === '1') return;
+      form.dataset.stage57DirtyBound = '1';
+      form.addEventListener('input', function(){ update(form); }, true);
+      form.addEventListener('change', function(){ setTimeout(function(){ update(form); },0); }, true);
+      form.addEventListener('submit', function(){ document.body.classList.remove('has-global-floating-save'); bar.classList.remove('is-visible'); }, true);
+    });
+    const reset = bar.querySelector('[data-global-save-reset]');
+    const submit = bar.querySelector('[data-global-save-submit]');
+    if (reset && reset.dataset.stage57Bound !== '1') { reset.dataset.stage57Bound='1'; reset.addEventListener('click', function(){ location.reload(); }); }
+    if (submit && submit.dataset.stage57Bound !== '1') { submit.dataset.stage57Bound='1'; submit.addEventListener('click', function(){ const btn = safeSubmit(active); if (btn) btn.click(); }); }
+    update(null);
+  }
+  // stage63: legacy dirty fallback disabled.
+})();
+</script>
+
+<script>
+(function(){
+  // stage58: one reliable control layer for order editor, API auth visibility and dirty-save.
+  const ORDER_CONFIGS = [
+    { root: () => document.querySelector('.desktop-modern-nav'), selector: ':scope > a', key: 'agg.order.sidebar.v1', title: 'Левое меню', id: el => el.getAttribute('href') || el.textContent.trim(), label: el => el.textContent.trim() },
+    { root: () => document.querySelector('.desktop-page-tabs[data-page-tabs]'), selector: ':scope > button[data-tab-target]', key: () => 'agg.order.tabs.' + (document.querySelector('.desktop-page-tabs[data-page-tabs]')?.dataset.pageTabs || 'page') + '.v1', title: 'Вкладки страницы', id: el => el.dataset.tabTarget || el.textContent.trim(), label: el => el.textContent.trim() },
+    { root: () => document.querySelector('.settings-tabs'), selector: ':scope > button[data-settings-tab]', key: 'agg.order.settings.tabs.v1', title: 'Вкладки настроек', id: el => el.dataset.settingsTab || el.textContent.trim(), label: el => el.textContent.trim() }
+  ];
+  function orderKey(cfg){ return typeof cfg.key === 'function' ? cfg.key() : cfg.key; }
+  function orderItems(cfg){ const root = cfg.root(); return root ? Array.from(root.querySelectorAll(cfg.selector)) : []; }
+  function applyOrder(cfg){
+    const root = cfg.root(); if (!root) return;
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem(orderKey(cfg)) || '[]'); } catch(_) {}
+    if (!Array.isArray(saved) || !saved.length) return;
+    const map = new Map(orderItems(cfg).map(el => [cfg.id(el), el]));
+    saved.forEach(id => { const el = map.get(id); if (el) root.appendChild(el); });
+  }
+  function applyAllOrders(){ ORDER_CONFIGS.forEach(applyOrder); }
+  function buildOrderModal(){
+    const box = document.getElementById('orderModalSections'); if (!box) return;
+    box.innerHTML = '';
+    ORDER_CONFIGS.forEach(function(cfg, idx){
+      const items = orderItems(cfg); if (!items.length) return;
+      const section = document.createElement('section');
+      section.className = 'order-modal-section';
+      section.dataset.cfgIndex = String(idx);
+      section.innerHTML = '<h3>' + cfg.title + '</h3><div class="order-modal-list"></div>';
+      const list = section.querySelector('.order-modal-list');
+      items.forEach(function(el){
+        const row = document.createElement('div');
+        row.className = 'order-modal-row';
+        row.draggable = true;
+        row.dataset.orderId = cfg.id(el);
+        row.innerHTML = '<button type="button" class="order-grip" title="Перетащить">⠿</button><strong></strong><div class="order-arrows"><button type="button" class="secondary" data-order-up>↑</button><button type="button" class="secondary" data-order-down>↓</button></div>';
+        row.querySelector('strong').textContent = cfg.label(el).replace(/\s+/g, ' ').trim();
+        list.appendChild(row);
+      });
+      box.appendChild(section);
+    });
+  }
+  function saveOrderModal(){
+    document.querySelectorAll('#orderEditorModal .order-modal-section').forEach(function(section){
+      const cfg = ORDER_CONFIGS[Number(section.dataset.cfgIndex)]; if (!cfg) return;
+      const ids = Array.from(section.querySelectorAll('.order-modal-row')).map(row => row.dataset.orderId).filter(Boolean);
+      localStorage.setItem(orderKey(cfg), JSON.stringify(ids));
+      applyOrder(cfg);
+    });
+  }
+  function moveRow(row, dir){
+    const list = row && row.parentElement; if (!list) return;
+    if (dir < 0 && row.previousElementSibling) list.insertBefore(row, row.previousElementSibling);
+    if (dir > 0 && row.nextElementSibling) list.insertBefore(row.nextElementSibling, row);
+  }
+  window.openOrderEditorModal = function(){ buildOrderModal(); document.getElementById('orderEditorModal')?.classList.remove('hidden'); };
+  window.closeOrderEditorModal = function(){ document.getElementById('orderEditorModal')?.classList.add('hidden'); };
+  document.addEventListener('DOMContentLoaded', applyAllOrders);
+  applyAllOrders();
+  document.addEventListener('click', function(e){
+    const open = e.target.closest('[data-open-order-modal]');
+    if (open) { e.preventDefault(); e.stopPropagation(); window.openOrderEditorModal(); return; }
+    const modal = document.getElementById('orderEditorModal');
+    if (e.target.closest('[data-order-modal-close]') || e.target === modal) { e.preventDefault(); e.stopPropagation(); window.closeOrderEditorModal(); return; }
+    const up = e.target.closest('[data-order-up]'); if (up) { e.preventDefault(); e.stopPropagation(); moveRow(up.closest('.order-modal-row'), -1); return; }
+    const down = e.target.closest('[data-order-down]'); if (down) { e.preventDefault(); e.stopPropagation(); moveRow(down.closest('.order-modal-row'), 1); return; }
+    if (e.target.closest('[data-order-save-all]')) { e.preventDefault(); e.stopPropagation(); saveOrderModal(); window.closeOrderEditorModal(); return; }
+    if (e.target.closest('[data-order-reset-all]')) { e.preventDefault(); e.stopPropagation(); ORDER_CONFIGS.forEach(cfg => localStorage.removeItem(orderKey(cfg))); window.closeOrderEditorModal(); location.reload(); return; }
+  }, true);
+  let dragged = null;
+  document.addEventListener('dragstart', function(e){ const row = e.target.closest('#orderEditorModal .order-modal-row'); if (!row) return; dragged = row; row.classList.add('dragging'); });
+  document.addEventListener('dragend', function(){ if (dragged) dragged.classList.remove('dragging'); dragged = null; });
+  document.addEventListener('dragover', function(e){
+    if (!dragged) return;
+    const list = e.target.closest('#orderEditorModal .order-modal-list'); if (!list || !list.contains(dragged)) return;
+    e.preventDefault();
+    const rows = Array.from(list.querySelectorAll('.order-modal-row')).filter(r => r !== dragged);
+    const next = rows.find(row => e.clientY <= row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2);
+    list.insertBefore(dragged, next || null);
+  });
+
+  function syncAuthMode(select){
+    if (!select) return;
+    const form = select.closest('form');
+    const root = (select.dataset.target && document.getElementById(select.dataset.target)) || form;
+    if (!root) return;
+    const mode = String(select.value || 'token') === 'password' ? 'password' : 'token';
+    if (form) { form.classList.toggle('auth-token-active', mode === 'token'); form.classList.toggle('auth-password-active', mode === 'password'); }
+    root.querySelectorAll('.auth-password-fields').forEach(function(el){
+      const hide = mode !== 'password';
+      el.hidden = hide; el.classList.toggle('hidden', hide);
+      el.style.setProperty('display', hide ? 'none' : 'grid', 'important');
+      el.querySelectorAll('input,select,textarea').forEach(function(i){ i.disabled = hide; i.required = !hide && i.dataset.requiredWhen === 'password' && i.dataset.hasSavedSecret !== '1'; });
+    });
+    root.querySelectorAll('.auth-token-fields').forEach(function(el){
+      const hide = mode !== 'token';
+      el.hidden = hide; el.classList.toggle('hidden', hide);
+      el.style.setProperty('display', hide ? 'none' : 'flex', 'important');
+      el.querySelectorAll('input,select,textarea').forEach(function(i){ i.disabled = hide; i.required = !hide && i.dataset.requiredWhen === 'token' && i.dataset.hasSavedSecret !== '1'; });
+    });
+  }
+  function syncAllAuthModes(){ document.querySelectorAll('.js-api-auth-mode').forEach(syncAuthMode); }
+  document.addEventListener('DOMContentLoaded', syncAllAuthModes);
+  document.addEventListener('change', function(e){ if (e.target.matches && e.target.matches('.js-api-auth-mode')) syncAuthMode(e.target); }, true);
+  setTimeout(syncAllAuthModes, 0); setTimeout(syncAllAuthModes, 250); setTimeout(syncAllAuthModes, 800);
+
+  function ensureUniversalSaveBar(){
+    let bar = document.querySelector('.global-floating-save');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'global-floating-save';
+      bar.innerHTML = '<div><strong>Есть несохранённые изменения</strong><small>Сохрани или отмени правки</small></div><button type="button" class="btn-secondary" data-global-save-reset>Отменить изменения</button><button type="button" class="btn-main" data-global-save-submit>Сохранить</button>';
+      document.body.appendChild(bar);
+    }
+    return bar;
+  }
+  function safeSubmitFor(form){
+    return Array.from((form||document).querySelectorAll('button[type="submit"],input[type="submit"]')).find(function(btn){
+      const label = String(btn.textContent || btn.value || '').toLowerCase();
+      const action = String(btn.getAttribute('formaction') || form?.getAttribute('action') || '').toLowerCase();
+      if (btn.disabled || btn.classList.contains('danger') || btn.classList.contains('btn-danger')) return false;
+      if (/delete|remove|logout|toggle|check|test|refresh|sync|import|extend/.test(action)) return false;
+      if (/удал|выйти|отключ|включ|провер|тест|обнов|импорт|синхрон|продл|создать|отправить|привязать/.test(label)) return false;
+      return true;
+    }) || null;
+  }
+  function serializeForm(form){
+    try { return Array.from(new FormData(form).entries()).map(p => p[0] + '=' + p[1]).sort().join('&'); } catch(_) { return ''; }
+  }
+  function bindUniversalDirtySave(){
+    const pathOk = /\/(routing|redirects|settings|telegram-bot|nodes|clients|diagnostics)/.test(location.pathname);
+    if (!pathOk) return;
+    const forms = Array.from(document.querySelectorAll('main form[method="post"]')).filter(function(form){
+      if (form.matches('.logout-form,.sidebar-logout,.bulk-delete-form,.inline-form,.mini-extend-form,.extend-form')) return false;
+      if (form.dataset.globalFloatingSave === 'off') return false;
+      if (!form.querySelector('input,select,textarea')) return false;
+      return !!safeSubmitFor(form);
+    });
+    if (!forms.length) return;
+    const bar = ensureUniversalSaveBar();
+    const initial = new WeakMap();
+    forms.forEach(f => { if (!initial.has(f)) initial.set(f, serializeForm(f)); });
+    let active = null;
+    function dirtyForms(){ return forms.filter(f => serializeForm(f) !== initial.get(f)); }
+    function update(form){
+      const dirty = dirtyForms();
+      active = form && dirty.includes(form) ? form : dirty[dirty.length - 1] || null;
+      bar.classList.toggle('is-visible', dirty.length > 0);
+      document.body.classList.toggle('has-global-floating-save', dirty.length > 0);
+      const small = bar.querySelector('small'); if (small) small.textContent = dirty.length > 1 ? 'Несохранённых форм: ' + dirty.length : 'Сохрани или отмени правки';
+    }
+    forms.forEach(function(form){
+      if (form.dataset.stage58DirtyBound === '1') return;
+      form.dataset.stage58DirtyBound = '1';
+      form.addEventListener('input', function(){ update(form); }, true);
+      form.addEventListener('change', function(){ setTimeout(function(){ update(form); }, 0); }, true);
+      form.addEventListener('submit', function(){ bar.classList.remove('is-visible'); document.body.classList.remove('has-global-floating-save'); }, true);
+    });
+    const reset = bar.querySelector('[data-global-save-reset]');
+    if (reset && reset.dataset.stage58Bound !== '1') { reset.dataset.stage58Bound='1'; reset.addEventListener('click', function(){ location.reload(); }); }
+    const submit = bar.querySelector('[data-global-save-submit]');
+    if (submit && submit.dataset.stage58Bound !== '1') { submit.dataset.stage58Bound='1'; submit.addEventListener('click', function(){ const btn = active && safeSubmitFor(active); if (btn) btn.click(); else if (active) active.submit(); }); }
+    update(null);
+  }
+  // stage63: legacy universal dirty tracker disabled.
+})();
+</script>
+
+
+<script>
+(function(){
+  // stage59: final guard for false dirty bar, auth visibility and order modal controls.
+  function formDataString(form){
+    try {
+      return Array.from(new FormData(form).entries())
+        .filter(function(p){ return !String(p[0]||'').startsWith('_'); })
+        .map(function(p){ return String(p[0]) + '=' + String(p[1]); })
+        .sort().join('&');
+    } catch(_) { return ''; }
+  }
+  function safeSubmit(form){
+    if (!form) return null;
+    return Array.from(form.querySelectorAll('button[type="submit"],input[type="submit"]')).find(function(btn){
+      const label = String(btn.textContent || btn.value || '').toLowerCase();
+      const action = String(btn.getAttribute('formaction') || form.getAttribute('action') || '').toLowerCase();
+      if (btn.disabled || btn.classList.contains('danger') || btn.classList.contains('btn-danger')) return false;
+      if (/delete|remove|logout|toggle|check|test|refresh|sync|import|extend/.test(action)) return false;
+      if (/удал|выйти|отключ|включ|провер|тест|обнов|импорт|синхрон|продл|создать|отправить|привязать/.test(label)) return false;
+      return true;
+    }) || null;
+  }
+  function trackableForms(){
+    if (!/\/(routing|redirects|settings|telegram-bot|nodes|clients|diagnostics)/.test(location.pathname)) return [];
+    return Array.from(document.querySelectorAll('main form[method="post"]')).filter(function(form){
+      if (form.matches('.logout-form,.sidebar-logout,.bulk-delete-form,.inline-form,.mini-extend-form,.extend-form')) return false;
+      if (form.dataset.globalFloatingSave === 'off') return false;
+      if (!form.querySelector('input,select,textarea')) return false;
+      return !!safeSubmit(form);
+    });
+  }
+  function ensureStage59SaveBar(){
+    document.querySelectorAll('.global-floating-save').forEach(function(bar){ if (!bar.dataset.stage59) bar.remove(); });
+    let bar = document.querySelector('.global-floating-save[data-stage59="1"]');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'global-floating-save';
+      bar.dataset.stage59 = '1';
+      bar.innerHTML = '<div><strong>Есть несохранённые изменения</strong><small>Сохрани или отмени правки</small></div><button type="button" class="btn-secondary" data-stage59-reset>Отменить изменения</button><button type="button" class="btn-main" data-stage59-submit>Сохранить</button>';
+      document.body.appendChild(bar);
+    }
+    return bar;
+  }
+  function setupStage59Dirty(){
+    const forms = trackableForms();
+    if (!forms.length) return;
+    const bar = ensureStage59SaveBar();
+    const initial = new WeakMap();
+    let active = null;
+    function snapshot(){ forms.forEach(function(f){ initial.set(f, formDataString(f)); }); update(null); }
+    function dirtyForms(){ return forms.filter(function(f){ return formDataString(f) !== initial.get(f); }); }
+    function update(form){
+      const dirty = dirtyForms();
+      active = form && dirty.includes(form) ? form : (dirty[dirty.length-1] || null);
+      const on = dirty.length > 0;
+      bar.classList.toggle('is-visible', on);
+      document.body.classList.toggle('has-global-floating-save', on);
+      document.querySelectorAll('.global-floating-save').forEach(function(other){ if (other !== bar) other.classList.remove('is-visible'); });
+      const small = bar.querySelector('small'); if (small) small.textContent = dirty.length > 1 ? ('Несохранённых форм: ' + dirty.length) : 'Сохрани или отмени правки';
+    }
+    forms.forEach(function(form){
+      if (form.dataset.stage59DirtyBound === '1') return;
+      form.dataset.stage59DirtyBound = '1';
+      form.addEventListener('input', function(){ update(form); }, true);
+      form.addEventListener('change', function(){ setTimeout(function(){ update(form); }, 20); }, true);
+      form.addEventListener('submit', function(){ bar.classList.remove('is-visible'); document.body.classList.remove('has-global-floating-save'); }, true);
+    });
+    bar.querySelector('[data-stage59-reset]').onclick = function(){ location.reload(); };
+    bar.querySelector('[data-stage59-submit]').onclick = function(){ const btn = active && safeSubmit(active); if (btn) btn.click(); else if (active) active.submit(); };
+    // Important: snapshot after all page scripts finish hiding/disabling fields.
+    setTimeout(snapshot, 900);
+    setTimeout(snapshot, 1500);
+    document.addEventListener('click', function(e){
+      // Clicking tabs or empty space must not create dirty state.
+      if (e.target.closest('[data-settings-tab], [data-tab-target], .desktop-page-tabs, .settings-tabs')) setTimeout(function(){ update(null); }, 40);
+    }, true);
+    const mo = new MutationObserver(function(){ setTimeout(function(){ if (!dirtyForms().length) { bar.classList.remove('is-visible'); document.body.classList.remove('has-global-floating-save'); } }, 20); });
+    mo.observe(document.body, { attributes:true, attributeFilter:['class'] });
+  }
+
+  function syncApiAuthStage59(select){
+    if (!select) return;
+    const form = select.closest('form');
+    const root = (select.dataset.target && document.getElementById(select.dataset.target)) || form;
+    if (!root) return;
+    const mode = String(select.value || 'token') === 'password' ? 'password' : 'token';
+    if (form) { form.classList.toggle('auth-token-active', mode === 'token'); form.classList.toggle('auth-password-active', mode === 'password'); }
+    root.querySelectorAll('.auth-password-fields').forEach(function(el){
+      const hide = mode !== 'password';
+      el.hidden = hide; el.classList.toggle('hidden', hide); el.style.setProperty('display', hide ? 'none' : 'grid', 'important');
+      el.querySelectorAll('input,select,textarea').forEach(function(i){ i.disabled = hide; i.required = !hide && i.dataset.requiredWhen === 'password' && i.dataset.hasSavedSecret !== '1'; });
+    });
+    root.querySelectorAll('.auth-token-fields').forEach(function(el){
+      const hide = mode !== 'token';
+      el.hidden = hide; el.classList.toggle('hidden', hide); el.style.setProperty('display', hide ? 'none' : 'flex', 'important');
+      el.querySelectorAll('input,select,textarea').forEach(function(i){ i.disabled = hide; i.required = !hide && i.dataset.requiredWhen === 'token' && i.dataset.hasSavedSecret !== '1'; });
+    });
+  }
+  function setupStage59Auth(){
+    document.querySelectorAll('.js-api-auth-mode').forEach(function(select){ syncApiAuthStage59(select); });
+    document.addEventListener('change', function(e){ if (e.target.matches && e.target.matches('.js-api-auth-mode')) syncApiAuthStage59(e.target); }, true);
+    setTimeout(function(){ document.querySelectorAll('.js-api-auth-mode').forEach(syncApiAuthStage59); }, 250);
+  }
+
+  function orderConfigs(){ return [
+    { root: function(){ return document.querySelector('.desktop-modern-nav'); }, selector: ':scope > a', key: 'agg.order.sidebar.v1', id: function(el){ return el.getAttribute('href') || el.textContent.trim(); } },
+    { root: function(){ return document.querySelector('.desktop-page-tabs[data-page-tabs]'); }, selector: ':scope > button[data-tab-target]', key: function(){ return 'agg.order.tabs.' + (document.querySelector('.desktop-page-tabs[data-page-tabs]')?.dataset.pageTabs || 'page') + '.v1'; }, id: function(el){ return el.dataset.tabTarget || el.textContent.trim(); } },
+    { root: function(){ return document.querySelector('.settings-tabs'); }, selector: ':scope > button[data-settings-tab]', key: 'agg.order.settings.tabs.v1', id: function(el){ return el.dataset.settingsTab || el.textContent.trim(); } }
+  ]; }
+  function orderKey(cfg){ return typeof cfg.key === 'function' ? cfg.key() : cfg.key; }
+  function orderItems(cfg){ const root = cfg.root(); return root ? Array.from(root.querySelectorAll(cfg.selector)) : []; }
+  function applyOneOrder(cfg){
+    const root = cfg.root(); if (!root) return;
+    let order=[]; try { order = JSON.parse(localStorage.getItem(orderKey(cfg)) || '[]'); } catch(_){}
+    if (!Array.isArray(order) || !order.length) return;
+    const map = new Map(orderItems(cfg).map(function(el){ return [cfg.id(el), el]; }));
+    order.forEach(function(id){ const el = map.get(id); if (el) root.appendChild(el); });
+  }
+  window.__stage59OrderMove = function(btn, dir){
+    const row = btn && btn.closest && btn.closest('.order-modal-row'); if (!row || !row.parentNode) return;
+    if (dir < 0 && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+    if (dir > 0 && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+  };
+  window.__stage59OrderSave = function(){
+    const configs = orderConfigs();
+    document.querySelectorAll('#orderEditorModal .order-modal-section').forEach(function(section){
+      const cfg = configs[Number(section.dataset.cfgIndex)]; if (!cfg) return;
+      const ids = Array.from(section.querySelectorAll('.order-modal-row')).map(function(row){ return row.dataset.orderId; }).filter(Boolean);
+      localStorage.setItem(orderKey(cfg), JSON.stringify(ids));
+      applyOneOrder(cfg);
+    });
+    document.getElementById('orderEditorModal')?.classList.add('hidden');
+  };
+  window.__stage59OrderReset = function(){ orderConfigs().forEach(function(cfg){ localStorage.removeItem(orderKey(cfg)); }); location.reload(); };
+  function setupStage59Order(){
+    orderConfigs().forEach(applyOneOrder);
+    // direct robust handlers for modal controls
+    document.addEventListener('click', function(e){
+      const up = e.target.closest('[data-order-up]'); if (up) { e.preventDefault(); window.__stage59OrderMove(up, -1); return; }
+      const down = e.target.closest('[data-order-down]'); if (down) { e.preventDefault(); window.__stage59OrderMove(down, 1); return; }
+      if (e.target.closest('[data-order-save-all]')) { e.preventDefault(); window.__stage59OrderSave(); return; }
+      if (e.target.closest('[data-order-reset-all]')) { e.preventDefault(); window.__stage59OrderReset(); return; }
+    }, true);
+  }
+
+  function boot(){ setupStage59Auth(); setupStage59Order(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>
+
+
+<script>
+(function(){
+  // stage60: strict final UI guards for tabs/order/dirty-save after all older handlers.
+  function formDataString(form){
+    try {
+      return Array.from(new FormData(form).entries())
+        .filter(function(p){ return !String(p[0] || '').startsWith('_'); })
+        .map(function(p){ return String(p[0]) + '=' + String(p[1]); })
+        .sort().join('&');
+    } catch(_) { return ''; }
+  }
+  function safeSubmit(form){
+    if (!form) return null;
+    return Array.from(form.querySelectorAll('button[type="submit"],input[type="submit"]')).find(function(btn){
+      const label = String(btn.textContent || btn.value || '').toLowerCase();
+      const action = String(btn.getAttribute('formaction') || form.getAttribute('action') || '').toLowerCase();
+      if (btn.disabled || btn.classList.contains('danger') || btn.classList.contains('btn-danger')) return false;
+      if (/delete|remove|logout|toggle|check|test|refresh|sync|import|extend|reorder/.test(action)) return false;
+      if (/удал|выйти|отключ|включ|провер|тест|обнов|импорт|синхрон|продл|создать|отправить|привязать/.test(label)) return false;
+      return true;
+    }) || null;
+  }
+  function trackableForms(){
+    if (!/\/(routing|redirects|settings|telegram-bot|nodes|clients|diagnostics)/.test(location.pathname)) return [];
+    return Array.from(document.querySelectorAll('main form[method="post"]')).filter(function(form){
+      if (form.matches('.logout-form,.sidebar-logout,.bulk-delete-form,.inline-form,.mini-extend-form,.extend-form')) return false;
+      if (form.dataset.globalFloatingSave === 'off') return false;
+      if (!form.querySelector('input,select,textarea')) return false;
+      return !!safeSubmit(form);
+    });
+  }
+  function ensureBar(){
+    document.querySelectorAll('.global-floating-save').forEach(function(bar){
+      if (bar.dataset.stage60 !== '1') bar.remove();
+    });
+    let bar = document.querySelector('.global-floating-save[data-stage60="1"]');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'global-floating-save';
+      bar.dataset.stage60 = '1';
+      bar.innerHTML = '<div><strong>Есть несохранённые изменения</strong><small>Сохрани или отмени правки</small></div><button type="button" class="btn-secondary" data-stage60-reset>Отменить изменения</button><button type="button" class="btn-main" data-stage60-submit>Сохранить</button>';
+      document.body.appendChild(bar);
+    }
+    return bar;
+  }
+  function setupStrictDirty(){
+    const forms = trackableForms();
+    if (!forms.length) return;
+    const bar = ensureBar();
+    const baseline = new Map();
+    let active = null;
+    function snapshot(){ forms.forEach(function(f){ baseline.set(f, formDataString(f)); }); update(null, true); }
+    function dirtyForms(){ return forms.filter(function(f){ return baseline.has(f) && formDataString(f) !== baseline.get(f); }); }
+    function setVisible(on){
+      document.querySelectorAll('.global-floating-save').forEach(function(b){
+        b.classList.toggle('is-visible', !!on && b === bar);
+      });
+      document.body.classList.toggle('has-global-floating-save', !!on);
+    }
+    function update(form){
+      const dirty = dirtyForms();
+      active = form && dirty.includes(form) ? form : dirty[dirty.length - 1] || null;
+      setVisible(dirty.length > 0);
+      const small = bar.querySelector('small');
+      if (small) small.textContent = dirty.length > 1 ? ('Несохранённых форм: ' + dirty.length) : 'Сохрани или отмени правки';
+    }
+    forms.forEach(function(form){
+      if (form.dataset.stage60DirtyBound === '1') return;
+      form.dataset.stage60DirtyBound = '1';
+      form.addEventListener('input', function(){ setTimeout(function(){ update(form); }, 30); }, true);
+      form.addEventListener('change', function(){ setTimeout(function(){ update(form); }, 80); }, true);
+      form.addEventListener('submit', function(){ setVisible(false); }, true);
+    });
+    bar.querySelector('[data-stage60-reset]').onclick = function(){ location.reload(); };
+    bar.querySelector('[data-stage60-submit]').onclick = function(){ const btn = active && safeSubmit(active); if (btn) btn.click(); else if (active) active.submit(); };
+    // Snapshot after page scripts finish tab hiding, API auth sync and DOM reordering.
+    snapshot();
+    setTimeout(snapshot, 900);
+    setTimeout(snapshot, 1800);
+    setTimeout(snapshot, 2600);
+    document.addEventListener('click', function(e){
+      if (e.target.closest('[data-settings-tab], [data-tab-target], .settings-tabs, .desktop-page-tabs, .order-modal-row, [data-order-up], [data-order-down]')) {
+        setTimeout(function(){ update(null); }, 120);
+      }
+    }, true);
+    setInterval(function(){ if (!dirtyForms().length) setVisible(false); }, 700);
+  }
+
+  function activateFirstOrderedTabs(){
+    document.querySelectorAll('.desktop-page-tabs[data-page-tabs]').forEach(function(tabbar){
+      let requested = '';
+      try { requested = new URL(location.href).searchParams.get('tab') || ''; } catch(_) {}
+      const buttons = Array.from(tabbar.querySelectorAll('[data-tab-target]'));
+      const target = requested || (buttons[0] && buttons[0].dataset.tabTarget) || '';
+      if (!target) return;
+      const scope = tabbar.parentElement || document;
+      buttons.forEach(function(btn){ btn.classList.toggle('is-active', btn.dataset.tabTarget === target); });
+      scope.querySelectorAll('[data-tab-panel]').forEach(function(panel){ panel.classList.toggle('is-active', panel.dataset.tabPanel === target); });
+    });
+    const settingsTabs = document.querySelector('.settings-tabs');
+    if (settingsTabs) {
+      let requested = '';
+      try { requested = new URL(location.href).searchParams.get('settings_tab') || ''; } catch(_) {}
+      const buttons = Array.from(settingsTabs.querySelectorAll('[data-settings-tab]'));
+      const target = requested || (buttons[0] && buttons[0].dataset.settingsTab) || '';
+      if (target) {
+        buttons.forEach(function(btn){ btn.classList.toggle('is-active', btn.dataset.settingsTab === target); });
+        document.querySelectorAll('.settings-tab-panel').forEach(function(panel){
+          const active = panel.dataset.settingsTab === target || panel.id === target;
+          panel.classList.toggle('is-active', active);
+          panel.classList.toggle('settings-tab-hidden', !active);
+        });
+      }
+    }
+  }
+
+  function setupOrderModalHardening(){
+    document.addEventListener('click', function(e){
+      const up = e.target.closest('#orderEditorModal [data-order-up]');
+      const down = e.target.closest('#orderEditorModal [data-order-down]');
+      const save = e.target.closest('#orderEditorModal [data-order-save-all]');
+      const reset = e.target.closest('#orderEditorModal [data-order-reset-all]');
+      if (up || down) {
+        e.preventDefault(); e.stopPropagation();
+        const row = (up || down).closest('.order-modal-row');
+        if (row && row.parentNode) {
+          if (up && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+          if (down && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+        }
+      }
+      if (save) { e.preventDefault(); e.stopPropagation(); if (window.__stage59OrderSave) window.__stage59OrderSave(); }
+      if (reset) { e.preventDefault(); e.stopPropagation(); if (window.__stage59OrderReset) window.__stage59OrderReset(); }
+    }, true);
+  }
+
+  function boot(){
+    setupOrderModalHardening();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+})();
+</script>
+
+<script>
+(function(){
+  // stage63: synchronous order activation + strict dirty tracking based only on real user edits.
+  const pageTabDefaults = { dashboard:'traffic', nodes:'list', diagnostics:'health' };
+
+  function readOrder(key){
+    try { const value = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(value) ? value : []; }
+    catch (_) { return []; }
+  }
+  function applyOrder(root, selector, order, idOf){
+    if (!root || !order.length) return;
+    const items = Array.from(root.querySelectorAll(selector));
+    const map = new Map(items.map(el => [idOf(el), el]));
+    order.forEach(id => { const el = map.get(String(id)); if (el) root.appendChild(el); });
+  }
+  function activatePageOrder(){
+    const sidebar = document.querySelector('.desktop-modern-nav');
+    applyOrder(sidebar, ':scope > a', readOrder('agg.order.sidebar.v1'), el => el.getAttribute('href') || '');
+
+    const tabbar = document.querySelector('.desktop-page-tabs[data-page-tabs]');
+    if (tabbar) {
+      const page = tabbar.dataset.pageTabs || 'page';
+      const order = readOrder('agg.order.tabs.' + page + '.v1');
+      applyOrder(tabbar, ':scope > button[data-tab-target]', order, el => el.dataset.tabTarget || '');
+      let requested = '';
+      try { requested = new URL(location.href).searchParams.get('tab') || ''; } catch (_) {}
+      const buttons = Array.from(tabbar.querySelectorAll('[data-tab-target]'));
+      const target = requested || (buttons[0] && buttons[0].dataset.tabTarget) || pageTabDefaults[page] || '';
+      if (target) {
+        buttons.forEach(btn => btn.classList.toggle('is-active', btn.dataset.tabTarget === target));
+        document.querySelectorAll('[data-tab-panel]').forEach(panel => panel.classList.toggle('is-active', panel.dataset.tabPanel === target));
+      }
+    }
+
+    const settings = document.querySelector('.settings-tabs');
+    if (settings) {
+      const order = readOrder('agg.order.settings.tabs.v1');
+      applyOrder(settings, ':scope > button[data-settings-tab]', order, el => el.dataset.settingsTab || '');
+      let requested = '';
+      try { requested = new URL(location.href).searchParams.get('settings_tab') || ''; } catch (_) {}
+      const buttons = Array.from(settings.querySelectorAll('[data-settings-tab]'));
+      const target = requested || (buttons[0] && buttons[0].dataset.settingsTab) || '';
+      if (target) {
+        buttons.forEach(btn => btn.classList.toggle('is-active', btn.dataset.settingsTab === target));
+        document.querySelectorAll('.settings-tab-panel').forEach(panel => {
+          const active = panel.dataset.settingsTab === target || panel.id === target;
+          panel.classList.toggle('is-active', active);
+          panel.classList.toggle('settings-tab-hidden', !active);
+        });
+      }
+    }
+    document.documentElement.classList.remove('ui-order-preload');
+  }
+
+  function serialise(form){
+    try {
+      const fields = Array.from(form.elements || []).filter(el => {
+        if (!el.name || el.disabled) return false;
+        if (['submit','button','reset','image','file'].includes(String(el.type || '').toLowerCase())) return false;
+        return true;
+      });
+      return fields.map(el => {
+        const type = String(el.type || '').toLowerCase();
+        const value = (type === 'checkbox' || type === 'radio') ? (el.checked ? '1:' + String(el.value || 'on') : '0') : String(el.value ?? '');
+        return String(el.name) + '=' + value;
+      }).sort().join('&');
+    } catch (_) { return ''; }
+  }
+  function safeSubmit(form){
+    return Array.from(form.querySelectorAll('button[type="submit"],input[type="submit"]')).find(btn => {
+      const label = String(btn.textContent || btn.value || '').toLowerCase();
+      const action = String(btn.getAttribute('formaction') || form.getAttribute('action') || '').toLowerCase();
+      if (btn.disabled || btn.classList.contains('danger') || btn.classList.contains('btn-danger')) return false;
+      if (/delete|remove|logout|toggle|check|test|refresh|sync|import|extend|create|reorder/.test(action)) return false;
+      if (/удал|выйти|отключ|включ|провер|тест|обнов|импорт|синхрон|продл|создать|отправить|привязать/.test(label)) return false;
+      return true;
+    }) || null;
+  }
+  function trackableForms(){
+    if (!/\/(routing|redirects|settings|telegram-bot|nodes|clients|diagnostics)/.test(location.pathname)) return [];
+    return Array.from(document.querySelectorAll('main form[method="post"]')).filter(form => {
+      if (form.matches('.logout-form,.sidebar-logout,.bulk-delete-form,.inline-form,.mini-extend-form,.extend-form')) return false;
+      if (form.dataset.globalFloatingSave === 'off') return false;
+      return !!form.querySelector('input:not([type="hidden"]),select,textarea') && !!safeSubmit(form);
+    });
+  }
+  function setupStrictDirty(){
+    document.querySelectorAll('.global-floating-save,.mobile-floating-save').forEach(el => el.remove());
+    document.body.classList.remove('has-global-floating-save');
+    const forms = trackableForms();
+    if (!forms.length) return;
+
+    const bar = document.createElement('div');
+    bar.className = 'global-floating-save';
+    bar.dataset.stage63 = '1';
+    bar.innerHTML = '<div><strong>Есть несохранённые изменения</strong><small>Сохрани или отмени правки</small></div><button type="button" class="btn-secondary" data-stage63-reset>Отменить изменения</button><button type="button" class="btn-main" data-stage63-submit>Сохранить</button>';
+    document.body.appendChild(bar);
+    const baseline = new Map();
+    const explicitlyDirty = new Set();
+    let active = null;
+    let ready = false;
+
+    // Важно: состояние «изменено» устанавливается только после доверенного
+    // input/change от реального поля. Программные переключения вкладок,
+    // автозаполнение и обычные клики больше не могут открыть эту панель.
+    function snapshot(){
+      forms.forEach(form => baseline.set(form, serialise(form)));
+      explicitlyDirty.clear();
+      ready = true;
+      render();
+    }
+    function dirtyForms(){
+      if (!ready) return [];
+      return forms.filter(form => explicitlyDirty.has(form) && serialise(form) !== baseline.get(form));
+    }
+    function render(preferred){
+      // Если пользователь вернул исходное значение — форма снова чистая.
+      explicitlyDirty.forEach(form => {
+        if (!baseline.has(form) || serialise(form) === baseline.get(form)) explicitlyDirty.delete(form);
+      });
+      const dirty = dirtyForms();
+      active = preferred && dirty.includes(preferred) ? preferred : (dirty[dirty.length - 1] || null);
+      const visible = dirty.length > 0;
+      bar.classList.toggle('is-visible', visible);
+      document.body.classList.toggle('has-global-floating-save', visible);
+      const small = bar.querySelector('small');
+      if (small) small.textContent = dirty.length > 1 ? `Несохранённых форм: ${dirty.length}` : 'Сохрани или отмени правки';
+    }
+    let lastIntentField = null;
+    let lastIntentAt = 0;
+    function resolveIntentField(target){
+      if (!target) return null;
+      if (target.matches && target.matches('input,select,textarea')) return target;
+      const label = target.closest && target.closest('label');
+      return label && label.control && label.control.matches('input,select,textarea') ? label.control : null;
+    }
+    document.addEventListener('pointerdown', event => {
+      lastIntentField = resolveIntentField(event.target);
+      lastIntentAt = lastIntentField ? Date.now() : 0;
+    }, true);
+    document.addEventListener('keydown', () => {
+      const activeField = document.activeElement && document.activeElement.matches && document.activeElement.matches('input,select,textarea') ? document.activeElement : null;
+      lastIntentField = activeField;
+      lastIntentAt = activeField ? Date.now() : 0;
+    }, true);
+
+    function onRealEdit(event){
+      if (!event.isTrusted || !ready) return;
+      const target = event.target;
+      if (!target || !target.matches('input,select,textarea')) return;
+      // Панель появляется только после прямого действия пользователя именно
+      // с этим полем. Клик по вкладке, пустому месту или программное событие
+      // больше не могут пометить форму изменённой.
+      if (lastIntentField !== target || Date.now() - lastIntentAt > 15000) return;
+      const form = target.closest('form');
+      if (!form || !baseline.has(form)) return;
+      // Для input значение уже обновлено; небольшой defer нужен только для
+      // select/checkbox и зависимых полей, которые меняются тем же действием.
+      setTimeout(() => {
+        if (serialise(form) !== baseline.get(form)) explicitlyDirty.add(form);
+        else explicitlyDirty.delete(form);
+        render(form);
+      }, 0);
+    }
+    forms.forEach(form => {
+      form.addEventListener('input', onRealEdit, true);
+      form.addEventListener('change', onRealEdit, true);
+      form.addEventListener('submit', () => { bar.classList.remove('is-visible'); document.body.classList.remove('has-global-floating-save'); }, true);
+    });
+    bar.querySelector('[data-stage63-reset]').addEventListener('click', () => location.reload());
+    bar.querySelector('[data-stage63-submit]').addEventListener('click', () => {
+      const button = active && safeSubmit(active);
+      if (button) button.click(); else if (active) active.requestSubmit ? active.requestSubmit() : active.submit();
+    });
+
+    const cleanup = new MutationObserver(() => {
+      document.querySelectorAll('.global-floating-save:not([data-stage63="1"]),.mobile-floating-save').forEach(el => el.remove());
+    });
+    cleanup.observe(document.body, { childList:true, subtree:false });
+
+    snapshot();
+    // Один отложенный снимок поглощает только стартовую программную
+    // инициализацию. После первого реального изменения эталон не переписывается.
+    setTimeout(() => { if (!explicitlyDirty.size) snapshot(); }, 950);
+  }
+
+  activatePageOrder();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupStrictDirty, { once:true });
+  else setupStrictDirty();
+  requestAnimationFrame(() => document.documentElement.classList.remove('ui-order-preload'));
+})();
+</script>
+<script>
+(function aggToasts(){
+  // stage87 — превращаем полосы-алерты вверху страницы во всплывающие уведомления.
+  const main = document.querySelector('.main');
+  if (!main) return;
+  const alerts = Array.from(main.children).filter(el => el.classList && el.classList.contains('alert') && (el.classList.contains('ok') || el.classList.contains('err')));
+  if (!alerts.length) return;
+  const stack = document.createElement('div');
+  stack.className = 'agg-toast-stack';
+  stack.setAttribute('role', 'status');
+  stack.setAttribute('aria-live', 'polite');
+  document.body.appendChild(stack);
+  alerts.forEach(alert => {
+    stack.appendChild(alert);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'agg-toast-close';
+    close.setAttribute('aria-label', 'Закрыть уведомление');
+    close.textContent = '×';
+    alert.appendChild(close);
+    let hideTimer = 0;
+    function hide(){
+      if (!alert.parentNode) return;
+      alert.classList.add('agg-toast-out');
+      setTimeout(() => { if (alert.parentNode) alert.parentNode.removeChild(alert); }, 260);
+    }
+    close.addEventListener('click', hide);
+    const isError = alert.classList.contains('err');
+    hideTimer = setTimeout(hide, isError ? 9000 : 4500);
+    alert.addEventListener('mouseenter', () => clearTimeout(hideTimer), { once: true });
+  });
+})();
+</script>
+
+</body>
+</html>
