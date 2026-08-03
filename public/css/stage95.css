@@ -1,0 +1,901 @@
+/* Stage 95: reliable node icons, dashboard search and 3x-ui-style clients table. */
+
+body.redesign-stage52 .node-type-fallback {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 auto !important;
+  width: 24px !important;
+  min-width: 24px !important;
+  height: 20px !important;
+  margin-right: 7px !important;
+  padding: 2px !important;
+  border: 1px solid rgba(96, 165, 250, .34) !important;
+  border-radius: 6px !important;
+  color: #8fc5ff !important;
+  background: rgba(37, 99, 235, .13) !important;
+  vertical-align: middle !important;
+}
+
+body.redesign-stage52 .node-type-fallback.node-type-remnawave {
+  color: #a78bfa !important;
+  border-color: rgba(167, 139, 250, .36) !important;
+  background: rgba(124, 58, 237, .13) !important;
+}
+
+body.redesign-stage52 .node-type-fallback.node-type-h1cloud,
+body.redesign-stage52 .node-type-fallback.node-type-h1cloud_3xui {
+  color: #5eead4 !important;
+  border-color: rgba(45, 212, 191, .34) !important;
+  background: rgba(13, 148, 136, .13) !important;
+}
+
+body.redesign-stage52 .node-type-fallback svg {
+  display: block !important;
+  width: 15px !important;
+  height: 15px !important;
+}
+
+body.redesign-stage52 .agg-pulse-flag-img .node-type-fallback,
+body.redesign-stage52 .node-detail-flag .node-type-fallback {
+  margin-right: 0 !important;
+}
+
+body.redesign-stage52 .client-quick-node-flag .node-type-fallback {
+  width: 20px !important;
+  min-width: 20px !important;
+  height: 18px !important;
+  margin-right: 0 !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52 .node-type-fallback {
+  color: #2563eb !important;
+  border-color: #bfdbfe !important;
+  background: #eff6ff !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52 .node-type-fallback.node-type-remnawave {
+  color: #7c3aed !important;
+  border-color: #ddd6fe !important;
+  background: #f5f3ff !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52 .node-type-fallback.node-type-h1cloud,
+html[data-color-theme="light"] body.redesign-stage52 .node-type-fallback.node-type-h1cloud_3xui {
+  color: #0f766e !important;
+  border-color: #99f6e4 !important;
+  background: #f0fdfa !important;
+}
+
+body.redesign-stage52.page-dashboard .expiry-list .is-expiry-search-hidden,
+body.redesign-stage52.page-dashboard .expiry-list [hidden].is-expiry-search-hidden,
+body.redesign-stage52.page-dashboard .is-dashboard-search-hidden,
+body.redesign-stage52.page-dashboard [hidden].is-dashboard-search-hidden {
+  display: none !important;
+}
+
+body.redesign-stage52.page-dashboard #expiryClientSearchClear[hidden] {
+  display: none !important;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table-wrap {
+  width: 100%;
+  margin-top: 10px;
+  overflow-x: auto;
+  border: 1px solid rgba(148, 163, 184, .2);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, .2);
+}
+
+body.redesign-stage52.page-clients .clients-modern-table {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table th,
+body.redesign-stage52.page-clients .clients-modern-table td {
+  padding: 10px 9px !important;
+  border: 0 !important;
+  border-bottom: 1px solid rgba(148, 163, 184, .14) !important;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 40px;
+  color: #aebdd0 !important;
+  background: #252f3b !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  letter-spacing: .01em;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table tbody tr {
+  background: rgba(29, 38, 49, .6) !important;
+  transition: background-color .16s ease;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table tbody tr:hover {
+  background: rgba(51, 65, 85, .62) !important;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table tbody tr:last-child td {
+  border-bottom: 0 !important;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table .modern-check-col {
+  width: 38px;
+  text-align: center;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table .modern-actions-col {
+  width: 142px;
+}
+
+body.redesign-stage52.page-clients .modern-client-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+body.redesign-stage52.page-clients .modern-client-actions button {
+  display: inline-grid !important;
+  place-items: center !important;
+  width: 27px !important;
+  min-width: 27px !important;
+  height: 27px !important;
+  min-height: 27px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  color: #d9e4f3 !important;
+  background: transparent !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  box-shadow: none !important;
+}
+
+body.redesign-stage52.page-clients .modern-client-actions button:hover {
+  color: #60a5fa !important;
+  background: rgba(59, 130, 246, .13) !important;
+}
+
+body.redesign-stage52.page-clients .modern-client-switch {
+  position: relative;
+  display: inline-block !important;
+  width: 34px !important;
+  min-width: 34px !important;
+  height: 19px !important;
+  min-height: 19px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: #64748b !important;
+  box-shadow: none !important;
+}
+
+body.redesign-stage52.page-clients .modern-client-switch span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .16s ease;
+}
+
+body.redesign-stage52.page-clients .modern-client-switch.is-on {
+  background: #2388f2 !important;
+}
+
+body.redesign-stage52.page-clients .modern-client-switch.is-on span {
+  transform: translateX(15px);
+}
+
+body.redesign-stage52.page-clients .modern-online-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: #c6d2e1;
+  background: rgba(148, 163, 184, .1);
+  font-size: 11px;
+}
+
+body.redesign-stage52.page-clients .modern-online-state i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+
+body.redesign-stage52.page-clients .modern-online-state b {
+  font-weight: 700;
+}
+
+body.redesign-stage52.page-clients .modern-online-state.online {
+  color: #bbf7d0;
+  background: rgba(34, 197, 94, .13);
+}
+
+body.redesign-stage52.page-clients .modern-online-state.online i {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, .12);
+}
+
+body.redesign-stage52.page-clients .modern-online-state.expired {
+  color: #fecaca;
+  background: rgba(239, 68, 68, .12);
+}
+
+body.redesign-stage52.page-clients .modern-online-state.expired i {
+  background: #ef4444;
+}
+
+body.redesign-stage52.page-clients .modern-client-identity {
+  min-width: 175px;
+}
+
+body.redesign-stage52.page-clients .modern-client-identity button {
+  display: block !important;
+  max-width: 210px;
+  min-height: 0 !important;
+  height: auto !important;
+  padding: 0 !important;
+  border: 0 !important;
+  color: #f8fafc !important;
+  background: transparent !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: none !important;
+}
+
+body.redesign-stage52.page-clients .modern-client-identity button:hover {
+  color: #60a5fa !important;
+}
+
+body.redesign-stage52.page-clients .modern-client-identity small {
+  display: block;
+  max-width: 210px;
+  margin-top: 3px;
+  color: #8191a6;
+  font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.redesign-stage52.page-clients .modern-node-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 170px;
+  max-width: 260px;
+  overflow: hidden;
+}
+
+body.redesign-stage52.page-clients .modern-node-chips > span {
+  display: inline-flex;
+  align-items: center;
+  max-width: 138px;
+  min-height: 24px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, .12);
+  font-size: 10px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+body.redesign-stage52.page-clients .modern-node-chips .node-flag {
+  width: 18px !important;
+  min-width: 18px !important;
+  height: 14px !important;
+  margin-right: 5px !important;
+  border-radius: 4px !important;
+}
+
+body.redesign-stage52.page-clients .modern-node-chips .node-flag svg {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+body.redesign-stage52.page-clients .modern-node-chips em {
+  flex: 0 0 auto;
+  color: #93c5fd;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+body.redesign-stage52.page-clients .modern-node-chips .is-empty {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, .1);
+}
+
+body.redesign-stage52.page-clients .modern-traffic-cell {
+  min-width: 190px;
+}
+
+body.redesign-stage52.page-clients .modern-traffic-cell > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #e5edf7;
+  font-size: 10px;
+}
+
+body.redesign-stage52.page-clients .modern-traffic-cell b {
+  color: #c4b5fd;
+  font-size: 11px;
+}
+
+body.redesign-stage52.page-clients .modern-traffic-track {
+  position: relative;
+  height: 7px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, .16);
+}
+
+body.redesign-stage52.page-clients .modern-traffic-track i {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7c3aed, #a855f7);
+}
+
+body.redesign-stage52.page-clients .modern-speed-cell {
+  min-width: 150px;
+  color: #93c5fd;
+  font-size: 10px;
+}
+
+body.redesign-stage52.page-clients .modern-speed-cell span {
+  display: block;
+  line-height: 1.45;
+}
+
+body.redesign-stage52.page-clients .modern-remaining,
+body.redesign-stage52.page-clients .modern-duration {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 3px 7px;
+  border-radius: 5px;
+  color: #d8fdbd;
+  background: rgba(132, 204, 22, .12);
+  font-size: 10px;
+}
+
+body.redesign-stage52.page-clients .modern-remaining.warning {
+  color: #fde68a;
+  background: rgba(245, 158, 11, .13);
+}
+
+body.redesign-stage52.page-clients .modern-remaining.expired {
+  color: #fecaca;
+  background: rgba(239, 68, 68, .13);
+}
+
+body.redesign-stage52.page-clients .modern-remaining.unlimited,
+body.redesign-stage52.page-clients .modern-duration {
+  color: #e9d5ff;
+  background: rgba(168, 85, 247, .11);
+}
+
+body.redesign-stage52.page-clients .modern-client-toggle-form {
+  display: none !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .clients-modern-table-wrap {
+  border-color: #e4e7ec;
+  background: #fff;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .clients-modern-table th {
+  color: #344054 !important;
+  background: #f8fafc !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .clients-modern-table td {
+  border-bottom-color: #edf0f4 !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .clients-modern-table tbody tr {
+  background: #fff !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .clients-modern-table tbody tr:hover {
+  background: #f8fafc !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .modern-client-actions button {
+  color: #344054 !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .modern-client-identity button {
+  color: #101828 !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .modern-client-identity small {
+  color: #667085;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .modern-traffic-cell > div:first-child {
+  color: #344054;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .modern-online-state {
+  color: #475467;
+  background: #f2f4f7;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .modern-online-state.online {
+  color: #15803d;
+  background: #ecfdf3;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients .modern-online-state.expired {
+  color: #dc2626;
+  background: #fef2f2;
+}
+
+@media (max-width: 900px) {
+  body.redesign-stage52.page-clients .clients-modern-table-wrap {
+    display: none !important;
+  }
+}
+
+/* Stage 96: reliable flags, solid online-client dialogs and vector actions. */
+body.redesign-stage52 .modal.hidden {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+body.redesign-stage52 .flag-badge.emoji-fallback,
+body.redesign-stage52 .node-flag.emoji-fallback {
+  color: #f8fafc !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  text-indent: 0 !important;
+  filter: none !important;
+}
+
+body.redesign-stage52 img.flag-badge.flag-img,
+body.redesign-stage52 img.node-flag.flag-img {
+  display: inline-block !important;
+  width: 24px !important;
+  min-width: 24px !important;
+  height: 17px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  object-fit: cover !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}
+
+body.redesign-stage52 .client-quick-node-flag {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 26px !important;
+  width: 26px !important;
+  min-width: 26px !important;
+  height: 18px !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+body.redesign-stage52 .client-quick-node-flag .flag-badge,
+body.redesign-stage52 .client-quick-node-flag .node-flag,
+body.redesign-stage52 .agg-pulse-flag-img .flag-badge,
+body.redesign-stage52 .agg-pulse-flag-img .node-flag {
+  margin: 0 !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52 .flag-badge.emoji-fallback,
+html[data-color-theme="light"] body.redesign-stage52 .node-flag.emoji-fallback {
+  color: #172033 !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsModal .online-modal-card,
+body.redesign-stage52.page-dashboard #onlineClientDetailModal .online-client-detail-card {
+  isolation: isolate !important;
+  opacity: 1 !important;
+  background: #293544 !important;
+  border-color: rgba(148, 163, 184, .3) !important;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .48) !important;
+  backdrop-filter: none !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientDetailModal:not(.hidden) {
+  z-index: 13000 !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsModal:not(.hidden) {
+  z-index: 12000 !important;
+}
+
+body.redesign-stage52.page-dashboard .client-quick-modal:not(.hidden) {
+  z-index: 13000 !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsModal .online-modal-controls {
+  display: flex !important;
+  align-items: center !important;
+  grid-template-columns: none !important;
+  gap: 10px !important;
+  margin: 10px 0 8px !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsModal #onlineRefreshBtn {
+  width: auto !important;
+  min-width: 136px !important;
+  height: 40px !important;
+  min-height: 40px !important;
+  margin: 0 !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsModal .redirect-refresh-toggle,
+body.redesign-stage52.page-dashboard #onlineClientsModal #onlineRefreshInterval {
+  width: auto !important;
+  min-width: 132px !important;
+  height: 40px !important;
+  min-height: 40px !important;
+  margin: 0 !important;
+  border: 1px solid rgba(148, 163, 184, .3) !important;
+  border-radius: 11px !important;
+  background: rgba(15, 23, 42, .32) !important;
+  box-sizing: border-box !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsModal .redirect-refresh-toggle {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 0 12px !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsModal .redirect-refresh-toggle input {
+  width: 17px !important;
+  min-width: 17px !important;
+  height: 17px !important;
+  margin: 0 !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsModal #onlineRefreshInterval {
+  min-width: 104px !important;
+  padding: 0 32px 0 11px !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsModal .online-list {
+  display: grid !important;
+  align-content: start !important;
+  gap: 10px !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsList .online-client-card-v2,
+body.redesign-stage52.page-dashboard #onlineClientsList .dashboard-client-card.online-client-card.online-client-card-v2 {
+  display: block !important;
+  min-height: 84px !important;
+  height: auto !important;
+  padding: 11px 12px !important;
+  overflow: hidden !important;
+  background: #21364b !important;
+  border: 1px solid rgba(96, 165, 250, .26) !important;
+  border-radius: 16px !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsList .online-client-summary-v4 {
+  display: grid !important;
+  grid-template-columns: minmax(190px, 1fr) 116px minmax(230px, 280px) !important;
+  grid-template-rows: auto !important;
+  align-items: center !important;
+  gap: 10px !important;
+  min-height: 60px !important;
+  overflow: hidden !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsList .online-client-main-v4 {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsList .online-details-toggle-v4 {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  width: 116px !important;
+  min-width: 116px !important;
+  height: 40px !important;
+  min-height: 40px !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsList .online-client-renew-wrap-v4 {
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsList .online-client-renew-form {
+  display: grid !important;
+  grid-template-columns: 72px minmax(0, 1fr) !important;
+  gap: 8px !important;
+  width: 100% !important;
+  margin: 0 !important;
+}
+
+body.redesign-stage52.page-dashboard #onlineClientsList .online-client-renew-form input,
+body.redesign-stage52.page-dashboard #onlineClientsList .online-client-renew-form button {
+  width: 100% !important;
+  height: 38px !important;
+  min-height: 38px !important;
+  margin: 0 !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-dashboard #onlineClientsModal .online-modal-card,
+html[data-color-theme="light"] body.redesign-stage52.page-dashboard #onlineClientDetailModal .online-client-detail-card {
+  background: #ffffff !important;
+  border-color: #d8dee8 !important;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, .2) !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-dashboard #onlineClientsModal .redirect-refresh-toggle,
+html[data-color-theme="light"] body.redesign-stage52.page-dashboard #onlineClientsModal #onlineRefreshInterval {
+  border-color: #d8dee8 !important;
+  background: #f8fafc !important;
+}
+
+/* Compact vector QR dialog. The QR itself stays SVG and is never enlarged
+   with pixelated rendering. */
+body.redesign-stage52.page-clients #qrModal .qr-modal-card {
+  width: min(390px, calc(100vw - 28px)) !important;
+  max-width: 390px !important;
+  padding: 22px !important;
+  border-radius: 20px !important;
+  text-align: left !important;
+  background: #293544 !important;
+  border-color: rgba(148, 163, 184, .3) !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-heading {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  min-width: 0 !important;
+  padding-right: 38px !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-icon {
+  display: grid !important;
+  place-items: center !important;
+  flex: 0 0 42px !important;
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 13px !important;
+  color: #93c5fd !important;
+  background: rgba(37, 99, 235, .18) !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-icon svg {
+  width: 23px !important;
+  height: 23px !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-heading h2 {
+  max-width: 255px !important;
+  margin: 0 0 3px !important;
+  overflow: hidden !important;
+  font-size: 18px !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-heading p {
+  margin: 0 !important;
+  color: #9fb0c5 !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-visual {
+  display: grid !important;
+  place-items: center !important;
+  width: 264px !important;
+  height: 264px !important;
+  margin: 18px auto 14px !important;
+  padding: 12px !important;
+  border-radius: 19px !important;
+  background: #fff !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .24) !important;
+  box-sizing: border-box !important;
+}
+
+body.redesign-stage52.page-clients #qrModal img.qr-modal-image {
+  display: block !important;
+  width: 240px !important;
+  min-width: 240px !important;
+  max-width: 240px !important;
+  height: 240px !important;
+  min-height: 240px !important;
+  max-height: 240px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: #fff !important;
+  object-fit: contain !important;
+  image-rendering: auto !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-link {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 8px !important;
+  align-items: center !important;
+  padding: 8px !important;
+  border: 1px solid rgba(148, 163, 184, .24) !important;
+  border-radius: 12px !important;
+  background: rgba(15, 23, 42, .34) !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-link.hidden {
+  display: none !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-link code {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  color: #bfdbfe !important;
+  font-size: 10px !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+body.redesign-stage52.page-clients #qrModal .qr-modal-link button {
+  min-height: 34px !important;
+  padding: 0 11px !important;
+  border-radius: 9px !important;
+  font-size: 11px !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients #qrModal .qr-modal-card {
+  color: #172033 !important;
+  background: #fff !important;
+  border-color: #d8dee8 !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients #qrModal .qr-modal-link {
+  border-color: #d8dee8 !important;
+  background: #f8fafc !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-clients #qrModal .qr-modal-link code {
+  color: #1d4ed8 !important;
+}
+
+html[data-color-theme="light"] body.redesign-stage52.page-dashboard #onlineClientsList .online-client-card-v2,
+html[data-color-theme="light"] body.redesign-stage52.page-dashboard #onlineClientsList .dashboard-client-card.online-client-card.online-client-card-v2 {
+  background: #f8fbff !important;
+  border-color: #bfdbfe !important;
+}
+
+body.redesign-stage52.page-clients .modern-client-actions button .client-action-icon {
+  display: block !important;
+  width: 18px !important;
+  height: 18px !important;
+  overflow: visible !important;
+  shape-rendering: geometricPrecision;
+}
+
+body.redesign-stage52.page-clients .modern-client-actions button:focus-visible {
+  color: #93c5fd !important;
+  background: rgba(59, 130, 246, .16) !important;
+  outline: 2px solid #60a5fa !important;
+  outline-offset: 2px !important;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table .select-client {
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 9px !important;
+  box-shadow: none !important;
+}
+
+body.redesign-stage52.page-clients .clients-modern-table .select-client span {
+  width: 20px !important;
+  height: 20px !important;
+  border-radius: 6px !important;
+  box-sizing: border-box !important;
+  box-shadow: none !important;
+}
+
+@media (max-width: 760px) {
+  body.redesign-stage52.page-dashboard #onlineClientsList .online-client-summary-v4 {
+    grid-template-columns: minmax(0, 1fr) 106px !important;
+    grid-template-rows: auto auto !important;
+  }
+
+  body.redesign-stage52.page-dashboard #onlineClientsList .online-details-toggle-v4 {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    width: 106px !important;
+    min-width: 106px !important;
+  }
+
+  body.redesign-stage52.page-dashboard #onlineClientsList .online-client-renew-wrap-v4 {
+    grid-column: 1 / -1 !important;
+    grid-row: 2 !important;
+  }
+
+  body.redesign-stage52.page-dashboard #onlineClientsList .online-client-card-v2,
+  body.redesign-stage52.page-dashboard #onlineClientsList .dashboard-client-card.online-client-card.online-client-card-v2 {
+    min-height: 120px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  body.redesign-stage52.page-dashboard #onlineClientsModal .online-modal-controls,
+  body.redesign-stage52.page-dashboard #onlineClientsModal #onlineRefreshBtn,
+  body.redesign-stage52.page-dashboard #onlineClientsModal .redirect-refresh-toggle,
+  body.redesign-stage52.page-dashboard #onlineClientsModal #onlineRefreshInterval {
+    width: 100% !important;
+  }
+
+  body.redesign-stage52.page-clients #qrModal .qr-modal-card {
+    padding: 18px !important;
+  }
+
+  body.redesign-stage52.page-clients #qrModal .qr-modal-visual {
+    width: 236px !important;
+    height: 236px !important;
+  }
+
+  body.redesign-stage52.page-clients #qrModal img.qr-modal-image {
+    width: 212px !important;
+    min-width: 212px !important;
+    max-width: 212px !important;
+    height: 212px !important;
+    min-height: 212px !important;
+    max-height: 212px !important;
+  }
+
+  body.redesign-stage52.page-dashboard #onlineClientsList .online-client-summary-v4 {
+    grid-template-columns: minmax(0, 1fr) 94px !important;
+    gap: 8px !important;
+  }
+
+  body.redesign-stage52.page-dashboard #onlineClientsList .online-details-toggle-v4 {
+    width: 94px !important;
+    min-width: 94px !important;
+    font-size: 11px !important;
+  }
+}

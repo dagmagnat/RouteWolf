@@ -1,0 +1,1812 @@
+<%- include('partials_header', { pageTitle: 'Клиенты', pageSubtitle: 'Xray/Reality и отдельные VPN-конфигурации', activePage: 'clients' }) %>
+<%
+  function flagEmojiFromCode(code) {
+    const cc = String(code || '').trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(cc) || ['ZZ','XX'].includes(cc)) return '';
+    return Array.from(cc).map(ch => String.fromCodePoint(0x1F1E6 + ch.charCodeAt(0) - 65)).join('');
+  }
+  function nodeFallbackIcon(nodeType) {
+    const kind = ['remnawave', 'h1cloud', 'h1cloud_3xui'].includes(String(nodeType || ''))
+      ? String(nodeType)
+      : '3xui';
+    const label = kind === 'remnawave' ? 'Remnawave' : (kind.startsWith('h1cloud') ? 'H1Cloud' : 'Узел');
+    const glyph = kind === 'remnawave'
+      ? '<circle cx="12" cy="12" r="2.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M5 19a10 10 0 0 1 0-14M19 5a10 10 0 0 1 0 14"/>'
+      : (kind.startsWith('h1cloud')
+        ? '<path d="M5 17.5h14"/><path d="M8 17.5v-4.2a4 4 0 0 1 8 0v4.2"/><circle cx="12" cy="6" r="2"/><path d="M4.5 9.5a8.5 8.5 0 0 1 15 0"/>'
+        : '<rect x="4" y="5" width="16" height="5.5" rx="1.6"/><rect x="4" y="13.5" width="16" height="5.5" rx="1.6"/><path d="M7 7.8h.01M7 16.2h.01"/>');
+    return `<span class="node-flag node-type-fallback node-type-${kind}" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${glyph}</svg></span>`;
+  }
+  function flagIcon(code, fallback, name, nodeType) {
+    const rawCode = String(code || '').trim().toUpperCase();
+    const fb = String(fallback || '').trim();
+    const nameText = String(name || '').trim();
+    const emoji = (typeof countryFlagText === 'function')
+      ? countryFlagText(rawCode, fb, nameText)
+      : ((fb && fb !== '🌐' && !/^[a-z]{2}$/i.test(fb)) ? fb : flagEmojiFromCode(rawCode || fb));
+    const cc2 = String(rawCode || (/^[a-z]{2}$/i.test(fb) ? fb : '')).trim().toLowerCase();
+    if (/^[a-z]{2}$/.test(cc2) && !['zz','xx'].includes(cc2)) {
+      return '<img class="node-flag flag-img" src="/flags/' + cc2 + '.svg" alt="' + cc2.toUpperCase() + '" loading="lazy" onerror="this.style.display=\'none\'">';
+    }
+    return emoji && emoji !== '🌐'
+      ? '<span class="node-flag emoji-fallback" aria-label="' + rawCode + '">' + emoji + '</span>'
+      : nodeFallbackIcon(nodeType);
+  }
+  function clientActionIcon(name) {
+    const paths = {
+      info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 10.7v5.1"/><path d="M12 7.6h.01"/>',
+      qr: '<rect x="3.5" y="3.5" width="6" height="6" rx=".8"/><rect x="14.5" y="3.5" width="6" height="6" rx=".8"/><rect x="3.5" y="14.5" width="6" height="6" rx=".8"/><path d="M14.5 14.5h2.2v2.2h-2.2zM18.3 14.5h2.2v2.2h-2.2zM14.5 18.3h2.2v2.2h-2.2zM18.3 18.3h2.2v2.2h-2.2z"/>',
+      copy: '<rect x="8.3" y="8.3" width="11.2" height="11.2" rx="2"/><path d="M15.7 8.3V6.5a2 2 0 0 0-2-2H6.5a2 2 0 0 0-2 2v7.2a2 2 0 0 0 2 2h1.8"/>',
+      edit: '<path d="M4.2 19.8 5 15.6 15.8 4.8a2.1 2.1 0 0 1 3 3L8 18.6l-3.8 1.2z"/><path d="m14.2 6.4 3.4 3.4M5 15.6l3 3"/>'
+    };
+    return `<svg class="client-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths[name] || paths.info}</svg>`;
+  }
+  function flagText(code, fallback, name) {
+    return (typeof countryFlagText === 'function') ? countryFlagText(code, fallback, name) : (String(fallback || '').trim() || flagEmojiFromCode(code) || '🌐');
+  }
+  function nodeName(node) {
+    const rawSuffix = String(node.label_suffix || '').trim();
+    const suffix = rawSuffix.replace(/^\/+\s*/, '').trim();
+    const baseName = node.country_name_ru || node.name;
+    return suffix ? (/^\d+$/.test(suffix) ? `${baseName}-${suffix}` : `${baseName} / ${suffix}`) : baseName;
+  }
+  function isH1Node(node) {
+    return String(node.node_type || '3xui') === 'h1cloud';
+  }
+  function isRemnawaveNode(node) {
+    return String(node.node_type || '3xui') === 'remnawave';
+  }
+  function nodeEndpointLabel(node) {
+    if (isRemnawaveNode(node)) return 'Remnawave · Internal Squad';
+    return isH1Node(node) ? 'H1Cloud SUB/API' : ('inbound ' + (node.inbound_id || '—'));
+  }
+  function daysLeftNumber(ts) {
+    const n = Number(ts || 0);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const diff = n - Date.now();
+    if (diff <= 0) return 0;
+    return Math.ceil(diff / 86400000);
+  }
+  function daysLeftShort(ts) {
+    const left = daysLeftNumber(ts);
+    return left === null ? '∞' : String(left);
+  }
+  function termShort(client) {
+    const left = daysLeftNumber(client.expiry_time);
+    if (left === null) return '∞';
+    const total = Number(client.duration_days || 0);
+    if (total > 0 && total > left) return `${left}/${total}`;
+    return String(left);
+  }
+  function expiryDateTime(ts) {
+    const n = Number(ts || 0);
+    if (!Number.isFinite(n) || n <= 0) return '∞';
+    return new Date(n).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function clientDirectoryNodeIds(client) {
+    return (client.node_limits || []).filter(row => row.client_node_id).map(row => String(row.node_id)).join(' ');
+  }
+  function clientDirectorySearch(client) {
+    return [client.id, client.login, client.display_name, client.comment, client.uuid, client.sub_slug]
+      .filter(value => value !== null && value !== undefined)
+      .join(' ');
+  }
+
+  function clientStatusMeta(client) {
+    const enabled = client.enabled !== 0;
+    const left = daysLeftNumber(client.expiry_time);
+    if (!enabled) return { key: 'offline', label: 'Отключён', text: 'Клиент отключён и не может подключаться.' };
+    if (left === 0) return { key: 'expired', label: 'Срок истёк', text: 'Срок доступа закончился. Продли доступ или отключи клиента на узлах.' };
+    if (left !== null && left <= 7) return { key: 'warning', label: 'Скоро закончится', text: 'Срок доступа скоро закончится: осталось ' + left + ' дн.' };
+    return { key: 'online', label: 'Включён', text: 'Клиент активен и может подключаться.' };
+  }
+  function clientDirectoryStatusFilter(client) {
+    const enabled = client.enabled !== 0;
+    const left = daysLeftNumber(client.expiry_time);
+    if (!enabled) return 'disabled';
+    if (left === 0) return 'expired';
+    if (left !== null && left <= 7) return 'expiring';
+    return 'active';
+  }
+  function compactTitle(client) {
+    return String(client.display_name || client.login || '').trim();
+  }
+  function secondaryClientText(client) {
+    const comment = String(client.comment || '').trim();
+    const display = String(client.display_name || '').trim();
+    const login = String(client.login || '').trim();
+    if (comment && comment !== display && comment !== login) return comment;
+    if (display && login && display !== login) return login;
+    return '';
+  }
+  function gbFromBytes(bytes, digits = 1) {
+    const n = Math.max(0, Number(bytes || 0));
+    const gb = n / 1024 / 1024 / 1024;
+    const maxDigits = gb >= 10 ? 0 : digits;
+    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: maxDigits }).format(gb);
+  }
+  function nodeLimitText(row) {
+    if (row.enabled === 0) return 'выкл.';
+    const gb = Number(row.traffic_gb || 0);
+    if (!gb) return '∞';
+    return `${gbFromBytes(row.used_bytes)}/${gb} ГБ`;
+  }
+  function nodeRemainingText(row) {
+    const gb = Number(row.traffic_gb || 0);
+    if (!gb || row.enabled === 0) return '∞';
+    return gbFromBytes(row.remaining_bytes) + ' ГБ';
+  }
+  function clientAssignedNodes(client) {
+    return (client.node_limits || []).filter(row => row.client_node_id && row.enabled !== 0);
+  }
+  function clientUsedBytes(client) {
+    return clientAssignedNodes(client).reduce((sum, row) => sum + Math.max(0, Number(row.used_bytes || 0)), 0);
+  }
+  function formatClientBytes(bytes) {
+    const n = Math.max(0, Number(bytes || 0));
+    if (n >= 1024 ** 4) return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(n / 1024 ** 4) + ' ТБ';
+    if (n >= 1024 ** 3) return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(n / 1024 ** 3) + ' ГБ';
+    if (n >= 1024 ** 2) return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(n / 1024 ** 2) + ' МБ';
+    if (n >= 1024) return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(n / 1024) + ' КБ';
+    return new Intl.NumberFormat('ru-RU').format(n) + ' Б';
+  }
+  function clientTrafficPercent(client) {
+    const limitGb = Math.max(0, Number(client.traffic_gb || 0));
+    if (!limitGb) return 42;
+    return Math.max(0, Math.min(100, clientUsedBytes(client) / (limitGb * 1024 ** 3) * 100));
+  }
+  function clientRemainingMeta(client) {
+    const expiry = Number(client.expiry_time || 0);
+    if (!Number.isFinite(expiry) || expiry <= 0) return { text: '∞', key: 'unlimited' };
+    const diff = expiry - Date.now();
+    if (diff <= 0) {
+      const daysAgo = Math.floor(Math.abs(diff) / 86400000);
+      return { text: `${daysAgo} дн. назад`, key: 'expired' };
+    }
+    const days = Math.ceil(diff / 86400000);
+    return { text: `через ${Math.max(1, days)} дн.`, key: days <= 7 ? 'warning' : 'active' };
+  }
+  const isVpnClientTab = clientType !== 'xray';
+  const currentClientCount = isVpnClientTab ? vpnClients.length : clients.length;
+  const currentClientTypeLabel = clientType === 'wireguard' ? 'WireGuard' : clientType === 'amneziawg' ? 'AmneziaWG' : clientType === 'outline' ? 'Outline' : 'Reality / Xray';
+  const clientTypeQuery = clientType === 'xray' ? '' : ('?type=' + encodeURIComponent(clientType));
+  const xrayExpiredCount = clients.filter(c => c.enabled !== 0 && daysLeftNumber(c.expiry_time) === 0).length;
+  const xrayExpiringCount = clients.filter(c => c.enabled !== 0 && daysLeftNumber(c.expiry_time) !== null && daysLeftNumber(c.expiry_time) >= 1 && daysLeftNumber(c.expiry_time) <= 7).length;
+  const xrayDisabledCount = clients.filter(c => c.enabled === 0).length;
+  const xrayActiveCount = clients.filter(c => c.enabled !== 0 && daysLeftNumber(c.expiry_time) !== 0).length;
+%>
+
+<% if (message) { %><div class="alert ok"><%= message %></div><% } %>
+<% if (error) { %><div class="alert err"><%= error %></div><% } %>
+
+<div id="toast" class="toast">Скопировано</div>
+
+<div class="card mobile-client-search-card" aria-label="Поиск клиентов">
+  <form method="get" action="/clients" class="mobile-client-search-form <%= q ? 'has-reset' : '' %>" data-live-client-search data-client-directory-search>
+    <input type="hidden" name="type" value="<%= clientType %>" />
+    <label class="mobile-client-search-input">
+      <span aria-hidden="true">⌕</span>
+      <input name="q" value="<%= q || '' %>" placeholder="Поиск клиента: имя, логин, UUID или сервис" autocomplete="off" />
+    </label>
+    <button type="submit" class="mobile-client-search-submit" aria-label="Найти клиента">Найти</button>
+    <% if (q) { %><a class="mobile-client-search-reset" href="/clients<%= clientTypeQuery %>" aria-label="Сбросить поиск">×</a><% } %>
+  </form>
+</div>
+
+<div class="card clients-card">
+  <% if (clientType === 'xray') { %>
+  <div class="client-overview-strip" aria-label="Сводка по клиентам">
+    <div><span>Клиенты</span><strong><%= clients.length %></strong></div>
+    <div><span>В сети</span><strong id="clientOnlineNowCount">—</strong></div>
+    <button type="button" class="client-overview-stat is-danger" data-client-status-shortcut="expired"><span>Срок истёк</span><strong><%= xrayExpiredCount %></strong></button>
+    <button type="button" class="client-overview-stat is-warning" data-client-status-shortcut="expiring"><span>Скоро закончатся</span><strong><%= xrayExpiringCount %></strong></button>
+    <button type="button" class="client-overview-stat is-muted" data-client-status-shortcut="disabled"><span>Отключено</span><strong><%= xrayDisabledCount %></strong></button>
+    <button type="button" class="client-overview-stat is-success" data-client-status-shortcut="active"><span>Активны</span><strong><%= xrayActiveCount %></strong></button>
+  </div>
+  <% } %>
+  <div class="section-title-row">
+    <h2><%= currentClientTypeLabel %> — клиенты</h2>
+    <span class="count-chip"><%= currentClientCount %></span>
+  </div>
+
+  <div class="clients-toolbar clients-toolbar-inside client-protocol-toolbar">
+    <div class="clients-toolbar-actions">
+      <button type="button" class="btn-main" onclick="openModalById('<%= clientType === 'xray' ? 'createClientModal' : 'createVpnClientModal' %>')">Создать клиента</button>
+      <% if (clientType === 'xray') { %>
+        <button type="button" class="btn-secondary" onclick="openModalById('importSyncModal')">Импорт и синхронизация</button>
+        <button type="button" class="btn-secondary" id="applySelectedToolbarButton" onclick="return openApplySelectedModal()" disabled>Применить к выбранным</button>
+      <% } %>
+    </div>
+    <form method="get" action="/clients" class="search-form compact-search" data-live-client-search data-client-directory-search>
+      <input type="hidden" name="type" value="<%= clientType %>" />
+      <input name="q" value="<%= q || '' %>" placeholder="Поиск: имя, логин, UUID или сервис" autocomplete="off" />
+      <button type="submit" class="secondary">Найти</button>
+      <% if (q) { %><a class="link-btn secondary" href="/clients<%= clientTypeQuery %>">Сбросить</a><% } %>
+    </form>
+  </div>
+
+  <nav class="client-protocol-tabs" aria-label="Типы клиентов">
+    <a href="/clients" class="<%= clientType === 'xray' ? 'is-active' : '' %>">Reality / Xray <span><%= xrayCount %></span></a>
+    <a href="/clients?type=wireguard" class="<%= clientType === 'wireguard' ? 'is-active' : '' %>">WireGuard <span><%= vpnCounts.wireguard %></span></a>
+    <a href="/clients?type=amneziawg" class="<%= clientType === 'amneziawg' ? 'is-active' : '' %>">AmneziaWG <span><%= vpnCounts.amneziawg %></span></a>
+    <a href="/clients?type=outline" class="<%= clientType === 'outline' ? 'is-active' : '' %>">Outline <span><%= vpnCounts.outline %></span></a>
+  </nav>
+
+  <% if (clientType === 'xray') { %>
+  <div class="client-directory-toolbar" id="clientDirectoryToolbar" aria-label="Фильтр и сортировка клиентов">
+    <label class="client-directory-control">
+      <span>Фильтр по узлу</span>
+      <select id="clientNodeFilter">
+        <option value="">Все узлы</option>
+        <% nodes.forEach(node => { %>
+          <option value="<%= node.id %>"><%= flagText(node.country_code, node.country_flag, node.country_name_ru || node.name) %> <%= nodeName(node) %></option>
+        <% }) %>
+      </select>
+    </label>
+    <label class="client-directory-control">
+      <span>Сортировка</span>
+      <select id="clientSortMode">
+        <option value="newest">Последние добавленные</option>
+        <option value="oldest">Сначала добавленные ранее</option>
+        <option value="name-asc">По алфавиту А–Я</option>
+        <option value="name-desc">По алфавиту Я–А</option>
+        <option value="expiring">Показать: скоро закончатся</option>
+        <option value="expired">Показать: срок закончился</option>
+        <option value="disabled">Показать: отключённые</option>
+      </select>
+    </label>
+    <div class="client-directory-toolbar-actions">
+      <div class="client-directory-result">
+        <span>Показано</span>
+        <strong id="clientDirectoryCount"><%= clients.length %></strong>
+      </div>
+      <button type="button" class="btn-secondary client-directory-reset" id="clientDirectoryReset">Сбросить фильтры</button>
+    </div>
+  </div>
+  <div class="client-directory-empty" id="clientDirectoryEmpty" hidden>
+    <strong>Клиенты не найдены</strong>
+    <span>Измените строку поиска или сбросьте фильтры.</span>
+  </div>
+  <form method="post" action="/clients/bulk-delete" class="bulk-delete-form js-long-action" data-loading-title="Выполняю массовое действие" data-loading-text="Операция может занять время, если требуется подключение к узлам." onsubmit="return confirmClientBulkAction(event)">
+    <input type="hidden" name="bulk_confirmation" value="" data-bulk-confirmation />
+    <input type="hidden" name="bulk_filter_node_id" value="" data-bulk-filter-node-id />
+  <%
+    function mobileClientFilterKeys(client) {
+      const enabled = client.enabled !== 0;
+      const left = daysLeftNumber(client.expiry_time);
+      const keys = [];
+      if (enabled && left !== 0) keys.push('active');
+      if (enabled && left !== null && left >= 1 && left <= 7) keys.push('expiring');
+      if (!enabled || left === 0) keys.push('disabled');
+      return keys;
+    }
+    const activeCount = clients.filter(c => mobileClientFilterKeys(c).includes('active')).length;
+    const warnCount = clients.filter(c => mobileClientFilterKeys(c).includes('expiring')).length;
+    const offCount = clients.filter(c => mobileClientFilterKeys(c).includes('disabled')).length;
+  %>
+  <div class="mobile-client-tabs" aria-label="Фильтр клиентов">
+    <button type="button" class="is-active" data-mobile-client-filter="all">Все <span><%= clients.length %></span></button>
+    <button type="button" data-mobile-client-filter="active">Активные <span><%= activeCount %></span></button>
+    <button type="button" data-mobile-client-filter="expiring">Истекают <span><%= warnCount %></span></button>
+    <button type="button" data-mobile-client-filter="disabled">Отключены <span><%= offCount %></span></button>
+  </div>
+
+    <div class="bulk-selection-panel" aria-label="Массовые действия с клиентами">
+      <div class="bulk-selection-head">
+        <div class="bulk-selection-actions">
+          <button type="button" class="btn-secondary" data-client-select-action="all" onclick="return setAllClientSelection(true)">Выбрать все</button>
+          <button type="button" class="btn-secondary" data-client-select-action="none" onclick="return setAllClientSelection(false)">Снять выбор</button>
+          <span class="bulk-selected-count" id="bulkSelectedCount">Выбрано: 0</span>
+        </div>
+        <small class="hint">Кнопка выбирает всех клиентов, показанных текущим поиском. Один клиент считается один раз, даже если список адаптивно отображается в нескольких вариантах.</small>
+      </div>
+
+      <div class="bulk-node-action-row">
+        <div class="bulk-node-action-field">
+          <label for="bulkRemoveNodeId" id="bulkRemoveNodeLabel">Удалить выбранных клиентов из узла</label>
+          <select name="bulk_node_id" id="bulkRemoveNodeId">
+            <option value="">Выберите узел</option>
+            <% nodes.forEach(node => { %>
+              <option value="<%= node.id %>" data-node-type="<%= String(node.node_type || '3xui') %>"><%= flagText(node.country_code, node.country_flag, node.country_name_ru || node.name) %> <%= nodeName(node) %> (<%= nodeEndpointLabel(node) %>)</option>
+            <% }) %>
+          </select>
+          <small class="hint" id="bulkRemoveNodeHint">Клиент удаляется или отвязывается в выбранной удалённой панели, затем локальная связь удаляется из Aggregator. Для Remnawave снимается настроенный Internal Squad, а сам пользователь сохраняется.</small>
+        </div>
+        <button class="danger bulk-node-remove-btn" id="bulkRemoveNodeButton" type="submit" formaction="/clients/bulk-remove-node" data-bulk-action="remove-node">Удалить из выбранного узла</button>
+      </div>
+
+      <div class="bulk-row compact-bulk-row">
+        <div>
+          <label>Режим удаления выбранных клиентов</label>
+          <select name="delete_mode">
+            <option value="aggregator">Только из агрегатора</option>
+            <option value="secondary">Из агрегатора и вторичных узлов</option>
+            <option value="all">Из агрегатора и всех узлов</option>
+          </select>
+        </div>
+        <button class="danger" type="submit" data-bulk-action="delete-clients">Удалить выбранных клиентов</button>
+      </div>
+    </div>
+
+  <div class="mobile-client-cards">
+    <% clients.forEach(client => {
+      const subUrl = `${baseUrl}/sub/${client.sub_slug}`;
+      const jsonUrl = `${baseUrl}/json/${client.sub_slug}`;
+      const clientStatus = clientStatusMeta(client);
+      const displayTitle = compactTitle(client);
+      const secondaryText = secondaryClientText(client);
+      const nodeLimitRows = (client.node_limits || []).filter(nl => nl.client_node_id);
+      const nodeLimitTextShort = client.limit_ip && Number(client.limit_ip) > 0 ? '0/' + Number(client.limit_ip) : '∞';
+      const filterKeys = mobileClientFilterKeys(client).join(' ');
+      const canShowH1Sub = Boolean(showSubLinks && Number(client.has_h1cloud_sub) === 1);
+    %>
+      <article class="mobile-client-card status-<%= clientStatus.key %>" data-mobile-client-card data-client-entry data-client-view="mobile" data-client-id-entry="<%= client.id %>" data-client-search="<%= clientDirectorySearch(client) %>" data-client-node-ids="<%= clientDirectoryNodeIds(client) %>" data-client-name="<%= compactTitle(client) %>" data-client-order="<%= client.id %>" data-client-expiry-order="<%= Number(client.expiry_time || 0) %>" data-client-status="<%= clientDirectoryStatusFilter(client) %>" data-statuses="<%= filterKeys %>">
+        <div class="mobile-client-head stage12-client-head">
+          <label class="mobile-card-check" title="Выбрать клиента">
+            <input class="inline client-check" type="checkbox" name="client_ids" value="<%= client.id %>" data-client-id="<%= client.id %>" />
+            <span aria-hidden="true"></span>
+          </label>
+          <span class="mobile-client-id">ID <%= client.id %></span>
+          <button type="button" class="mobile-status-pill <%= clientStatus.key %>" data-status-label="<%= clientStatus.label %>" data-status-text="<%= clientStatus.text %>">
+            <span class="client-status-icon <%= clientStatus.key %>"></span><span><%= clientStatus.label %></span>
+          </button>
+        </div>
+
+        <div class="mobile-client-mainline">
+          <button type="button" class="mobile-client-name" data-client-quick="<%= client.id %>"><%= displayTitle %></button>
+          <% if (secondaryText) { %><span class="mobile-client-comment"><%= secondaryText %></span><% } %>
+        </div>
+
+        <div class="mobile-client-metrics">
+          <div><span>Трафик</span><strong><%= client.traffic_gb && client.traffic_gb > 0 ? '0 / ' + client.traffic_gb + ' ГБ' : '∞' %></strong></div>
+          <div><span>Лимит дней</span><strong><%= termShort(client) %></strong></div>
+          <div><span>Лимит IP</span><strong><%= client.limit_ip && Number(client.limit_ip) > 0 ? client.limit_ip : '∞' %></strong></div>
+        </div>
+        <div class="mobile-client-expiry">Действует до: <strong><%= expiryDateTime(client.expiry_time) %></strong></div>
+
+        <div class="mobile-client-actions">
+          <% if (canShowH1Sub) { %>
+          <button type="button" class="icon-action secondary" onclick="copySubLink('<%= subUrl %>', this)"><span>SUB</span>SUB</button>
+          <button type="button" class="icon-action secondary" onclick="showQr('<%= subUrl %>', '<%= client.login %> · H1Cloud SUB')"><span>▦</span>QR SUB</button>
+          <% } %>
+          <% if (showJsonLinks) { %>
+          <button type="button" class="icon-action" onclick="copySubLink('<%= jsonUrl %>', this)"><span>{ }</span>JSON</button>
+          <button type="button" class="icon-action" onclick="showQr('<%= jsonUrl %>', '<%= client.login %> · JSON')"><span>▦</span>QR</button>
+          <% } %>
+          <a class="icon-action" href="/open/<%= client.sub_slug %>" target="_blank"><span>↗</span>Открыть</a>
+          <button type="button" class="icon-action secondary" onclick="openClientEditor(<%= client.id %>)"><span>✎</span>Редактор</button>
+        </div>
+      </article>
+    <% }) %>
+  </div>
+
+  <% if (clientsViewMode === 'classic') { %>
+  <div class="desktop-client-split-list" aria-label="Компактный список клиентов">
+    <% clients.forEach(client => {
+      const subUrl = `${baseUrl}/sub/${client.sub_slug}`;
+      const jsonUrl = `${baseUrl}/json/${client.sub_slug}`;
+      const clientStatus = clientStatusMeta(client);
+      const displayTitle = compactTitle(client);
+      const secondaryText = secondaryClientText(client);
+      const canShowH1Sub = Boolean(showSubLinks && Number(client.has_h1cloud_sub) === 1);
+    %>
+      <article class="desktop-client-tile status-<%= clientStatus.key %>" data-client-entry data-client-view="desktop" data-client-id-entry="<%= client.id %>" data-client-search="<%= clientDirectorySearch(client) %>" data-client-node-ids="<%= clientDirectoryNodeIds(client) %>" data-client-name="<%= compactTitle(client) %>" data-client-order="<%= client.id %>" data-client-expiry-order="<%= Number(client.expiry_time || 0) %>" data-client-status="<%= clientDirectoryStatusFilter(client) %>">
+        <div class="desktop-client-check">
+          <label class="select-client" title="Выбрать клиента">
+            <input class="inline client-check" type="checkbox" name="client_ids" value="<%= client.id %>" data-client-id="<%= client.id %>" />
+            <span></span>
+          </label>
+          <small><%= client.id %></small>
+        </div>
+        <button type="button" class="desktop-client-name" data-client-quick="<%= client.id %>"><%= displayTitle %></button>
+        <div class="desktop-client-comment" title="<%= client.comment || '-' %>"><%= client.comment || '-' %></div>
+        <div class="desktop-client-status">
+          <button type="button" class="client-status-icon <%= clientStatus.key %>" data-status-label="<%= clientStatus.label %>" data-status-text="<%= clientStatus.text %>" title="<%= clientStatus.label %>" aria-label="<%= clientStatus.label %>"></button>
+          <button type="button" class="badge quick-status <%= clientStatus.key %>" data-status-label="<%= clientStatus.label %>" data-status-text="<%= clientStatus.text %>"><%= clientStatus.label %></button>
+        </div>
+        <div class="desktop-client-actions <%= canShowH1Sub ? 'has-h1cloud-sub' : 'json-only' %>">
+          <% if (canShowH1Sub) { %>
+          <button type="button" class="btn-secondary compact-copy-btn btn-sub" onclick="copySubLink('<%= subUrl %>', this)">SUB</button>
+          <button type="button" class="btn-qr btn-sub-qr" onclick="showQr('<%= subUrl %>', '<%= client.login %> · H1Cloud SUB')">QR</button>
+          <% } %>
+          <% if (showJsonLinks) { %>
+          <button type="button" class="btn-main compact-copy-btn" onclick="copySubLink('<%= jsonUrl %>', this)">JSON</button>
+          <button type="button" class="btn-qr" onclick="showQr('<%= jsonUrl %>', '<%= client.login %> · JSON')">QR</button>
+          <% } %>
+        </div>
+      </article>
+    <% }) %>
+  </div>
+
+
+
+    <div class="table-wrap clients-table-wrap">
+      <table class="clients-table">
+        <thead>
+          <tr>
+            <th class="check-col"><input class="inline" type="checkbox" onclick="toggleAllClients(this)" /></th>
+            <th>ID</th>
+            <th>Клиент</th>
+            <th>Комментарий</th>
+            <th>Статус</th>
+            <th class="link-col">SUB / JSON / QR</th>
+          </tr>
+        </thead>
+        <tbody>
+        <% clients.forEach(client => {
+          const subUrl = `${baseUrl}/sub/${client.sub_slug}`;
+          const jsonUrl = `${baseUrl}/json/${client.sub_slug}`;
+          const happUrl = `${baseUrl}/happ/${client.sub_slug}`;
+          const clientEnabled = client.enabled !== 0;
+          const clientStatus = clientStatusMeta(client);
+          const clientStatusLabel = clientStatus.label;
+          const clientStatusClass = clientStatus.key;
+          const nodeLimitRows = (client.node_limits || []).filter(nl => nl.client_node_id && ((nl.traffic_gb && nl.traffic_gb > 0) || nl.enabled === 0));
+          const hasNodeLimits = nodeLimitRows.length > 0;
+          const canShowH1Sub = Boolean(showSubLinks && Number(client.has_h1cloud_sub) === 1);
+        %>
+          <tr data-client-entry data-client-view="table" data-client-id-entry="<%= client.id %>" data-client-search="<%= clientDirectorySearch(client) %>" data-client-node-ids="<%= clientDirectoryNodeIds(client) %>" data-client-name="<%= compactTitle(client) %>" data-client-order="<%= client.id %>" data-client-expiry-order="<%= Number(client.expiry_time || 0) %>" data-client-status="<%= clientDirectoryStatusFilter(client) %>">
+            <td class="check-col" data-label="Выбрать">
+              <label class="select-client" title="Выбрать клиента">
+                <input class="inline client-check" type="checkbox" name="client_ids" value="<%= client.id %>" data-client-id="<%= client.id %>" />
+                <span></span>
+              </label>
+            </td>
+            <td data-label="ID"><%= client.id %></td>
+            <td data-label="Имя / логин" class="client-name-login-cell">
+              <button type="button" class="client-inline-link" data-client-quick="<%= client.id %>"><%= compactTitle(client) %></button>
+              <% if (String(compactTitle(client) || '').trim() !== String(client.login || '').trim()) { %>
+                <small class="client-inline-login"><%= client.login %></small>
+              <% } %>
+            </td>
+            <td data-label="Комментарий" class="comment-cell"><%= client.comment || '-' %></td>
+            <td data-label="Статус" class="client-status-cell compact-client-status-cell">
+              <button type="button" class="client-status-icon <%= clientStatusClass %>" data-status-label="<%= clientStatusLabel %>" data-status-text="<%= clientStatus.text %>" title="<%= clientStatusLabel %>" aria-label="<%= clientStatusLabel %>"></button>
+              <span class="badge <%= clientStatusClass %>"><%= clientStatusLabel %></span>
+            </td>
+            <td data-label="SUB / JSON / QR" class="link-col compact-client-json-cell">
+              <div class="btn-row compact-client-links <%= canShowH1Sub ? 'has-h1cloud-sub' : 'json-only' %>">
+                <% if (canShowH1Sub) { %>
+                <button type="button" class="btn-secondary compact-copy-btn btn-sub" onclick="copySubLink('<%= subUrl %>', this)">SUB</button>
+                <button type="button" class="btn-qr btn-sub-qr" onclick="showQr('<%= subUrl %>', '<%= client.login %> · H1Cloud SUB')">QR</button>
+                <% } %>
+                <% if (showJsonLinks) { %>
+                <button type="button" class="btn-main compact-copy-btn" onclick="copySubLink('<%= jsonUrl %>', this)">JSON</button>
+                <button type="button" class="btn-qr" onclick="showQr('<%= jsonUrl %>', '<%= client.login %> · JSON')">QR</button>
+                <% } %>
+              </div>
+            </td>
+          </tr>
+        <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } else { %>
+    <div class="clients-modern-table-wrap" aria-label="Новый список клиентов">
+      <table class="clients-modern-table">
+        <thead>
+          <tr>
+            <th class="modern-check-col"><input class="inline" type="checkbox" onclick="toggleAllClients(this)" aria-label="Выбрать всех показанных клиентов" /></th>
+            <th class="modern-actions-col">Действия</th>
+            <th>Включён</th>
+            <th>В сети</th>
+            <th>Клиент</th>
+            <th>Трафик</th>
+            <th>Скорость</th>
+            <th>Остаток</th>
+            <th>Длительность</th>
+          </tr>
+        </thead>
+        <tbody>
+        <% clients.forEach(client => {
+          const jsonUrl = `${baseUrl}/json/${client.sub_slug}`;
+          const clientStatus = clientStatusMeta(client);
+          const usedBytes = clientUsedBytes(client);
+          const trafficLimitGb = Math.max(0, Number(client.traffic_gb || 0));
+          const remaining = clientRemainingMeta(client);
+          const onlineEligible = client.enabled !== 0 && clientStatus.key !== 'expired';
+          const onlineLabel = client.enabled === 0 ? 'Отключён' : (clientStatus.key === 'expired' ? 'Исчерпано' : 'Не в сети');
+          const onlineClass = client.enabled === 0 ? 'disabled' : (clientStatus.key === 'expired' ? 'expired' : 'offline');
+          const displayTitle = compactTitle(client);
+          const secondaryText = String(displayTitle || '').trim() !== String(client.login || '').trim()
+            ? client.login
+            : String(client.sub_slug || client.uuid || '').slice(0, 18);
+        %>
+          <tr
+            data-client-entry
+            data-client-view="modern"
+            data-client-id-entry="<%= client.id %>"
+            data-client-search="<%= clientDirectorySearch(client) %>"
+            data-client-node-ids="<%= clientDirectoryNodeIds(client) %>"
+            data-client-name="<%= compactTitle(client) %>"
+            data-client-order="<%= client.id %>"
+            data-client-expiry-order="<%= Number(client.expiry_time || 0) %>"
+            data-client-status="<%= clientDirectoryStatusFilter(client) %>"
+          >
+            <td class="modern-check-col">
+              <label class="select-client" title="Выбрать клиента">
+                <input class="inline client-check" type="checkbox" name="client_ids" value="<%= client.id %>" data-client-id="<%= client.id %>" />
+                <span></span>
+              </label>
+            </td>
+            <td class="modern-actions-col">
+              <div class="modern-client-actions">
+                <button type="button" data-client-quick="<%= client.id %>" title="Подробная информация" aria-label="Подробная информация"><%- clientActionIcon('info') %></button>
+                <% if (showJsonLinks) { %>
+                <button type="button" onclick="showQr('<%= jsonUrl %>', '<%= client.login %> · JSON')" title="QR-код JSON" aria-label="Показать QR-код"><%- clientActionIcon('qr') %></button>
+                <button type="button" onclick="copySubLink('<%= jsonUrl %>', this)" title="Копировать JSON-ссылку" aria-label="Копировать JSON-ссылку"><%- clientActionIcon('copy') %></button>
+                <% } %>
+                <button type="button" onclick="openClientEditor(<%= client.id %>)" title="Редактировать клиента" aria-label="Редактировать клиента"><%- clientActionIcon('edit') %></button>
+              </div>
+            </td>
+            <td>
+              <button
+                type="submit"
+                form="modernToggleClient-<%= client.id %>"
+                class="modern-client-switch <%= client.enabled !== 0 ? 'is-on' : '' %>"
+                aria-pressed="<%= client.enabled !== 0 ? 'true' : 'false' %>"
+                aria-label="<%= client.enabled !== 0 ? 'Отключить клиента' : 'Включить клиента' %>"
+                title="<%= client.enabled !== 0 ? 'Отключить клиента' : 'Включить клиента' %>"
+              ><span></span></button>
+            </td>
+            <td>
+              <span
+                class="modern-online-state <%= onlineClass %>"
+                data-modern-online-state
+                data-client-id="<%= client.id %>"
+                data-online-eligible="<%= onlineEligible ? '1' : '0' %>"
+              ><i></i><b><%= onlineLabel %></b></span>
+            </td>
+            <td class="modern-client-identity">
+              <button type="button" data-client-quick="<%= client.id %>"><%= displayTitle %></button>
+              <small><%= secondaryText || '—' %></small>
+            </td>
+            <td class="modern-traffic-cell" data-modern-traffic-client="<%= client.id %>">
+              <div><span><%= formatClientBytes(usedBytes) %></span><b><%= trafficLimitGb > 0 ? trafficLimitGb + ' ГБ' : '∞' %></b></div>
+              <div class="modern-traffic-track"><i style="width:<%= clientTrafficPercent(client).toFixed(1) %>%"></i></div>
+            </td>
+            <td class="modern-speed-cell" data-modern-speed-client="<%= client.id %>">—</td>
+            <td><span class="modern-remaining <%= remaining.key %>"><%= remaining.text %></span></td>
+            <td><span class="modern-duration"><%= Number(client.duration_days || 0) > 0 ? Number(client.duration_days) + ' дн.' : '∞' %></span></td>
+          </tr>
+        <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+  </form>
+  <% if (clientsViewMode === 'modern') { %>
+    <% clients.forEach(client => {
+      const toggleQuery = new URLSearchParams({ ...(q ? { q } : {}) }).toString();
+      const toggleBack = toggleQuery ? `/clients?${toggleQuery}` : '/clients';
+    %>
+      <form id="modernToggleClient-<%= client.id %>" method="post" action="/clients/<%= client.id %>/toggle" class="inline-form js-long-action modern-client-toggle-form" data-global-floating-save="off">
+        <input type="hidden" name="back" value="<%= toggleBack %>" />
+      </form>
+    <% }) %>
+  <% } %>
+  <% } else { %>
+    <% if (!vpnClients.length) { %>
+      <div class="vpn-client-empty">
+        <strong>В этой вкладке клиентов пока нет.</strong>
+        <span><%= vpnServices.length ? 'Нажмите «Создать клиента», выберите установленный сервис и срок доступа.' : 'Сначала создайте и установите сервис в разделе «VPN-сервисы».' %></span>
+        <% if (!vpnServices.length) { %><a class="link-btn secondary" href="/vpn?tab=services">Открыть VPN-сервисы</a><% } %>
+      </div>
+    <% } %>
+    <div class="vpn-panel-client-grid">
+      <% vpnClients.forEach(client => {
+        const expires = Number(client.expires_at || 0);
+        const expired = expires > 0 && expires <= Date.now();
+        const statusKey = client.enabled === 0 ? 'offline' : expired ? 'warning' : 'online';
+        const statusText = client.enabled === 0 ? 'Отключён' : expired ? 'Истёк' : 'Активен';
+      %>
+        <article class="vpn-panel-client-card status-<%= statusKey %>">
+          <div class="vpn-panel-client-id">ID <%= client.id %></div>
+          <button type="button" class="vpn-panel-client-name" onclick="openModalById('vpnClientEditor-<%= client.id %>')"><%= client.name %></button>
+          <div class="vpn-panel-client-service"><%= vpnProtocolLabels[client.protocol] || client.protocol %> · <%= client.service_name %> · <%= client.host_name %></div>
+          <div class="vpn-panel-client-status"><span class="client-status-icon <%= statusKey %>"></span><strong><%= statusText %></strong></div>
+          <div class="vpn-panel-client-expiry"><span>До</span><strong><%= expires > 0 ? new Date(expires).toLocaleDateString('ru-RU') : '∞' %></strong></div>
+          <div class="vpn-panel-client-actions">
+            <a class="btn-main compact-copy-btn" href="/vpn/clients/<%= client.id %>/config">Скачать</a>
+            <button type="button" class="btn-qr" data-vpn-qr-url="/vpn/clients/<%= client.id %>/qr" data-vpn-qr-title="<%= client.name %> · <%= vpnProtocolLabels[client.protocol] || client.protocol %>" onclick="showVpnQr(this.dataset.vpnQrUrl, this.dataset.vpnQrTitle)">QR</button>
+            <button type="button" class="btn-secondary" onclick="openModalById('vpnClientEditor-<%= client.id %>')">Редактор</button>
+          </div>
+        </article>
+      <% }) %>
+    </div>
+  <% } %>
+</div>
+
+<% if (clientType === 'xray') { %>
+<div id="createClientModal" class="modal hidden" onclick="closeModalById(event, 'createClientModal')">
+  <div class="modal-card editor-modal client-editor-modal create-client-editor-modal" onclick="event.stopPropagation()">
+    <button type="button" class="modal-close" onclick="event.preventDefault(); event.stopPropagation(); hideModalById('createClientModal'); return false;">×</button>
+    <h2>Создать клиента</h2>
+    <form method="post" action="/clients" class="js-long-action" data-loading-title="Создаю клиента" data-loading-text="Клиент создаётся на выбранных узлах. Это может занять время.">
+      <div class="form-grid clean-form">
+        <div class="field half">
+          <label>Логин</label>
+          <input name="login" placeholder="<%= nextLogin || 'user001' %>" />
+          <small class="hint">Пусто = автоматический логин. Перед созданием агрегатор проверит выбранные узлы и пропустит занятые имена без учёта регистра: user005 = User005.</small>
+        </div>
+        <div class="field half">
+          <label>Комментарий</label>
+          <input name="comment" placeholder="Имя клиента, телефон, заметка" />
+        </div>
+        <div class="field third">
+          <label>Срок в днях</label>
+          <input name="duration_days" type="number" min="0" value="30" />
+          <small class="hint">0 = без срока.</small>
+        </div>
+        <div class="field third">
+          <label>Общий лимит, ГБ</label>
+          <input name="traffic_gb" type="number" min="0" step="1" value="0" />
+          <small class="hint">0 = без лимита.</small>
+        </div>
+        <div class="field third">
+          <label>Лимит IP</label>
+          <input name="limit_ip" type="number" min="0" value="1" required />
+          <small class="hint">0 = без лимита IP.</small>
+        </div>
+      </div>
+
+      <div class="nodes-head node-bulk-head">
+        <div>
+          <label>Узлы клиента</label>
+          <small class="hint">Поле ГБ возле узла задаёт лимит только для этого региона. Для Remnawave лимит IP передаётся как лимит устройств, а выбранный Internal Squad добавляет его Hosts в общую подписку.</small>
+        </div>
+        <div class="node-select-actions" aria-label="Быстрый выбор узлов">
+          <button type="button" class="btn-secondary node-select-btn" data-node-check-set="all" aria-pressed="false" onclick="event.stopPropagation(); return setClientNodeSelection(this, true)">Выбрать все</button>
+          <button type="button" class="btn-secondary node-select-btn" data-node-check-set="none" aria-pressed="false" onclick="event.stopPropagation(); return setClientNodeSelection(this, false)">Снять все</button>
+        </div>
+      </div>
+
+      <div class="checkbox-list node-list">
+        <% nodes.forEach(node => { %>
+          <label class="node-item">
+            <input class="node-check" type="checkbox" name="node_ids" value="<%= node.id %>" />
+            <span class="node-info">
+              <strong><%- flagIcon(node.country_code, node.country_flag, node.country_name_ru || node.name, node.node_type) %><span><%= nodeName(node) %></span></strong>
+              <small><%= nodeEndpointLabel(node) %></small>
+            </span>
+            <input class="node-gb-input" name="node_traffic_gb_<%= node.id %>" type="number" min="0" step="1" placeholder="ГБ" />
+          </label>
+        <% }) %>
+      </div>
+
+      <% if (nodes.some(node => isRemnawaveNode(node))) { %>
+        <div class="alert ok">При выборе Remnawave Aggregator создаст пользователя с тем же VLESS UUID, назначит Internal Squad из настроек узла и сохранит Remnawave subscription URL. После этого его VLESS/XHTTP Host появится рядом с остальными узлами в общей подписке Aggregator.</div>
+      <% } %>
+
+      <div class="modal-actions">
+        <button type="submit" class="btn-main">Создать клиента</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="importSyncModal" class="modal hidden" onclick="closeModalById(event, 'importSyncModal')">
+  <div class="modal-card editor-modal" onclick="event.stopPropagation()">
+    <button type="button" class="modal-close" onclick="event.preventDefault(); event.stopPropagation(); hideModalById('importSyncModal'); return false;">×</button>
+    <h2>Импорт и синхронизация</h2>
+
+    <div class="modal-section-box">
+      <h3>Импорт из основного узла</h3>
+      <p class="muted">Безопасный режим по умолчанию импортирует записи только в агрегатор и не меняет другие серверы. Для удалённой синхронизации выберите её явно и отметьте конкретные целевые узлы.</p>
+      <form method="post" action="/clients/import" class="js-long-action import-sync-form" data-loading-title="Идёт импорт" data-loading-text="Клиенты импортируются из выбранного узла. На экране выполнения будет кнопка безопасной отмены.">
+        <label>Основной узел-источник</label>
+        <select name="node_id" required data-import-source onchange="syncImportTargetSource(this.form)">
+          <% nodes.forEach(node => { %>
+            <option value="<%= node.id %>" data-node-type="<%= String(node.node_type || '3xui') %>"><%= flagText(node.country_code, node.country_flag, node.country_name_ru || node.name) %> <%= nodeName(node) %> (<%= nodeEndpointLabel(node) %>)</option>
+          <% }) %>
+        </select>
+
+        <label>Режим импорта</label>
+        <select name="import_mode" data-import-mode onchange="syncImportModeUi(this.form)">
+          <option value="local" selected>Только импортировать в агрегатор — другие узлы не менять</option>
+          <option value="selected">Импортировать и синхронизировать выбранные узлы</option>
+        </select>
+
+        <div class="modal-section-box import-target-box" data-import-target-box hidden>
+          <div class="nodes-head node-bulk-head">
+            <div>
+              <label>Целевые узлы</label>
+              <small class="hint">Источник автоматически исключается. Неотмеченные узлы операция не затронет.</small>
+            </div>
+            <div class="node-select-actions">
+              <button type="button" class="btn-secondary" onclick="return setOperationNodeSelection(this, 'target_node_ids', true)">Выбрать доступные</button>
+              <button type="button" class="btn-secondary" onclick="return setOperationNodeSelection(this, 'target_node_ids', false)">Снять все</button>
+            </div>
+          </div>
+          <div class="checkbox-list node-list operation-node-list">
+            <% nodes.forEach(node => { %>
+              <label class="node-item">
+                <input class="node-check" type="checkbox" name="target_node_ids" value="<%= node.id %>" />
+                <span class="node-info">
+                  <strong><%- flagIcon(node.country_code, node.country_flag, node.country_name_ru || node.name, node.node_type) %><span><%= nodeName(node) %></span></strong>
+                  <small><%= nodeEndpointLabel(node) %></small>
+                </span>
+              </label>
+            <% }) %>
+          </div>
+        </div>
+        <div class="alert ok import-safe-note">По умолчанию удалённые узлы не изменяются. Перед началом синхронизации выбранные узлы проверяются один раз; недоступный узел пропускается целиком, а не создаёт тайм-аут для каждого клиента.</div>
+        <button type="submit" class="btn-main">Запустить импорт</button>
+      </form>
+    </div>
+
+    <div class="modal-section-box">
+      <h3>Добавить отсутствующих клиентов на один узел</h3>
+      <p class="muted">Проверяет выбранный сервер один раз, читает его текущих клиентов и создаёт только отсутствующих. В Remnawave существующий пользователь не перезаписывается, но недостающий настроенный Internal Squad безопасно добавляется, чтобы Host появился в подписке.</p>
+      <form method="post" action="/clients/create-missing-on-node" class="js-long-action" data-loading-title="Добавляю отсутствующих клиентов" data-loading-text="Существующие клиенты будут пропущены. На экране выполнения доступна безопасная отмена.">
+        <label>Целевой узел</label>
+        <select name="node_id" required>
+          <option value="">Выберите узел</option>
+          <% nodes.forEach(node => { %>
+            <option value="<%= node.id %>" data-node-type="<%= String(node.node_type || '3xui') %>"><%= flagText(node.country_code, node.country_flag, node.country_name_ru || node.name) %> <%= nodeName(node) %> (<%= nodeEndpointLabel(node) %>)</option>
+          <% }) %>
+        </select>
+        <div class="alert ok">Безопасный режим: совпадения по UUID/email/subId не пересоздаются. Совпадение email с другим UUID считается конфликтом. Для Remnawave при совпадении добавляется только отсутствующий Internal Squad.</div>
+        <button type="submit" class="btn-main">Создать только отсутствующих</button>
+      </form>
+    </div>
+
+    <div class="modal-section-box">
+      <h3>Синхронизировать выбранные узлы</h3>
+      <p class="muted">Создаёт или обновляет клиентов агрегатора только на отмеченных серверах. Автоматический выбор всех активных узлов отключён.</p>
+      <form method="post" action="/clients/sync-nodes" class="js-long-action" data-loading-title="Идёт синхронизация" data-loading-text="Агрегатор обрабатывает только выбранные узлы. На экране выполнения будет кнопка безопасной отмены.">
+        <div class="nodes-head node-bulk-head">
+          <label>Узлы для синхронизации</label>
+          <div class="node-select-actions">
+            <button type="button" class="btn-secondary" onclick="return setOperationNodeSelection(this, 'node_ids', true)">Выбрать все</button>
+            <button type="button" class="btn-secondary" onclick="return setOperationNodeSelection(this, 'node_ids', false)">Снять все</button>
+          </div>
+        </div>
+        <div class="checkbox-list node-list operation-node-list">
+          <% nodes.forEach(node => { %>
+            <label class="node-item">
+              <input class="node-check" type="checkbox" name="node_ids" value="<%= node.id %>" />
+              <span class="node-info">
+                <strong><%- flagIcon(node.country_code, node.country_flag, node.country_name_ru || node.name, node.node_type) %><span><%= nodeName(node) %></span></strong>
+                <small><%= nodeEndpointLabel(node) %></small>
+              </span>
+            </label>
+          <% }) %>
+        </div>
+        <button type="submit" class="btn-secondary">Синхронизировать выбранные узлы</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div id="applyAllModal" class="modal hidden" onclick="closeModalById(event, 'applyAllModal')">
+  <div class="modal-card editor-modal" onclick="event.stopPropagation()">
+    <button type="button" class="modal-close" onclick="event.preventDefault(); event.stopPropagation(); hideModalById('applyAllModal'); return false;">×</button>
+    <h2>Применить к выбранным</h2>
+    <p class="muted">На выбранном узле будут созданы отсутствующие клиенты и обновлены уже существующие. Пустые лимиты сохраняют текущие значения клиента; 0 = безлимит. Потраченный трафик не сбрасывается.</p>
+    <div class="alert ok" id="applySelectedSummary">Выбрано клиентов: 0</div>
+    <p class="muted" id="applySelectedNames"></p>
+    <form id="applySelectedForm" method="post" action="/clients/apply-to-node" class="js-long-action" data-loading-title="Применяю выбранных клиентов" data-loading-text="На выбранном узле создаются или обновляются только явно отмеченные клиенты." onsubmit="return prepareApplySelectedSubmit(event)">
+      <div class="form-grid clean-form">
+        <div class="field">
+          <label>Узел, куда добавить или обновить клиентов</label>
+          <select name="node_id" required>
+            <% nodes.forEach(node => { %>
+              <option value="<%= node.id %>" data-node-type="<%= String(node.node_type || '3xui') %>"><%= flagText(node.country_code, node.country_flag, node.country_name_ru || node.name) %> <%= nodeName(node) %> (<%= nodeEndpointLabel(node) %>)</option>
+            <% }) %>
+          </select>
+        </div>
+        <div class="field half">
+          <label>Лимит IP</label>
+          <input name="limit_ip" type="number" min="0" placeholder="сохранить текущий" />
+        </div>
+        <div class="field half">
+          <label>Лимит ГБ</label>
+          <input name="traffic_gb" type="number" min="0" step="1" placeholder="сохранить текущий" />
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="submit" class="btn-main">Применить к выбранным</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card danger-zone-card">
+  <h2>Массовое удаление</h2>
+  <form id="deleteAllClientsForm" method="post" action="/clients/delete-all" class="js-long-action" data-loading-title="Удаляю всех клиентов" data-loading-text="Недоступные и удалённые узлы будут пропущены; локальные связи будут очищены." onsubmit="return openDeleteAllClientsConfirm(event)">
+    <input type="hidden" name="delete_all_confirmation" value="" id="deleteAllConfirmation" />
+    <label>Режим удаления</label>
+    <select name="delete_mode" id="deleteAllMode">
+      <option value="aggregator">Только из агрегатора</option>
+      <option value="secondary">Из агрегатора и вторичных узлов</option>
+      <option value="all">Из агрегатора и всех узлов</option>
+    </select>
+    <button class="danger" type="submit">Удалить всех клиентов</button>
+  </form>
+</div>
+
+<div id="deleteAllClientsModal" class="modal hidden" onclick="closeDeleteAllClientsConfirm(event)">
+  <div class="modal-card delete-all-confirm-card" onclick="event.stopPropagation()">
+    <button type="button" class="modal-close" onclick="hideDeleteAllClientsConfirm()">×</button>
+    <h2>Удалить всех клиентов?</h2>
+    <p class="muted">Это массовая операция. Недоступные, отключённые и уже удалённые узлы будут пропущены, а их старые локальные связи — очищены.</p>
+    <div class="alert err" id="deleteAllModeSummary">Режим удаления не выбран.</div>
+    <label for="deleteAllTypedYes">Для подтверждения напишите <strong>YES</strong></label>
+    <input id="deleteAllTypedYes" autocomplete="off" placeholder="YES" />
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" onclick="hideDeleteAllClientsConfirm()">Отмена</button>
+      <button type="button" class="danger" id="deleteAllConfirmButton" onclick="submitDeleteAllClients()" disabled>Удалить всех клиентов</button>
+    </div>
+  </div>
+</div>
+
+<% clients.forEach(client => {
+  const clientEnabled = client.enabled !== 0;
+  const clientReturnPath = '/clients?' + new URLSearchParams({ ...(q ? { q } : {}), edit: String(client.id) }).toString();
+  const canShowH1SubInEditor = Boolean(showSubLinks && Number(client.has_h1cloud_sub) === 1);
+%>
+  <div id="clientEditor-<%= client.id %>" class="modal hidden" onclick="closeClientEditor(event, <%= client.id %>)">
+    <div class="modal-card editor-modal client-editor-modal existing-client-editor-modal" onclick="event.stopPropagation()">
+      <button type="button" class="modal-close" onclick="event.preventDefault(); event.stopPropagation(); hideClientEditor(<%= client.id %>); return false;">×</button>
+      <h2>Клиент: <%= compactTitle(client) %></h2>
+      <p class="muted">Подробная информация и редактор клиента в одном окне.</p>
+      <div class="client-detail-summary">
+        <div><span>ID</span><strong><%= client.id %></strong></div>
+        <div><span>UUID</span><code><%= client.uuid %></code></div>
+        <div><span>Статус</span><strong class="badge <%= clientStatusMeta(client).key %>"><%= clientStatusMeta(client).label %></strong></div>
+        <div><span>Срок</span><strong><%= termShort(client) %> дн.</strong><small>до: <%= expiryDateTime(client.expiry_time) %></small></div>
+        <div><span>Общий лимит</span><strong><%= client.traffic_gb && client.traffic_gb > 0 ? client.traffic_gb + ' ГБ' : '∞' %></strong></div>
+        <div><span>Лимит IP</span><strong><%= client.limit_ip && Number(client.limit_ip) > 0 ? client.limit_ip : '∞' %></strong></div>
+        <div>
+          <span><%= [canShowH1SubInEditor ? 'SUB' : '', showJsonLinks ? 'JSON' : ''].filter(Boolean).join(' / ') || 'Подписки' %></span>
+          <div class="client-summary-link-actions">
+            <% if (canShowH1SubInEditor) { %><button type="button" class="btn-secondary compact-copy-btn" onclick="copySubLink('<%= baseUrl %>/sub/<%= client.sub_slug %>', this)">SUB</button><% } %>
+            <% if (showJsonLinks) { %><button type="button" class="btn-secondary compact-copy-btn" onclick="copySubLink('<%= baseUrl %>/json/<%= client.sub_slug %>', this)"><%= canShowH1SubInEditor ? 'JSON' : 'Копировать JSON' %></button><% } %>
+            <% if (!canShowH1SubInEditor && !showJsonLinks) { %><small>Ссылки скрыты в настройках.</small><% } %>
+          </div>
+        </div>
+        <div>
+          <span>QR</span>
+          <div class="client-summary-link-actions">
+            <% if (canShowH1SubInEditor) { %><button type="button" class="btn-secondary" onclick="showQr('<%= baseUrl %>/sub/<%= client.sub_slug %>', '<%= client.login %> · Общая SUB')">SUB QR</button><% } %>
+            <% if (showJsonLinks) { %><button type="button" class="btn-secondary" onclick="showQr('<%= baseUrl %>/json/<%= client.sub_slug %>', '<%= client.login %> · JSON')"><%= canShowH1SubInEditor ? 'JSON QR' : 'Показать QR' %></button><% } %>
+            <% if (!canShowH1SubInEditor && !showJsonLinks) { %><small>QR скрыт в настройках.</small><% } %>
+          </div>
+        </div>
+      </div>
+
+      <form method="post" action="/clients/<%= client.id %>/edit" class="js-long-action" data-loading-title="Сохраняю клиента" data-loading-text="Изменения применяются на узлах клиента. Это может занять время.">
+        <input type="hidden" name="back" value="<%= clientReturnPath %>" />
+        <div class="form-grid clean-form">
+          <div class="field half">
+            <label>Имя клиента</label>
+            <input name="display_name" value="<%= client.display_name %>" required />
+          </div>
+          <div class="field half">
+            <label>Логин / Email</label>
+            <input name="login" value="<%= client.login %>" required />
+          </div>
+          <div class="field half">
+            <label>Комментарий</label>
+            <input name="comment" value="<%= client.comment || '' %>" placeholder="Заметка для поиска" />
+          </div>
+          <div class="field half">
+            <label>Лимит IP</label>
+            <input name="limit_ip" type="number" min="0" value="<%= client.limit_ip ?? 1 %>" />
+          </div>
+          <div class="field half">
+            <label>Новый срок в днях</label>
+            <input name="duration_days" type="number" min="0" value="" placeholder="не менять" />
+            <small class="hint">Сейчас: <%= termShort(client) %> дн., до <%= expiryDateTime(client.expiry_time) %>. Пусто = не менять, 0 = убрать срок.</small>
+          </div>
+          <div class="field half">
+            <label>Общий лимит трафика, ГБ</label>
+            <input name="traffic_gb" type="number" min="0" step="1" value="<%= client.traffic_gb || 0 %>" />
+          </div>
+        </div>
+
+        <div class="nodes-head node-bulk-head edit-node-bulk-head">
+          <div>
+            <h3>Узлы клиента</h3>
+            <p class="muted">Снимите галочку, чтобы отключить клиенту конкретный узел. Поле ГБ задаёт лимит только для этого региона; пусто = общий лимит.</p>
+          </div>
+          <div class="node-select-actions" aria-label="Быстрый выбор узлов клиента">
+            <button type="button" class="btn-secondary node-select-btn" data-node-check-set="all" aria-pressed="false" onclick="event.stopPropagation(); return setClientNodeSelection(this, true)">Выбрать все</button>
+            <button type="button" class="btn-secondary node-select-btn" data-node-check-set="none" aria-pressed="false" onclick="event.stopPropagation(); return setClientNodeSelection(this, false)">Снять все</button>
+          </div>
+        </div>
+        <div class="checkbox-list node-list">
+          <% client.node_limits.forEach(row => {
+            const nodeLabel = nodeName(row);
+          %>
+            <label class="node-item node-edit-row">
+              <input class="inline" type="checkbox" name="node_enabled_<%= row.node_id %>" value="1" <%= row.client_node_id && row.enabled !== 0 ? 'checked' : '' %> />
+              <span class="node-info"><strong><%- flagIcon(row.country_code, row.country_flag, row.country_name_ru || row.node_name || row.name, row.node_type) %><span><%= nodeLabel %></span></strong><small><%= row.client_node_id ? (row.enabled !== 0 ? 'узел включён' : 'узел отключён для клиента') : 'узел не назначен' %></small></span>
+              <input class="node-gb-input" name="node_traffic_gb_<%= row.node_id %>" type="number" min="0" step="1" value="<%= row.traffic_gb || '' %>" placeholder="ГБ" />
+            </label>
+          <% }) %>
+        </div>
+        <div class="modal-actions">
+          <button type="submit" class="btn-main">Сохранить</button>
+        </div>
+      </form>
+
+      <hr class="soft-sep" />
+
+      <form method="post" action="/clients/<%= client.id %>/extend" class="extend-form js-long-action" data-loading-title="Продлеваю клиента" data-loading-text="Срок продлевается на узлах клиента.">
+        <input type="hidden" name="back" value="<%= clientReturnPath %>" />
+        <label>Продлить срок</label>
+        <div class="btn-row stretch-row">
+          <input name="days" type="number" min="1" value="30" />
+          <button type="submit" class="btn-main">Продлить на дней</button>
+        </div>
+      </form>
+
+      <form method="post" action="/clients/<%= client.id %>/toggle" class="modal-actions js-long-action" data-loading-title="Меняю статус" data-loading-text="Статус клиента применяется на узлах.">
+        <input type="hidden" name="back" value="<%= clientReturnPath %>" />
+        <button type="submit" class="<%= clientEnabled ? 'btn-danger' : 'btn-secondary' %>"><%= clientEnabled ? 'Отключить клиента' : 'Включить клиента' %></button>
+      </form>
+    </div>
+  </div>
+<% }) %>
+
+<% clients.forEach(client => { %>
+  <% const details = (client.node_limits || []).filter(nl => nl.client_node_id && ((nl.traffic_gb && nl.traffic_gb > 0) || nl.enabled === 0)); %>
+  <% if (details.length) { %>
+    <div id="limitDetails-<%= client.id %>" class="modal hidden" onclick="closeLimitDetails(event, <%= client.id %>)">
+      <div class="modal-card limit-details-card" onclick="event.stopPropagation()">
+        <button type="button" class="modal-close" onclick="hideLimitDetails(<%= client.id %>)">×</button>
+        <h2>Лимиты узлов</h2>
+        <p class="muted"><%= client.login %></p>
+        <div class="limit-details-list">
+          <% details.forEach(nl => { %>
+            <div class="limit-details-row <%= nl.enabled === 0 ? 'disabled' : '' %>">
+              <span><%= nodeName(nl) %><% if (nl.transport_label) { %> <em class="transport-chip"><%= nl.transport_label %></em><% } %></span>
+              <strong><%= nodeLimitText(nl) %></strong>
+              <% if (nl.enabled !== 0 && nl.traffic_gb > 0) { %><small>осталось <%= nodeRemainingText(nl) %></small><% } %>
+            </div>
+          <% }) %>
+        </div>
+      </div>
+    </div>
+  <% } %>
+<% }) %>
+
+<% } else { %>
+  <div id="createVpnClientModal" class="modal hidden" onclick="closeModalById(event, 'createVpnClientModal')">
+    <div class="modal-card editor-modal client-editor-modal create-client-editor-modal" onclick="event.stopPropagation()">
+      <button type="button" class="modal-close" onclick="hideModalById('createVpnClientModal')">×</button>
+      <h2>Создать клиента: <%= currentClientTypeLabel %></h2>
+      <% if (!vpnServices.length) { %>
+        <div class="alert err">Нет установленного сервиса этого типа. Сначала откройте «VPN-сервисы», создайте сервис и выполните установку.</div>
+        <div class="modal-actions"><a class="link-btn" href="/vpn?tab=services">Перейти к сервисам</a></div>
+      <% } else { %>
+        <form method="post" action="/vpn/services/<%= vpnServices[0].id %>/clients" id="clientsVpnCreateForm" class="js-long-action" data-loading-title="Создаю VPN-клиента" data-loading-text="Панель создаёт ключи и добавляет клиента на выбранный VPS.">
+          <input type="hidden" name="back" value="/clients?type=<%= clientType %>" />
+          <div class="form-grid clean-form">
+            <div class="field half">
+              <label>VPN-сервис</label>
+              <select id="clientsVpnService" required>
+                <% vpnServices.forEach(service => { %>
+                  <option value="<%= service.id %>"><%= vpnProtocolLabels[service.protocol] || service.protocol %> · <%= service.name %> · <%= service.host_name %></option>
+                <% }) %>
+              </select>
+            </div>
+            <div class="field half">
+              <label>Имя клиента</label>
+              <input name="name" required placeholder="Например: iphone-alex" autocomplete="off" />
+            </div>
+            <div class="field half">
+              <label>Связать с основным клиентом</label>
+              <select name="aggregator_client_id">
+                <option value="">Не связывать</option>
+                <% vpnAggregatorClients.forEach(item => { %><option value="<%= item.id %>"><%= item.display_name || item.login %> · <%= item.login %></option><% }) %>
+              </select>
+            </div>
+            <div class="field half">
+              <label>Срок доступа, дней</label>
+              <input name="duration_days" type="number" min="0" max="3650" value="30" required />
+              <small class="hint">0 — без ограничения.</small>
+            </div>
+          </div>
+          <div class="modal-actions"><button type="submit" class="btn-main">Создать конфигурацию</button></div>
+        </form>
+      <% } %>
+    </div>
+  </div>
+
+  <% vpnClients.forEach(client => {
+    const expires = Number(client.expires_at || 0);
+    const returnPath = '/clients?type=' + encodeURIComponent(clientType) + (q ? '&q=' + encodeURIComponent(q) : '');
+  %>
+    <div id="vpnClientEditor-<%= client.id %>" class="modal hidden" onclick="closeModalById(event, 'vpnClientEditor-<%= client.id %>')">
+      <div class="modal-card editor-modal client-editor-modal existing-client-editor-modal" onclick="event.stopPropagation()">
+        <button type="button" class="modal-close" onclick="hideModalById('vpnClientEditor-<%= client.id %>')">×</button>
+        <h2><%= client.name %></h2>
+        <p class="muted"><%= vpnProtocolLabels[client.protocol] || client.protocol %> · <%= client.service_name %> · <%= client.host_name %></p>
+        <div class="client-detail-summary vpn-client-detail-summary">
+          <div><span>ID</span><strong><%= client.id %></strong></div>
+          <div><span>Адрес</span><code><%= client.address || 'Outline key' %></code></div>
+          <div><span>Статус</span><strong><%= client.enabled === 0 ? 'Отключён' : 'Активен' %></strong></div>
+          <div><span>Действует до</span><strong><%= expires > 0 ? new Date(expires).toLocaleString('ru-RU') : 'Без ограничения' %></strong></div>
+        </div>
+        <div class="vpn-editor-downloads">
+          <a class="link-btn" href="/vpn/clients/<%= client.id %>/config">Скачать конфигурацию</a>
+          <button type="button" class="btn-secondary" data-vpn-qr-url="/vpn/clients/<%= client.id %>/qr" data-vpn-qr-title="<%= client.name %>" onclick="showVpnQr(this.dataset.vpnQrUrl, this.dataset.vpnQrTitle)">Показать QR-код</button>
+        </div>
+        <form method="post" action="/vpn/clients/<%= client.id %>/rename" class="form-grid vpn-client-rename-form">
+          <input type="hidden" name="back" value="<%= returnPath %>" />
+          <label>Имя клиента<input name="name" value="<%= client.name %>" required /></label>
+          <div class="button-row"><button type="submit" class="btn-main">Сохранить имя</button></div>
+        </form>
+        <form method="post" action="/vpn/clients/<%= client.id %>/extend" class="vpn-editor-inline-form">
+          <input type="hidden" name="back" value="<%= returnPath %>" />
+          <label>Продлить<input name="days" type="number" min="0" max="3650" value="30" /></label>
+          <button type="submit" class="btn-secondary">Продлить</button>
+        </form>
+        <div class="modal-actions vpn-editor-danger-actions">
+          <form method="post" action="/vpn/clients/<%= client.id %>/toggle">
+            <input type="hidden" name="back" value="<%= returnPath %>" />
+            <button type="submit" class="btn-secondary"><%= client.enabled === 0 ? 'Включить' : 'Отключить' %></button>
+          </form>
+          <form method="post" action="/vpn/clients/<%= client.id %>/delete" onsubmit="return confirm('Удалить VPN-клиента с сервера и из агрегатора?')">
+            <input type="hidden" name="back" value="<%= returnPath %>" />
+            <button type="submit" class="danger">Удалить</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  <% }) %>
+<% } %>
+
+<div id="loadingModal" class="modal hidden loading-modal" aria-live="polite">
+  <div class="modal-card loading-card">
+    <div class="loader-ring"></div>
+    <h2 id="loadingTitle">Загрузка</h2>
+    <p class="muted" id="loadingText">Операция выполняется. Не закрывайте страницу.</p>
+  </div>
+</div>
+
+<div id="qrModal" class="modal hidden qr-modal" role="dialog" aria-modal="true" aria-labelledby="qrTitle" onclick="hideQr(event)">
+  <div class="modal-card qr-modal-card" onclick="event.stopPropagation()">
+    <button type="button" class="modal-close" onclick="closeQr()" aria-label="Закрыть QR-код">×</button>
+    <div class="qr-modal-heading">
+      <span class="qr-modal-icon" aria-hidden="true"><%- clientActionIcon('qr') %></span>
+      <div>
+        <h2 id="qrTitle">QR-код</h2>
+        <p>Отсканируйте код в приложении или скопируйте ссылку.</p>
+      </div>
+    </div>
+    <div class="qr-modal-visual"><img id="qrImg" class="qr-modal-image" alt="QR-код подписки" /></div>
+    <div class="qr-modal-link" id="qrLinkRow">
+      <code id="qrText"></code>
+      <button type="button" class="btn-secondary" id="qrCopyButton" onclick="copyCurrentQrLink(this)">Копировать</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const clientDirectoryMode = <%= clientType === 'xray' ? 'true' : 'false' %>;
+const clientDirectoryInitialQuery = new URLSearchParams(window.location.search).get('q') || '';
+let clientDirectoryState = { query: clientDirectoryInitialQuery, nodeId: '', sort: 'newest' };
+const clientDirectorySortModes = ['newest','oldest','name-asc','name-desc','expiring','expired','disabled'];
+
+function normalizeClientDirectoryText(value) {
+  return String(value || '').toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+}
+function getClientDirectoryEntries(view) {
+  const selector = view ? `[data-client-entry][data-client-view="${view}"]` : '[data-client-entry]';
+  return Array.from(document.querySelectorAll(selector));
+}
+function getVisibleClientDirectoryIds() {
+  const ids = new Set();
+  getClientDirectoryEntries().forEach(entry => {
+    if (!entry.classList.contains('is-directory-hidden')) {
+      const id = String(entry.dataset.clientIdEntry || '');
+      if (id) ids.add(id);
+    }
+  });
+  return ids;
+}
+function compareClientDirectoryEntries(a, b) {
+  const mode = clientDirectoryState.sort;
+  const ai = Number(a.dataset.clientOrder || 0);
+  const bi = Number(b.dataset.clientOrder || 0);
+  const ae = Number(a.dataset.clientExpiryOrder || 0);
+  const be = Number(b.dataset.clientExpiryOrder || 0);
+  const an = normalizeClientDirectoryText(a.dataset.clientName || '');
+  const bn = normalizeClientDirectoryText(b.dataset.clientName || '');
+  if (mode === 'oldest') return ai - bi;
+  if (mode === 'name-asc') return an.localeCompare(bn, 'ru', { numeric: true, sensitivity: 'base' }) || bi - ai;
+  if (mode === 'name-desc') return bn.localeCompare(an, 'ru', { numeric: true, sensitivity: 'base' }) || bi - ai;
+  if (mode === 'expiring') return (ae || Number.MAX_SAFE_INTEGER) - (be || Number.MAX_SAFE_INTEGER) || bi - ai;
+  if (mode === 'expired') return be - ae || bi - ai;
+  if (mode === 'disabled') return bi - ai;
+  return bi - ai;
+}
+function reorderClientDirectory() {
+  [
+    ['.mobile-client-cards', 'mobile'],
+    ['.desktop-client-split-list', 'desktop'],
+    ['.clients-table tbody', 'table'],
+    ['.clients-modern-table tbody', 'modern']
+  ].forEach(([containerSelector, view]) => {
+    const container = document.querySelector(containerSelector);
+    if (!container) return;
+    getClientDirectoryEntries(view).sort(compareClientDirectoryEntries).forEach(entry => container.appendChild(entry));
+  });
+}
+function syncClientDirectorySearchInputs(source) {
+  document.querySelectorAll('form[data-client-directory-search] input[name="q"]').forEach(input => {
+    if (input !== source && input.value !== clientDirectoryState.query) input.value = clientDirectoryState.query;
+  });
+}
+function updateClientDirectoryUrl() {
+  if (!window.history || !window.history.replaceState) return;
+  const url = new URL(window.location.href);
+  if (clientDirectoryState.query) url.searchParams.set('q', clientDirectoryState.query); else url.searchParams.delete('q');
+  if (clientDirectoryState.nodeId) url.searchParams.set('node_id', clientDirectoryState.nodeId); else url.searchParams.delete('node_id');
+  if (clientDirectoryState.sort && clientDirectoryState.sort !== 'newest') url.searchParams.set('sort', clientDirectoryState.sort); else url.searchParams.delete('sort');
+  url.searchParams.delete('edit');
+  window.history.replaceState({}, '', url.pathname + (url.searchParams.toString() ? '?' + url.searchParams.toString() : ''));
+}
+function applyClientDirectoryFilters(options = {}) {
+  if (!clientDirectoryMode) return;
+  const query = normalizeClientDirectoryText(clientDirectoryState.query);
+  const nodeId = String(clientDirectoryState.nodeId || '');
+  const statusMode = ['expiring','expired','disabled'].includes(clientDirectoryState.sort) ? clientDirectoryState.sort : '';
+  const visibleIds = new Set();
+  const master = new Map();
+  getClientDirectoryEntries().forEach(entry => {
+    const id = String(entry.dataset.clientIdEntry || '');
+    if (id && !master.has(id)) master.set(id, entry);
+  });
+  master.forEach((entry, id) => {
+    const search = normalizeClientDirectoryText(entry.dataset.clientSearch || '');
+    const nodes = String(entry.dataset.clientNodeIds || '').split(/\s+/).filter(Boolean);
+    const status = String(entry.dataset.clientStatus || '');
+    if ((!query || search.includes(query)) && (!nodeId || nodes.includes(nodeId)) && (!statusMode || status === statusMode)) visibleIds.add(id);
+  });
+  getClientDirectoryEntries().forEach(entry => {
+    const id = String(entry.dataset.clientIdEntry || '');
+    const hidden = !visibleIds.has(id);
+    entry.classList.toggle('is-directory-hidden', hidden);
+    entry.hidden = hidden;
+    entry.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+    if (hidden) entry.querySelectorAll('.client-check[data-client-id]').forEach(cb => { cb.checked = false; cb.indeterminate = false; });
+  });
+  reorderClientDirectory();
+  const count = document.getElementById('clientDirectoryCount');
+  if (count) count.textContent = String(visibleIds.size);
+  const empty = document.getElementById('clientDirectoryEmpty');
+  if (empty) empty.hidden = visibleIds.size !== 0;
+  const titleCount = document.querySelector('.clients-card > .section-title-row .count-chip');
+  if (titleCount) titleCount.textContent = String(visibleIds.size);
+  syncClientDirectorySearchInputs(options.sourceInput || null);
+  syncBulkNodeActionWithFilter();
+  updateBulkSelectionUi();
+  if (options.updateUrl !== false) updateClientDirectoryUrl();
+}
+function setupClientDirectory() {
+  if (!clientDirectoryMode) return;
+  const params = new URLSearchParams(window.location.search);
+  clientDirectoryState.query = params.get('q') || clientDirectoryInitialQuery || '';
+  clientDirectoryState.nodeId = params.get('node_id') || '';
+  clientDirectoryState.sort = clientDirectorySortModes.includes(params.get('sort')) ? params.get('sort') : 'newest';
+  const nodeSelect = document.getElementById('clientNodeFilter');
+  const sortSelect = document.getElementById('clientSortMode');
+  if (nodeSelect) nodeSelect.value = clientDirectoryState.nodeId;
+  if (sortSelect) sortSelect.value = clientDirectoryState.sort;
+  document.querySelectorAll('form[data-client-directory-search]').forEach(form => {
+    const input = form.querySelector('input[name="q"]');
+    if (!input) return;
+    input.value = clientDirectoryState.query;
+    input.addEventListener('input', () => {
+      clientDirectoryState.query = input.value;
+      applyClientDirectoryFilters({ sourceInput: input });
+    });
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      clientDirectoryState.query = input.value;
+      applyClientDirectoryFilters({ sourceInput: input });
+      input.focus({ preventScroll: true });
+    });
+  });
+  nodeSelect?.addEventListener('change', () => {
+    clientDirectoryState.nodeId = nodeSelect.value;
+    applyClientDirectoryFilters();
+  });
+  document.getElementById('bulkRemoveNodeId')?.addEventListener('change', event => {
+    if (!clientDirectoryState.nodeId) return;
+    if (String(event.currentTarget.value || '') === String(clientDirectoryState.nodeId)) return;
+    event.currentTarget.value = String(clientDirectoryState.nodeId);
+    showToast('При активном фильтре удаление выполняется только из выбранного в фильтре узла');
+  });
+  sortSelect?.addEventListener('change', () => {
+    clientDirectoryState.sort = sortSelect.value;
+    applyClientDirectoryFilters();
+  });
+  document.getElementById('clientDirectoryReset')?.addEventListener('click', () => {
+    clientDirectoryState = { query: '', nodeId: '', sort: 'newest' };
+    if (nodeSelect) nodeSelect.value = '';
+    if (sortSelect) sortSelect.value = 'newest';
+    applyClientDirectoryFilters();
+    const first = document.querySelector('form[data-client-directory-search] input[name="q"]');
+    first?.focus({ preventScroll: true });
+  });
+  applyClientDirectoryFilters({ updateUrl: false });
+}
+
+function showToast(text) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = text || 'Скопировано';
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 1300);
+}
+function copySubLink(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    if (btn) {
+      const old = btn.textContent;
+      btn.textContent = 'Скопировано';
+      setTimeout(() => btn.textContent = old, 1200);
+    }
+    showToast('Ссылка скопирована');
+  }).catch(() => showToast('Не удалось скопировать'));
+}
+function getUniqueClientSelection() {
+  const selected = new Set();
+  document.querySelectorAll('.client-check[data-client-id]').forEach(cb => {
+    if (cb.checked) selected.add(String(cb.dataset.clientId || cb.value || ''));
+  });
+  selected.delete('');
+  return selected;
+}
+function getAllClientIdsOnPage() {
+  if (clientDirectoryMode) return getVisibleClientDirectoryIds();
+  const ids = new Set();
+  document.querySelectorAll('.client-check[data-client-id]').forEach(cb => {
+    const id = String(cb.dataset.clientId || cb.value || '');
+    if (id) ids.add(id);
+  });
+  return ids;
+}
+function syncClientCheckboxCopies(source) {
+  const id = String(source?.dataset?.clientId || source?.value || '');
+  if (!id) return;
+  document.querySelectorAll('.client-check[data-client-id]').forEach(cb => {
+    if (cb !== source && String(cb.dataset.clientId || cb.value || '') === id) cb.checked = source.checked;
+  });
+}
+function updateBulkSelectionUi() {
+  const selected = getUniqueClientSelection();
+  const all = getAllClientIdsOnPage();
+  const count = document.getElementById('bulkSelectedCount');
+  if (count) count.textContent = `Выбрано: ${selected.size}`;
+  document.querySelectorAll('[data-client-select-action="all"]').forEach(btn => {
+    const active = all.size > 0 && selected.size === all.size;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-client-select-action="none"]').forEach(btn => {
+    const active = selected.size === 0;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-bulk-action]').forEach(btn => { btn.disabled = selected.size === 0; });
+  const applyButton = document.getElementById('applySelectedToolbarButton');
+  if (applyButton) {
+    applyButton.disabled = selected.size === 0;
+    applyButton.textContent = selected.size ? `Применить к выбранным (${selected.size})` : 'Применить к выбранным';
+  }
+}
+function setAllClientSelection(checked) {
+  const visibleIds = getAllClientIdsOnPage();
+  document.querySelectorAll('.client-check[data-client-id]').forEach(cb => {
+    const id = String(cb.dataset.clientId || cb.value || '');
+    cb.checked = checked ? visibleIds.has(id) : false;
+    cb.indeterminate = false;
+  });
+  document.querySelectorAll('.clients-table thead input[type="checkbox"]').forEach(cb => {
+    cb.checked = !!checked && visibleIds.size > 0;
+    cb.indeterminate = false;
+  });
+  updateBulkSelectionUi();
+  showToast(checked ? `Выбраны показанные клиенты: ${visibleIds.size}` : 'Выбор клиентов снят');
+  return false;
+}
+function toggleAllClients(source) {
+  setAllClientSelection(Boolean(source && source.checked));
+}
+function prepareUniqueClientIdsForSubmit(form, selected) {
+  if (!form) return;
+  form.querySelectorAll('input[data-bulk-client-id]').forEach(input => input.remove());
+  form.querySelectorAll('.client-check[data-client-id]').forEach(cb => { cb.disabled = true; });
+  selected.forEach(id => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'client_ids';
+    input.value = id;
+    input.dataset.bulkClientId = '1';
+    form.appendChild(input);
+  });
+}
+function getSelectedClientNames(selected, limit = 12) {
+  const names = [];
+  const seen = new Set();
+  getClientDirectoryEntries().forEach(entry => {
+    const id = String(entry.dataset.clientIdEntry || '');
+    if (!selected.has(id) || seen.has(id)) return;
+    seen.add(id);
+    names.push(String(entry.dataset.clientName || `ID ${id}`).trim() || `ID ${id}`);
+  });
+  const visible = names.slice(0, limit);
+  if (names.length > limit) visible.push(`… и ещё ${names.length - limit}`);
+  return visible;
+}
+function writeBulkConfirmation(form, nodeId = '', filterNodeId = '') {
+  if (!form) return;
+  const confirmation = form.querySelector('[data-bulk-confirmation]');
+  const filterNode = form.querySelector('[data-bulk-filter-node-id]');
+  if (confirmation) confirmation.value = 'CONFIRMED';
+  if (filterNode) filterNode.value = String(filterNodeId || clientDirectoryState.nodeId || '');
+}
+function syncBulkNodeActionWithFilter() {
+  const select = document.getElementById('bulkRemoveNodeId');
+  const label = document.getElementById('bulkRemoveNodeLabel');
+  const hint = document.getElementById('bulkRemoveNodeHint');
+  const button = document.getElementById('bulkRemoveNodeButton');
+  if (!select) return;
+  const nodeId = String(clientDirectoryState.nodeId || '');
+  if (nodeId && Array.from(select.options).some(option => option.value === nodeId)) {
+    select.value = nodeId;
+    const selectedOption = select.selectedOptions?.[0];
+    const nodeTitle = selectedOption?.textContent?.trim() || 'выбранного узла';
+    const isRemnawave = selectedOption?.dataset?.nodeType === 'remnawave';
+    if (label) label.textContent = `Удалить выбранных клиентов из узла «${nodeTitle}»`;
+    if (hint) hint.textContent = isRemnawave
+      ? 'У выбранных пользователей будет снят Internal Squad этого подключения Remnawave, затем удалены локальные связи Aggregator. Сами пользователи Remnawave и другие squads сохраняются.'
+      : 'Фильтр и целевой узел совпадают. Будут обработаны только отмеченные клиенты; удаление подтверждается удалённой панелью до очистки связи в Aggregator.';
+    if (button) button.textContent = isRemnawave ? 'Убрать из Remnawave' : 'Удалить из текущего узла';
+    return;
+  }
+  if (label) label.textContent = 'Удалить выбранных клиентов из узла';
+  if (hint) hint.textContent = 'Клиент удаляется или отвязывается в выбранной удалённой панели, затем локальная связь удаляется из Aggregator. В Remnawave снимается только настроенный Internal Squad.';
+  if (button) button.textContent = 'Удалить из выбранного узла';
+}
+function fillApplySelectedClientIds(form, selected) {
+  if (!form) return;
+  form.querySelectorAll('input[data-apply-client-id]').forEach(input => input.remove());
+  selected.forEach(id => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'client_ids';
+    input.value = id;
+    input.dataset.applyClientId = '1';
+    form.appendChild(input);
+  });
+}
+function openApplySelectedModal() {
+  const selected = getUniqueClientSelection();
+  if (!selected.size) {
+    showToast('Сначала выберите клиентов, которых нужно добавить или обновить на узле');
+    return false;
+  }
+  const form = document.getElementById('applySelectedForm');
+  fillApplySelectedClientIds(form, selected);
+  const summary = document.getElementById('applySelectedSummary');
+  if (summary) summary.textContent = `Выбрано клиентов: ${selected.size}`;
+  const names = getSelectedClientNames(selected, 10);
+  const namesBox = document.getElementById('applySelectedNames');
+  if (namesBox) namesBox.textContent = names.length ? `Будут обработаны: ${names.join(', ')}` : '';
+  openModalById('applyAllModal');
+  return false;
+}
+function prepareApplySelectedSubmit(event) {
+  const selected = getUniqueClientSelection();
+  if (!selected.size) {
+    event?.preventDefault?.();
+    showToast('Выбор клиентов снят. Отметьте клиентов заново.');
+    return false;
+  }
+  const form = event?.currentTarget || document.getElementById('applySelectedForm');
+  fillApplySelectedClientIds(form, selected);
+  const nodeTitle = form?.querySelector('select[name="node_id"]')?.selectedOptions?.[0]?.textContent?.trim() || 'выбранный узел';
+  const names = getSelectedClientNames(selected, 6);
+  const namesText = names.length ? `\n\nКлиенты: ${names.join(', ')}` : '';
+  return window.confirm(`Добавить или обновить ${selected.size} выбранных клиентов на узле «${nodeTitle}»?${namesText}`);
+}
+window.openApplySelectedModal = openApplySelectedModal;
+window.prepareApplySelectedSubmit = prepareApplySelectedSubmit;
+
+function confirmClientBulkAction(event) {
+  const submitter = event?.submitter || document.activeElement;
+  const action = String(submitter?.dataset?.bulkAction || 'delete-clients');
+  const selected = getUniqueClientSelection();
+  if (!selected.size) {
+    showToast('Сначала выберите хотя бы одного клиента');
+    event?.preventDefault?.();
+    return false;
+  }
+  const form = event?.currentTarget;
+  const selectedNames = getSelectedClientNames(selected, 6);
+  const namesText = selectedNames.length ? `\n\nКлиенты: ${selectedNames.join(', ')}` : '';
+  if (action === 'remove-node') {
+    const select = form?.querySelector('#bulkRemoveNodeId');
+    const nodeId = String(select?.value || '');
+    if (!nodeId) {
+      showToast('Выберите узел, из которого нужно удалить клиентов');
+      select?.focus();
+      event?.preventDefault?.();
+      return false;
+    }
+    const nodeTitle = select?.selectedOptions?.[0]?.textContent?.trim() || 'выбранный узел';
+    if (form) {
+      form.dataset.loadingTitle = 'Удаляю клиентов из узла';
+      form.dataset.loadingText = 'Сначала удаление подтверждается на 3x-ui, затем очищается локальная связь. При потере связи операция безопасно останавливается.';
+    }
+    const accepted = window.confirm(`Удалить ${selected.size} выбранных клиентов из узла «${nodeTitle}»?\n\nКлиенты останутся в агрегаторе и на остальных узлах.${namesText}`);
+    if (accepted) {
+      prepareUniqueClientIdsForSubmit(form, selected);
+      writeBulkConfirmation(form, nodeId, clientDirectoryState.nodeId);
+    }
+    return accepted;
+  }
+  const deleteModeSelect = form?.querySelector('select[name="delete_mode"]');
+  const modeLabel = deleteModeSelect?.selectedOptions?.[0]?.textContent?.trim() || 'выбранным способом';
+  if (form) {
+    form.dataset.loadingTitle = 'Удаляю выбранных клиентов';
+    form.dataset.loadingText = 'Недоступные, отключённые и удалённые узлы будут пропущены без долгого ожидания.';
+  }
+  const accepted = window.confirm(`Удалить выбранных клиентов (${selected.size})?\nРежим: ${modeLabel}.${namesText}`);
+  if (accepted) {
+    prepareUniqueClientIdsForSubmit(form, selected);
+    writeBulkConfirmation(form, clientDirectoryState.nodeId);
+  }
+  return accepted;
+}
+function openDeleteAllClientsConfirm(event) {
+  const form = document.getElementById('deleteAllClientsForm');
+  if (form?.dataset.deleteAllConfirmed === '1') return true;
+  event?.preventDefault?.();
+  const select = document.getElementById('deleteAllMode');
+  const summary = document.getElementById('deleteAllModeSummary');
+  if (summary) summary.textContent = `Будут удалены все клиенты. Режим: ${select?.selectedOptions?.[0]?.textContent?.trim() || 'не выбран'}.`;
+  const input = document.getElementById('deleteAllTypedYes');
+  if (input) input.value = '';
+  const button = document.getElementById('deleteAllConfirmButton');
+  if (button) button.disabled = true;
+  document.getElementById('deleteAllClientsModal')?.classList.remove('hidden');
+  setTimeout(() => input?.focus(), 0);
+  return false;
+}
+function hideDeleteAllClientsConfirm() { document.getElementById('deleteAllClientsModal')?.classList.add('hidden'); }
+function closeDeleteAllClientsConfirm(event) { if (event.target?.id === 'deleteAllClientsModal') hideDeleteAllClientsConfirm(); }
+function submitDeleteAllClients() {
+  const input = document.getElementById('deleteAllTypedYes');
+  if (String(input?.value || '').trim().toUpperCase() !== 'YES') return;
+  document.getElementById('deleteAllConfirmation').value = 'YES';
+  hideDeleteAllClientsConfirm();
+  const form = document.getElementById('deleteAllClientsForm');
+  if (form) {
+    form.dataset.deleteAllConfirmed = '1';
+    form.requestSubmit ? form.requestSubmit() : HTMLFormElement.prototype.submit.call(form);
+  }
+}
+document.getElementById('deleteAllTypedYes')?.addEventListener('input', function(){
+  const button = document.getElementById('deleteAllConfirmButton');
+  if (button) button.disabled = String(this.value || '').trim().toUpperCase() !== 'YES';
+});
+function showQr(text, title) {
+  document.getElementById('qrTitle').textContent = title || 'QR';
+  document.getElementById('qrText').textContent = text;
+  document.getElementById('qrImg').src = '/qr?text=' + encodeURIComponent(text);
+  document.getElementById('qrModal').dataset.copyValue = text;
+  document.getElementById('qrLinkRow')?.classList.remove('hidden');
+  document.getElementById('qrModal').classList.remove('hidden');
+  syncClientModalScrollLock();
+}
+function showVpnQr(url, title) {
+  document.getElementById('qrTitle').textContent = title || 'VPN QR';
+  document.getElementById('qrText').textContent = 'Отсканируйте QR-код в приложении клиента.';
+  document.getElementById('qrImg').src = url;
+  document.getElementById('qrModal').dataset.copyValue = '';
+  document.getElementById('qrLinkRow')?.classList.add('hidden');
+  document.getElementById('qrModal').classList.remove('hidden');
+  syncClientModalScrollLock();
+}
+async function copyCurrentQrLink(button) {
+  const value = document.getElementById('qrModal')?.dataset.copyValue || '';
+  if (!value) return;
+  await copySubLink(value, button);
+}
+function closeQr() {
+  document.getElementById('qrModal').classList.add('hidden');
+  syncClientModalScrollLock();
+}
+function hideQr(e) { if (e.target.id === 'qrModal') closeQr(); }
+function syncClientModalScrollLock() {
+  const open = Array.from(document.querySelectorAll('#createClientModal, #createVpnClientModal, #qrModal, [id^="clientEditor-"], [id^="vpnClientEditor-"]')).some(modal => !modal.classList.contains('hidden'));
+  document.body.classList.toggle('client-modal-open', open);
+}
+function openModalById(id) { document.getElementById(id)?.classList.remove('hidden'); syncClientModalScrollLock(); }
+function hideModalById(id) { document.getElementById(id)?.classList.add('hidden'); syncClientModalScrollLock(); }
+function closeModalById(e, id) { if (e.target.id === id) hideModalById(id); }
+function openClientEditor(id) { document.getElementById('clientEditor-' + id)?.classList.remove('hidden'); syncClientModalScrollLock(); }
+function hideClientEditor(id) { document.getElementById('clientEditor-' + id)?.classList.add('hidden'); syncClientModalScrollLock(); }
+function closeClientEditor(e, id) { if (e.target.id === 'clientEditor-' + id) hideClientEditor(id); }
+function openLimitDetails(id) { document.getElementById('limitDetails-' + id)?.classList.remove('hidden'); }
+function hideLimitDetails(id) { document.getElementById('limitDetails-' + id)?.classList.add('hidden'); }
+function closeLimitDetails(e, id) { if (e.target.id === 'limitDetails-' + id) hideLimitDetails(id); }
+
+function setClientNodeSelection(button, checked) {
+  const form = button && button.closest ? button.closest('form') : null;
+  if (!form) return false;
+  const boxes = Array.from(form.querySelectorAll('input[type="checkbox"].node-check, input[type="checkbox"][name^="node_enabled_"]'))
+    .filter(cb => !cb.disabled);
+  boxes.forEach(cb => {
+    cb.indeterminate = false;
+    cb.checked = !!checked;
+    cb.dispatchEvent(new Event('input', { bubbles: true }));
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  const group = button.closest('.node-select-actions');
+  if (group) group.querySelectorAll('[data-node-check-set]').forEach(other => {
+    const active = other === button;
+    other.classList.toggle('is-active', active);
+    other.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  showToast(checked ? `Выбраны все узлы: ${boxes.length}` : 'Выбор узлов снят');
+  return false;
+}
+window.setClientNodeSelection = setClientNodeSelection;
+
+function setupMobileClientFilters() {
+  const tabs = document.querySelector('.mobile-client-tabs');
+  if (!tabs) return;
+  const cards = Array.from(document.querySelectorAll('[data-mobile-client-card]'));
+  let empty = document.querySelector('[data-mobile-client-empty]');
+  if (!empty) {
+    empty = document.createElement('div');
+    empty.className = 'mobile-filter-empty';
+    empty.dataset.mobileClientEmpty = '1';
+    empty.textContent = 'По этому фильтру клиентов нет.';
+    const list = document.querySelector('.mobile-client-cards');
+    if (list) list.after(empty);
+  }
+  function applyMobileClientFilter(filter, activeBtn) {
+    let visibleCount = 0;
+    tabs.querySelectorAll('[data-mobile-client-filter]').forEach(b => {
+      b.classList.toggle('is-active', b === activeBtn || (!activeBtn && b.dataset.mobileClientFilter === filter));
+    });
+    cards.forEach(card => {
+      const keys = String(card.dataset.statuses || '').split(/\s+/).filter(Boolean);
+      const show = filter === 'all' || keys.includes(filter);
+      card.classList.toggle('is-filter-hidden', !show);
+      if (show) visibleCount += 1;
+    });
+    empty.classList.toggle('is-visible', visibleCount === 0);
+  }
+  tabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-mobile-client-filter]');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    applyMobileClientFilter(btn.dataset.mobileClientFilter || 'all', btn);
+  });
+  applyMobileClientFilter('all');
+}
+async function refreshClientOnlineSummary() {
+  const target = document.getElementById('clientOnlineNowCount');
+  if (!target) return;
+  target.textContent = '…';
+  try {
+    const response = await fetch('/dashboard/online-clients.json', { headers: { Accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Ошибка проверки');
+    const list = Array.isArray(data.clients) ? data.clients : [];
+    const onlineIds = new Set(list.map(item => String(item.id || item.clientId || item.client_id || '')).filter(Boolean));
+    target.textContent = String(onlineIds.size);
+    target.title = data.errors?.length ? data.errors.join(' | ') : 'Онлайн получен с активных узлов';
+    document.querySelectorAll('[data-modern-online-state]').forEach(state => {
+      if (state.dataset.onlineEligible !== '1') return;
+      const isOnline = onlineIds.has(String(state.dataset.clientId || ''));
+      state.classList.toggle('online', isOnline);
+      state.classList.toggle('offline', !isOnline);
+      const label = state.querySelector('b');
+      if (label) label.textContent = isOnline ? 'В сети' : 'Не в сети';
+      const onlineClient = list.find(item => String(item.id || item.clientId || item.client_id || '') === String(state.dataset.clientId || ''));
+      state.title = isOnline && Array.isArray(onlineClient?.nodes)
+        ? onlineClient.nodes.map(node => node.publicName || node.name || 'Узел').join(', ')
+        : '';
+    });
+  } catch (err) {
+    target.textContent = '—';
+    target.title = err.message || String(err);
+  }
+}
+
+async function refreshClientSpeedSummary() {
+  const cells = Array.from(document.querySelectorAll('[data-modern-speed-client]'));
+  if (!cells.length) return;
+  try {
+    const response = await fetch('/dashboard/live-client-traffic.json?refresh=0&limit=500&min_mbps=0', { headers: { Accept: 'application/json' } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Ошибка загрузки скорости');
+    const rows = Array.isArray(data.clients) ? data.clients : [];
+    const byId = new Map(rows.map(row => [String(row.clientId || row.client_id || ''), row]));
+    cells.forEach(cell => {
+      const row = byId.get(String(cell.dataset.modernSpeedClient || ''));
+      if (!row) {
+        cell.textContent = '—';
+        return;
+      }
+      cell.innerHTML = `<span>↓ ${String(row.downloadText || '0 Мбит/с')}</span><span>↑ ${String(row.uploadText || '0 Мбит/с')}</span>`;
+      cell.title = `Всего: ${String(row.totalText || '0 Мбит/с')}`;
+    });
+  } catch (_) {
+    cells.forEach(cell => { if (!cell.textContent.trim()) cell.textContent = '—'; });
+  }
+}
+
+function setupClientOverviewShortcuts() {
+  document.querySelectorAll('[data-client-status-shortcut]').forEach(button => {
+    button.addEventListener('click', () => {
+      const mode = button.dataset.clientStatusShortcut || 'newest';
+      const sort = document.getElementById('clientSortMode');
+      if (!sort) return;
+      sort.value = mode === 'active' ? 'newest' : mode;
+      if (mode === 'active') {
+        const mobile = document.querySelector('[data-mobile-client-filter="active"]');
+        if (mobile) mobile.click();
+      } else {
+        sort.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  setupMobileClientFilters();
+  setupClientOverviewShortcuts();
+  refreshClientOnlineSummary();
+  refreshClientSpeedSummary();
+  document.querySelectorAll('.client-check[data-client-id]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      syncClientCheckboxCopies(cb);
+      const selected = getUniqueClientSelection();
+      const all = getAllClientIdsOnPage();
+      document.querySelectorAll('.clients-table thead input[type="checkbox"]').forEach(master => {
+        master.checked = all.size > 0 && selected.size === all.size;
+        master.indeterminate = selected.size > 0 && selected.size < all.size;
+      });
+      updateBulkSelectionUi();
+    });
+  });
+  updateBulkSelectionUi();
+  const editId = new URLSearchParams(window.location.search).get('edit');
+  if (editId && document.getElementById('clientEditor-' + editId)) openClientEditor(editId);
+  const vpnService = document.getElementById('clientsVpnService');
+  const vpnForm = document.getElementById('clientsVpnCreateForm');
+  if (vpnService && vpnForm) {
+    const syncAction = () => { vpnForm.action = '/vpn/services/' + encodeURIComponent(vpnService.value) + '/clients'; };
+    vpnService.addEventListener('change', syncAction);
+    syncAction();
+  }
+  setupClientDirectory();
+  if (!clientDirectoryMode) {
+    document.querySelectorAll('form[data-live-client-search]').forEach(form => {
+      const input = form.querySelector('input[name="q"]');
+      if (!input) return;
+      let timer = null;
+      let lastSubmitted = String(input.value || '');
+      input.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          const value = String(input.value || '');
+          if (value === lastSubmitted) return;
+          lastSubmitted = value;
+          if (typeof form.requestSubmit === 'function') form.requestSubmit(); else form.submit();
+        }, 650);
+      });
+    });
+  }
+});
+function setOperationNodeSelection(button, name, checked) {
+  const form = button && button.closest ? button.closest('form') : null;
+  if (!form) return false;
+  form.querySelectorAll('input[type="checkbox"][name="' + name + '"]').forEach(input => {
+    if (!input.disabled) input.checked = Boolean(checked);
+  });
+  return false;
+}
+
+function syncImportTargetSource(form) {
+  if (!form) return;
+  const source = form.querySelector('[data-import-source]');
+  const sourceId = String(source && source.value || '');
+  form.querySelectorAll('input[name="target_node_ids"]').forEach(input => {
+    const isSource = String(input.value) === sourceId;
+    input.disabled = isSource;
+    if (isSource) input.checked = false;
+    const row = input.closest('.node-item');
+    if (row) {
+      row.classList.toggle('disabled', isSource);
+      row.title = isSource ? 'Это узел-источник; он не перезаписывается при импорте.' : '';
+    }
+  });
+}
+
+function syncImportModeUi(form) {
+  if (!form) return;
+  const mode = form.querySelector('[data-import-mode]');
+  const box = form.querySelector('[data-import-target-box]');
+  const enabled = String(mode && mode.value || 'local') === 'selected';
+  if (box) box.hidden = !enabled;
+  form.querySelectorAll('input[name="target_node_ids"]').forEach(input => {
+    if (!enabled) input.checked = false;
+  });
+  syncImportTargetSource(form);
+}
+
+function validateLongOperationSelection(event) {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) return;
+  if (form.matches('form[action="/clients/import"]')) {
+    const mode = String(form.querySelector('[name="import_mode"]')?.value || 'local');
+    const selected = form.querySelectorAll('input[name="target_node_ids"]:checked:not(:disabled)').length;
+    if (mode === 'selected' && selected === 0) {
+      event.preventDefault();
+      alert('Отметьте хотя бы один целевой узел. Узел-источник автоматически исключён.');
+      return;
+    }
+    if (mode === 'selected' && !confirm('Импорт затронет только отмеченные целевые узлы: ' + selected + '. Продолжить?')) {
+      event.preventDefault();
+      return;
+    }
+  }
+  if (form.matches('form[action="/clients/sync-nodes"]')) {
+    const selected = form.querySelectorAll('input[name="node_ids"]:checked:not(:disabled)').length;
+    if (selected === 0) {
+      event.preventDefault();
+      alert('Отметьте хотя бы один узел для синхронизации.');
+      return;
+    }
+    if (!confirm('Будут созданы или обновлены клиенты на выбранных узлах: ' + selected + '. Продолжить?')) {
+      event.preventDefault();
+    }
+  }
+}
+document.addEventListener('submit', validateLongOperationSelection, true);
+
+function showLoading(title, text) {
+  const modal = document.getElementById('loadingModal');
+  if (!modal) return;
+  document.getElementById('loadingTitle').textContent = title || 'Загрузка';
+  document.getElementById('loadingText').textContent = text || 'Операция выполняется. Не закрывайте страницу.';
+  modal.classList.remove('hidden');
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('form.import-sync-form').forEach(form => syncImportModeUi(form));
+  document.querySelectorAll('form.js-long-action').forEach(form => {
+    form.addEventListener('submit', (event) => {
+      if (!event.defaultPrevented) showLoading(form.dataset.loadingTitle, form.dataset.loadingText);
+    });
+  });
+  document.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-node-check-set]');
+    if (!btn || event.defaultPrevented) return;
+    event.preventDefault();
+    setClientNodeSelection(btn, btn.dataset.nodeCheckSet === 'all');
+  });
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  const openModal = Array.from(document.querySelectorAll('#qrModal, #createClientModal, #createVpnClientModal, [id^="clientEditor-"], [id^="vpnClientEditor-"]')).find(modal => !modal.classList.contains('hidden'));
+  if (openModal) { openModal.classList.add('hidden'); syncClientModalScrollLock(); }
+});
+</script>
+
+<%- include('partials_footer') %>
