@@ -1,0 +1,6 @@
+*.sh text eol=lf
+*.j2 text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.manifest text eol=lf
+*.tar.gz binary

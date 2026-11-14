@@ -502,7 +502,7 @@ fi
 
 # vpn_domains set
 vpn_domain_ipset_id=$(uci show firewall | grep -E '@ipset.*vpn_domains' | awk -F '[][{}]' '{print $2}' | head -n 1)
-vpn_domain_ipset_string=$(uci show firewall.@ipset[$vpn_domain_ipset_id] | grep -c "name='vpn_domains'\|match='dst_net'")
+vpn_domain_ipset_string=$(uci show firewall.@ipset[$vpn_domain_ipset_id] | grep -c "name='vpn_domains'\|match='dst_ip'")
 vpn_domain_rule_id=$(uci show firewall | grep -E '@rule.*vpn_domains' | awk -F '[][{}]' '{print $2}' | head -n 1)
 vpn_domain_rule_string=$(uci show firewall.@rule[$vpn_domain_rule_id] | grep -c "name='mark_domains'\|src='lan'\|dest='*'\|proto='all'\|ipset='vpn_domains'\|set_mark='0x1'\|target='MARK'\|family='ipv4'")
 

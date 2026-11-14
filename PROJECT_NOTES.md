@@ -1,3 +1,5 @@
+> v55: current automatic runtime channel is documented in CHANGES-v55.md. The Gen A/B notes below describe the pre-v55 migration sources.
+
 # RouteWolf — заметки для передачи контекста
 
 Файл для того, чтобы продолжить работу над проектом без потери контекста —

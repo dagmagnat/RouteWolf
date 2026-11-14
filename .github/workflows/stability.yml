@@ -1,0 +1,25 @@
+name: RouteWolf stability
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify deterministic release
+        run: |
+          python3 tools/build_release.py
+          git diff --exit-code -- releases/
+      - name: Build isolated test environment
+        run: docker build -t routewolf-tests -f tests/Dockerfile .
+      - name: Test real nftables in a disposable network namespace
+        run: |
+          docker run --rm --network none --cap-add NET_ADMIN --memory=192m --cpus=1 \
+            -v "$PWD:/work:ro" --entrypoint sh routewolf-tests -c \
+            'touch /.routewolf-test-container; python3 -m unittest discover -s tests -p "test_*.py" -v'

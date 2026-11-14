@@ -1,5 +1,7 @@
 # RouteWolf
 
+> v55: stable automatic code updates, nftset recovery, rollback. See [CHANGES-v55.md](CHANGES-v55.md).
+
 Simple OpenWrt script: domains and IPv4 CIDR from lists go through the selected tunnel, while normal internet stays on WAN.
 
 Fork and modification of the original project: https://github.com/itdoginfo/domain-routing-openwrt

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v54-dco-user-choice"
+PROJECT_VERSION="v55-nftset-stable-updates"
 ROUTEWOLF_VERSION_FILE="/etc/routewolf/installed_version"
 
 # Persisted across installs/updates so a re-run can tell "what did this router
@@ -3128,7 +3128,7 @@ add_set() {
     msgc "$C_GREEN" "Create domain nft set and mark rule" "Создание nft-набора доменов и правила маркировки"
     uci add firewall ipset >/dev/null
     uci set firewall.@ipset[-1].name='vpn_domains'
-    uci set firewall.@ipset[-1].match='dst_net'
+    uci set firewall.@ipset[-1].match='dst_ip'
 
     uci add firewall rule >/dev/null
     uci set firewall.@rule[-1]=rule
@@ -3537,32 +3537,9 @@ EOF
 
     cat << 'EOF' > /usr/sbin/routewolf-apply.sh
 #!/bin/sh
-# Apply current RouteWolf code/config to the running router after install/update/list refresh.
-set +e
 LOG="${1:-/tmp/routewolf-apply.log}"
-{
-    echo "=== RouteWolf apply $(date 2>/dev/null) ==="
-    mkdir -p /tmp/dnsmasq.d /tmp/lst /etc/routewolf/lists
-    # Keep Smart TV compatible runtime settings on every apply/update.
-    if command -v uci >/dev/null 2>&1; then
-        # Do not create duplicate redirect here; routewolf installer/update owns it.
-        [ "$(uci -q get dhcp.@dnsmasq[0].filter_aaaa 2>/dev/null)" = "1" ] || \
-            echo "note: filter_aaaa is off; IPv6 may bypass domain routing"
-    fi
-    /etc/init.d/routewolf start
-    /etc/init.d/firewall restart
-    sleep 1
-    /etc/init.d/dnsmasq restart
-    [ -x /etc/init.d/routewolf-route ] && /etc/init.d/routewolf-route start
-    [ -x /usr/sbin/routewolf-route.sh ] && /usr/sbin/routewolf-route.sh
-    [ -x /usr/sbin/routewolf-healthcheck.sh ] && /usr/sbin/routewolf-healthcheck.sh || true
-    echo "=== list counts ==="
-    wc -l /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst 2>/dev/null || true
-    echo "=== table vpn ==="
-    ip route show table vpn 2>/dev/null || true
-} >"$LOG" 2>&1
-rc="$?"
-tail -n 60 "$LOG" 2>/dev/null || true
+if /etc/init.d/routewolf start >"$LOG" 2>&1; then rc=0; else rc=$?; fi
+tail -n 40 "$LOG" 2>/dev/null || true
 exit "$rc"
 EOF
     chmod +x /usr/sbin/routewolf-apply.sh
@@ -4296,6 +4273,8 @@ rw commands:
   rw singbox restart restart Sing-box and repair route
   rw outline status  show Outline status
   rw outline restart restart Outline client and repair route
+  rw updates status|check|on|off|rollback  stable code updates
+  rw health           check/repair domain nft sets
   rw watchdog status show universal tunnel watchdog status
   rw watchdog check  run tunnel test now
   rw watchdog restart restart the selected tunnel
@@ -4316,6 +4295,8 @@ HELP
     lists|refresh)
         /usr/sbin/routewolf-apply.sh /tmp/routewolf-lists-apply.log
     ;;
+    health) /usr/sbin/routewolf-reliability.sh "${2:-check}" ;;
+    updates) /usr/sbin/routewolf-stable-update.sh "${2:-status}" ;;
     apply) /usr/sbin/routewolf-apply.sh /tmp/routewolf-manual-apply.log ;;
     purge) /usr/sbin/routewolf-purge.sh ;;
     youtube|yt) /usr/sbin/routewolf-youtube.sh "$2" ;;
@@ -4446,6 +4427,22 @@ EOF
 }
 
 
+
+install_stable_runtime() {
+    for file in routewolf-reliability.sh routewolf-stable-update.sh routewolf-update.sh; do
+        [ -f "$SCRIPT_DIR/runtime/$file" ] || return 1
+        sh -n "$SCRIPT_DIR/runtime/$file" || return 1
+        cp "$SCRIPT_DIR/runtime/$file" "/usr/sbin/$file" || return 1
+        chmod 755 "/usr/sbin/$file" || return 1
+    done
+    /usr/sbin/routewolf-reliability.sh repair || return 1
+    # The bundled release is local and checksummed; no extra network installer.
+    release_archive=$(sed -n 's/^archive=//p' "$SCRIPT_DIR/releases/stable.manifest")
+    case "$release_archive" in routewolf-v[0-9]*.tar.gz) ;; *) return 1 ;; esac
+    case "$release_archive" in *[!a-zA-Z0-9.-]*) return 1 ;; esac
+    /usr/sbin/routewolf-stable-update.sh --local "$SCRIPT_DIR/releases/$release_archive" "$SCRIPT_DIR/releases/stable.manifest"
+}
+
 update_existing_installation() {
     clear_screen
     echo "RouteWolf update mode / режим обновления RouteWolf"
@@ -4501,6 +4498,7 @@ update_existing_installation() {
     add_routewolf update
 
     echo "Refreshing GitHub lists / Обновляю списки из GitHub..."
+    install_stable_runtime || return 1
     # Drop stale temporary files and old example caches. routewolf will download
     # fresh lists from GitHub and then write new cache files. If GitHub is down,
     # non-example cache can still be restored by routewolf.
@@ -4512,7 +4510,7 @@ update_existing_installation() {
         rm -f /etc/routewolf/lists/ipv4.lst
     fi
     if [ -x /usr/sbin/routewolf-apply.sh ]; then
-        /usr/sbin/routewolf-apply.sh /tmp/routewolf-update-apply.log || true
+        /usr/sbin/routewolf-apply.sh /tmp/routewolf-update-apply.log || return 1
     else
         /etc/init.d/routewolf start || true
         /etc/init.d/firewall restart >/dev/null 2>&1 || true
@@ -4601,10 +4599,10 @@ add_routewolf() {
         if [ -z "$set_idx" ]; then
             uci add firewall ipset >/dev/null
             uci set firewall.@ipset[-1].name='vpn_domains6'
-            uci set firewall.@ipset[-1].match='dst_net'
+            uci set firewall.@ipset[-1].match='dst_ip'
             uci set firewall.@ipset[-1].family='ipv6'
         else
-            uci set firewall.@ipset[$set_idx].match='dst_net'
+            uci set firewall.@ipset[$set_idx].match='dst_ip'
             uci set firewall.@ipset[$set_idx].family='ipv6'
         fi
 
@@ -4745,27 +4743,27 @@ download_url_to_file() {
     rm -f "$out"
 
     if [ -x /bin/uclient-fetch ]; then
-        /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        /bin/uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
         rm -f "$out"
         /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
         rm -f "$out"
     fi
 
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
         rm -f "$out"
         uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
         rm -f "$out"
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
+        curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
         rm -f "$out"
     fi
 
     if command -v wget >/dev/null 2>&1; then
         if wget_has_no_check; then
-            wget --no-check-certificate -O "$out" "$url" && [ -s "$out" ] && return 0
+            wget -O "$out" "$url" && [ -s "$out" ] && return 0
         else
             wget -O "$out" "$url" && [ -s "$out" ] && return 0
         fi
@@ -4788,8 +4786,9 @@ restore_cache() {
 download_file() {
     url="$1"; tmp="$2"; label="$3"
     [ -z "$url" ] && return 1
-    echo "Downloading $label from $url"
-    download_url_to_file "$url" "$tmp"
+    echo "Downloading $label list"
+    download_url_to_file "$url" "$tmp" || return 1
+    ! grep -qiE '<html|<!doctype|404: *not found' "$tmp"
 }
 
 validate_domain_list() {
@@ -4892,9 +4891,8 @@ normalize_ipv4_cidr_list() {
     [ "$dropped_wide" -gt 0 ] 2>/dev/null && echo "IPv4 safety: dropped $dropped_wide networks wider than /$min_prefix"
     if [ "$lines" -gt "$max_lines" ] 2>/dev/null; then
         echo "Warning: IPv4 list has $lines entries, limit is $max_lines; disabling IPv4 list for safety"
-        : > "$out"
         rm -f "$tmp"
-        return 0
+        return 1
     fi
     mv "$tmp" "$out"
     [ -f "$out" ]
@@ -4914,7 +4912,7 @@ normalize_ipv6_cidr_list() {
     [ -f "$out" ]
 }
 
-start () {
+refresh_native () {
     load_config
     mkdir -p "$TMP_DNSMASQ_DIR" "$TMP_LIST_DIR" "$CACHE_DIR"
 
@@ -4928,16 +4926,22 @@ start () {
     if [ -n "$DOMAINS_URL" ]; then
         if download_file "$DOMAINS_URL" "$TMP_DNSMASQ_DIR/domains.raw" domains; then
             if normalize_domain_list "$TMP_DNSMASQ_DIR/domains.raw" "$TMP_DNSMASQ_DIR/domains.lst.new" && validate_domain_list "$TMP_DNSMASQ_DIR/domains.lst.new"; then
+                if [ ! -s "$TMP_DNSMASQ_DIR/domains.lst.new" ] && grep -qE '^[[:space:]]*[^#[:space:]]' "$TMP_DNSMASQ_DIR/domains.raw"; then
+                    echo "Invalid domain list: non-comment content produced no valid entries"
+                    return 1
+                fi
                 mv "$TMP_DNSMASQ_DIR/domains.lst.new" "$TMP_DNSMASQ_DIR/domains.lst"
-                cp "$TMP_DNSMASQ_DIR/domains.lst" "$CACHE_DIR/domains.lst"
+                cmp -s "$TMP_DNSMASQ_DIR/domains.lst" "$CACHE_DIR/domains.lst" || cp "$TMP_DNSMASQ_DIR/domains.lst" "$CACHE_DIR/domains.lst" || return 1
                 echo "Domain list is ready: $(wc -l < "$TMP_DNSMASQ_DIR/domains.lst") entries"
             else
-                echo "Warning: downloaded domain list is invalid after conversion; keeping cached list"
+                echo "Warning: downloaded domain list is invalid after conversion"
+                return 1
                 rm -f "$TMP_DNSMASQ_DIR/domains.lst.new"
             fi
             rm -f "$TMP_DNSMASQ_DIR/domains.raw"
         else
-            echo "Warning: failed to download domain list; using cached list if available"
+            echo "Warning: failed to download domain list; retaining previous transaction"
+            return 1
             rm -f "$TMP_DNSMASQ_DIR/domains.raw" "$TMP_DNSMASQ_DIR/domains.lst.new"
         fi
     fi
@@ -4952,16 +4956,22 @@ start () {
     if [ -n "$IPV4_URL" ]; then
         if download_file "$IPV4_URL" "$TMP_LIST_DIR/ipv4.raw" ipv4; then
             if normalize_ipv4_cidr_list "$TMP_LIST_DIR/ipv4.raw" "$TMP_LIST_DIR/ipv4.lst.new"; then
+                if [ ! -s "$TMP_LIST_DIR/ipv4.lst.new" ] && grep -qE '^[[:space:]]*[^#[:space:]]' "$TMP_LIST_DIR/ipv4.raw"; then
+                    echo "Invalid ipv4 list: non-comment content produced no valid entries"
+                    return 1
+                fi
                 mv "$TMP_LIST_DIR/ipv4.lst.new" "$TMP_LIST_DIR/ipv4.lst"
-                cp "$TMP_LIST_DIR/ipv4.lst" "$CACHE_DIR/ipv4.lst"
+                cmp -s "$TMP_LIST_DIR/ipv4.lst" "$CACHE_DIR/ipv4.lst" || cp "$TMP_LIST_DIR/ipv4.lst" "$CACHE_DIR/ipv4.lst" || return 1
                 echo "IPv4 CIDR list is ready: $(wc -l < "$TMP_LIST_DIR/ipv4.lst") entries"
             else
-                echo "Warning: IPv4 list is invalid after conversion; using cached list if available"
+                echo "Warning: IPv4 list is invalid after conversion"
+                return 1
                 rm -f "$TMP_LIST_DIR/ipv4.lst.new"
             fi
             rm -f "$TMP_LIST_DIR/ipv4.raw"
         else
-            echo "Warning: IPv4 list download failed; using cached list if available"
+            echo "Warning: IPv4 list download failed; retaining previous transaction"
+            return 1
             rm -f "$TMP_LIST_DIR/ipv4.raw" "$TMP_LIST_DIR/ipv4.lst.new"
         fi
         [ -e "$TMP_LIST_DIR/ipv4.lst" ] || : > "$TMP_LIST_DIR/ipv4.lst"
@@ -4970,27 +4980,83 @@ start () {
     if [ "$IPV6_SUPPORT" = "1" ] && [ -n "$IPV6_URL" ]; then
         if download_file "$IPV6_URL" "$TMP_LIST_DIR/ipv6.raw" ipv6; then
             if normalize_ipv6_cidr_list "$TMP_LIST_DIR/ipv6.raw" "$TMP_LIST_DIR/ipv6.lst.new"; then
+                if [ ! -s "$TMP_LIST_DIR/ipv6.lst.new" ] && grep -qE '^[[:space:]]*[^#[:space:]]' "$TMP_LIST_DIR/ipv6.raw"; then
+                    echo "Invalid ipv6 list: non-comment content produced no valid entries"
+                    return 1
+                fi
                 mv "$TMP_LIST_DIR/ipv6.lst.new" "$TMP_LIST_DIR/ipv6.lst"
-                cp "$TMP_LIST_DIR/ipv6.lst" "$CACHE_DIR/ipv6.lst"
+                cmp -s "$TMP_LIST_DIR/ipv6.lst" "$CACHE_DIR/ipv6.lst" || cp "$TMP_LIST_DIR/ipv6.lst" "$CACHE_DIR/ipv6.lst" || return 1
                 echo "IPv6 CIDR list is ready: $(wc -l < "$TMP_LIST_DIR/ipv6.lst") entries"
             else
-                echo "Warning: IPv6 list is invalid after conversion; using cached list if available"
+                echo "Warning: IPv6 list is invalid after conversion"
+                return 1
                 rm -f "$TMP_LIST_DIR/ipv6.lst.new"
             fi
             rm -f "$TMP_LIST_DIR/ipv6.raw"
         else
-            echo "Warning: IPv6 list download failed; using cached list if available"
+            echo "Warning: IPv6 list download failed; retaining previous transaction"
+            return 1
             rm -f "$TMP_LIST_DIR/ipv6.raw" "$TMP_LIST_DIR/ipv6.lst.new"
         fi
         [ -e "$TMP_LIST_DIR/ipv6.lst" ] || : > "$TMP_LIST_DIR/ipv6.lst"
     fi
 
-    # fw4 must create nft sets before dnsmasq tries to populate them.
-    /etc/init.d/firewall restart >/dev/null 2>&1 || true
-    sleep 1
-    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-    /etc/init.d/routewolf-route start >/dev/null 2>&1 || true
+    [ -n "$DOMAINS_URL" ] || : > "$TMP_DNSMASQ_DIR/domains.lst"
+    [ -n "$IPV4_URL" ] || : > "$TMP_LIST_DIR/ipv4.lst"
+    [ "$IPV6_SUPPORT" = 1 ] && [ -n "$IPV6_URL" ] || : > "$TMP_LIST_DIR/ipv6.lst"
+    return 0
 }
+
+# A list failure restores both persistent cache and runtime files. Code updates
+# and lists are separate; unchanged lists never restart a healthy DNS/firewall.
+start() (
+    umask 077
+    lock=/tmp/routewolf-lists.lock
+    work=/tmp/routewolf-lists.$$
+    if ! mkdir "$lock" 2>/dev/null; then
+        owner=$(cat "$lock/pid" 2>/dev/null || true)
+        case "$owner" in ''|*[!0-9]*) return 75 ;; esac
+        kill -0 "$owner" 2>/dev/null && return 75
+        rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || return 75
+        mkdir "$lock" 2>/dev/null || return 75
+    fi
+    echo $$ >"$lock/pid"
+    mkdir -p "$work" "$CACHE_DIR" "$TMP_DNSMASQ_DIR" "$TMP_LIST_DIR" || return 1
+    trap 'rm -rf "$work"; rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || true' EXIT
+    trap 'exit 1' HUP INT TERM
+    # Restore cache before snapshotting, so boot without internet still has lists.
+    boot_restore=0
+    for spec in "domains.lst:$TMP_DNSMASQ_DIR/domains.lst" "ipv4.lst:$TMP_LIST_DIR/ipv4.lst" "ipv6.lst:$TMP_LIST_DIR/ipv6.lst"; do
+        file=${spec%%:*}; target=${spec#*:}
+        if [ ! -f "$target" ] && [ -f "$CACHE_DIR/$file" ]; then cp "$CACHE_DIR/$file" "$target" || return 1; boot_restore=1; fi
+    done
+    paths="$CACHE_DIR/domains.lst $CACHE_DIR/ipv4.lst $CACHE_DIR/ipv6.lst $TMP_DNSMASQ_DIR/domains.lst $TMP_LIST_DIR/ipv4.lst $TMP_LIST_DIR/ipv6.lst"
+    for file in $paths; do
+        if [ -e "$file" ]; then mkdir -p "$work/before$(dirname "$file")"; cp -p "$file" "$work/before$file" || return 1; fi
+    done
+    rollback_lists() {
+        for file in $paths; do
+            if [ -f "$work/before$file" ]; then cp -p "$work/before$file" "$file" || return 1; else rm -f "$file"; fi
+        done
+    }
+    refresh_ok=1
+    refresh_native || { rollback_lists || return 1; refresh_ok=0; }
+    changed=$boot_restore
+    for file in $paths; do
+        if [ -f "$file" ] && ! cmp -s "$file" "$work/before$file"; then changed=1; fi
+    done
+    if [ "$changed" = 1 ]; then
+        if ! fw4 check || ! fw4 reload || ! /etc/init.d/dnsmasq restart; then
+            rollback_lists || return 1
+            fw4 reload >/dev/null 2>&1 || true
+            /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+            return 1
+        fi
+        /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
+    fi
+    [ "$refresh_ok" = 1 ]
+)
+
 EOF
 
     chmod +x /etc/init.d/routewolf
@@ -5665,7 +5731,7 @@ migrate_legacy_paths
 
 if [ "$1" = "--update" ] || [ "${ROUTEWOLF_UPDATE_ONLY:-0}" = "1" ]; then
     update_existing_installation
-    exit 0
+    exit "$?"
 fi
 
 INSTALL_TOTAL_STEPS=13
@@ -5683,6 +5749,7 @@ run_step "$(prompt "Configuring dnsmasq confdir" "Настройка dnsmasq con
 run_step "$(prompt "Installing RouteWolf management commands" "Установка команд управления RouteWolf")" install_management_commands || exit 1
 run_step "$(prompt "Configuring lists and RouteWolf service" "Настройка списков и сервиса RouteWolf")" add_routewolf || exit 1
 run_step "$(prompt "Restarting network" "Перезапуск сети")" /etc/init.d/network restart || exit 1
+run_step "Stable runtime and rollback" install_stable_runtime || exit 1
 run_step "$(prompt "Final routing verification" "Финальная проверка маршрутизации")" validate_routewolf_installation || exit 1
 
 ui_header "$(prompt "Installation completed" "Установка завершена")"
