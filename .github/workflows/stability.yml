@@ -12,9 +12,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Verify deterministic release
+      - name: Verify immutable release against source and manifest
         run: |
-          python3 tools/build_release.py
+          python3 tools/build_release.py --check
           git diff --exit-code -- releases/
       - name: Build isolated test environment
         run: docker build -t routewolf-tests -f tests/Dockerfile .

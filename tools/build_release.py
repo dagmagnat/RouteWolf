@@ -6,6 +6,7 @@ import hashlib
 import io
 import re
 import tarfile
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = int(re.fullmatch(r'v([0-9]+)\s*', (ROOT / 'version').read_text(encoding='utf-8')).group(1))
@@ -44,7 +45,33 @@ def runtime_files():
         files[path] = text.replace('\r\n', '\n').encode('utf-8')
     return files
 
+def verify_existing():
+    releases = ROOT / 'releases'
+    archive_path = releases / f'routewolf-v{VERSION}.tar.gz'
+    fields = dict(line.split('=', 1) for line in (releases / 'stable.manifest').read_text(encoding='utf-8').splitlines())
+    assert fields['format'] == '1' and fields['version'] == str(VERSION)
+    assert fields['name'] == NAME and fields['archive'] == archive_path.name
+    assert hashlib.sha256(archive_path.read_bytes()).hexdigest() == fields['archive_sha256']
+    assert hashlib.sha256((ROOT / 'runtime/routewolf-stable-update.sh').read_bytes()).hexdigest() == fields['agent_sha256']
+    expected = runtime_files()
+    with tarfile.open(archive_path, 'r:gz') as archive:
+        members = archive.getmembers()
+        assert sorted(m.name for m in members) == sorted('payload/' + p for p in expected)
+        for member in members:
+            assert member.isfile() and member.mode == 0o755
+            assert archive.extractfile(member).read() == expected[member.name.removeprefix('payload/')]
+    print(f'Verified immutable v{VERSION}: manifest, archive and {len(expected)} source files agree')
+
 def build():
+    archive_path = ROOT / 'releases' / f'routewolf-v{VERSION}.tar.gz'
+    if archive_path.exists() and '--replace-unpublished' not in sys.argv:
+        # Deflate output may differ between zlib versions. Never rewrite a good
+        # published artifact just to reproduce another compressor's byte stream.
+        try:
+            verify_existing()
+        except (AssertionError, KeyError, ValueError, OSError) as exc:
+            raise SystemExit('Existing release does not match source. Bump version before publishing a new release.') from exc
+        return
     buffer = io.BytesIO()
     with gzip.GzipFile(fileobj=buffer, mode='wb', mtime=0, filename='') as compressed:
         with tarfile.open(fileobj=compressed, mode='w', format=tarfile.USTAR_FORMAT) as archive:
@@ -69,4 +96,7 @@ def build():
     print(f'Built v{VERSION}: {len(content)} bytes, {len(FILES)} regular files')
 
 if __name__ == '__main__':
-    build()
+    if '--check' in sys.argv:
+        verify_existing()
+    else:
+        build()
