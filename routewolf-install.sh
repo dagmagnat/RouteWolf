@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v56-nightly-releases"
+PROJECT_VERSION="v57-command-compat"
 ROUTEWOLF_VERSION_FILE="/etc/routewolf/installed_version"
 
 # Persisted across installs/updates so a re-run can tell "what did this router
@@ -3526,7 +3526,10 @@ EOF
 
     cat << 'EOF' > /usr/sbin/routewolf-update.sh
 #!/bin/sh
-exec /usr/sbin/routewolf-stable-update.sh "${1:-check}" "${2:-}" "${3:-}"
+# Older rw commands forwarded the literal subcommand as the first argument.
+[ "${1:-}" != update ] || shift
+[ "$#" -gt 0 ] || set -- check
+exec /usr/sbin/routewolf-stable-update.sh "$@"
 EOF
     chmod +x /usr/sbin/routewolf-update.sh
 
@@ -4309,6 +4312,7 @@ HELP
     ;;
     cleanup) cleanup_storage ;;
     update)
+        shift
         /usr/sbin/routewolf-update.sh "$@"
     ;;
     dns)

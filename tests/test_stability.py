@@ -17,7 +17,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from build_release import FILES, VERSION, runtime_files
+from build_release import FILES, VERSION, NAME, runtime_files
 
 def call(*args, check=False):
     return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=check, timeout=35)
@@ -227,7 +227,7 @@ class StabilityTests(unittest.TestCase):
         self.repack(mutate);self.assertNotEqual(self.install_local().returncode,0)
 
     def test_manifest_is_not_executed(self):
-        self.manifest.write_text(self.manifest.read_text().replace('name=v56-nightly-releases','name=$(touch /tmp/manifest-executed)'))
+        self.manifest.write_text(self.manifest.read_text().replace('name='+NAME,'name=$(touch /tmp/manifest-executed)'))
         self.assertNotEqual(self.install_local().returncode,0);self.assertFalse(Path('/tmp/manifest-executed').exists())
 
     def test_low_flash_defers_without_changing_runtime(self):
@@ -456,6 +456,37 @@ class RoutingTests(unittest.TestCase):
 
 
 class AliasTests(unittest.TestCase):
+    def test_update_wrapper_preserves_modes_arguments_and_exit_status(self):
+        with tempfile.TemporaryDirectory(prefix='routewolf-update-') as directory:
+            base=Path(directory)
+            agent=base/'agent'
+            write(agent,'#!/bin/sh\nprintf "ARG:%s\\n" "$@"\nexit 17\n',True)
+            wrapper=base/'update'
+            write(wrapper,(ROOT/'runtime/routewolf-update.sh').read_text().replace('/usr/sbin/routewolf-stable-update.sh',str(agent)),True)
+            for args,expected in [([],['check']),(['check'],['check']),(['update'],['check']),(['update','status'],['status']),(['--lists-auto'],['--lists-auto']),(['--code-auto'],['--code-auto']),(['--local','archive with spaces','manifest with spaces'],['--local','archive with spaces','manifest with spaces'])]:
+                with self.subTest(args=args):
+                    result=call('sh',str(wrapper),*args)
+                    self.assertEqual(result.returncode,17,result.stdout)
+                    self.assertEqual(result.stdout.splitlines(),['ARG:'+arg for arg in expected])
+
+    def test_public_rw_update_and_legacy_rw_use_same_stable_modes(self):
+        with tempfile.TemporaryDirectory(prefix='routewolf-command-') as directory:
+            base=Path(directory);agent=base/'agent';wrapper=base/'update'
+            write(agent,'#!/bin/sh\nprintf "ARG:%s\\n" "$@"\nexit 17\n',True)
+            write(wrapper,(ROOT/'runtime/routewolf-update.sh').read_text().replace('/usr/sbin/routewolf-stable-update.sh',str(agent)),True)
+            current=runtime_files()['usr/sbin/rw'].decode()
+            # Execute the actual published v56 command, not a model of its bug.
+            with tarfile.open(ROOT/'releases/routewolf-v56.tar.gz','r:gz') as archive:
+                legacy=archive.extractfile('payload/usr/sbin/rw').read().decode()
+            for label,source in [('current',current),('v56',legacy)]:
+                command=base/label
+                write(command,source.replace('/usr/sbin/routewolf-update.sh',str(wrapper)),True)
+                for args,expected in [(['update'],['check']),(['update','status'],['status']),(['update','--code-auto'],['--code-auto']),(['update','--local','archive with spaces','manifest with spaces'],['--local','archive with spaces','manifest with spaces'])]:
+                    with self.subTest(version=label,args=args):
+                        result=call('sh',str(command),*args)
+                        self.assertEqual(result.returncode,17,result.stdout)
+                        self.assertEqual(result.stdout.splitlines(),['ARG:'+arg for arg in expected])
+
     def test_legacy_local_entry_points_preserve_arguments(self):
         mapping={'getdomains-install.sh':'install.sh','getdomains-check.sh':'routewolf-check.sh','getdomains-uninstall.sh':'uninstall.sh'}
         with tempfile.TemporaryDirectory(prefix='routewolf-alias-') as directory:

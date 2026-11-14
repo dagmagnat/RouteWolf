@@ -1,6 +1,6 @@
 format=1
-version=56
-name=v56-nightly-releases
-archive=routewolf-v56.tar.gz
-archive_sha256=cb59b749ff5b2fc793215d09b4d70799a675849c6f350dc7124ebb6c3d1bf56c
+version=57
+name=v57-command-compat
+archive=routewolf-v57.tar.gz
+archive_sha256=b2899567e6715e824379453217b876e5d6a46cfce431380ff2fad7ca015c9335
 agent_sha256=74346100e4cfb14b57208fa264e43e1fdb7bf6c340de125596d5fbe19693ffab

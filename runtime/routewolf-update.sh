@@ -1,2 +1,5 @@
 #!/bin/sh
-exec /usr/sbin/routewolf-stable-update.sh "${1:-check}" "${2:-}" "${3:-}"
+# Older rw commands forwarded the literal subcommand as the first argument.
+[ "${1:-}" != update ] || shift
+[ "$#" -gt 0 ] || set -- check
+exec /usr/sbin/routewolf-stable-update.sh "$@"
