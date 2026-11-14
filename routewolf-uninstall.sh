@@ -1,208 +1,131 @@
-#!/bin/ash
-
-PURGE_TUNNEL=0
-[ "$1" = "--purge" ] && PURGE_TUNNEL=1
-
-
-echo "Выпиливаем скрипты"
-/etc/init.d/routewolf disable 2>/dev/null || true
-/etc/init.d/getdomains disable 2>/dev/null || true
-rm -f /etc/init.d/routewolf /etc/init.d/getdomains
-
-/etc/init.d/routewolf-route disable 2>/dev/null || true
-/etc/init.d/routewolf-watchdog stop 2>/dev/null || true
-/etc/init.d/routewolf-watchdog disable 2>/dev/null || true
-/etc/init.d/routewolf-awg-watchdog stop 2>/dev/null || true
-/etc/init.d/routewolf-awg-watchdog disable 2>/dev/null || true
-/etc/init.d/vpnroute disable 2>/dev/null || true
-rm -f /etc/init.d/routewolf-route /etc/init.d/routewolf-watchdog /etc/init.d/routewolf-awg-watchdog /etc/init.d/vpnroute
-rm -f /usr/sbin/rw /usr/sbin/rwrt /usr/sbin/row
-rm -f /usr/sbin/routewolf-route.sh /usr/sbin/routewolf-status.sh /usr/sbin/routewolf-update.sh /usr/sbin/routewolf-uninstall.sh /usr/sbin/routewolf-healthcheck.sh /usr/sbin/routewolf-watchdog.sh /usr/sbin/routewolf-awg-watchdog.sh /usr/sbin/routewolf-diagnose.sh /usr/sbin/routewolf-load.sh /usr/sbin/routewolf-diagnose-update.sh /usr/sbin/routewolf-singbox-update.sh /etc/routewolf/watchdog.conf /etc/routewolf/outline.conf
-rm -f /usr/sbin/domain-routing-route.sh /usr/sbin/domain-routing-status.sh /usr/sbin/routing-openwrt-diagnose.sh /usr/sbin/routing-openwrt-load.sh /usr/sbin/routing-openwrt-healthcheck.sh /usr/sbin/routing-openwrt-update.sh /usr/sbin/routing-openwrt-uninstall.sh
-rm -f /etc/routewolf/route.conf /etc/domain-routing-route.conf
-rm -f /etc/hotplug.d/iface/30-routewolf-route /etc/hotplug.d/net/30-routewolf-route /etc/hotplug.d/iface/30-vpnroute /etc/hotplug.d/net/30-vpnroute
-
-echo "Выпиливаем из crontab"
-sed -i '/routewolf start/d;/RouteWolf/d;/domain-routing/d;/routewolf-route/d;/routewolf-watchdog/d;/routewolf-awg-watchdog/d;/routewolf-singbox-update/d' /etc/crontabs/root
-/etc/init.d/cron restart 2>/dev/null || true
-
-echo "Выпиливаем домены"
-rm -f /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst
-rm -rf /etc/routewolf /etc/domain-routing /etc/domain-routing-user.conf
-
-echo "Чистим firewall, раз раз 🍴"
-
-# Remove LAN DNS redirect created by RouteWolf
-while true; do
-    redirect_id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@redirect\[\([0-9]*\)\]\.name='routewolf_force_dns'.*/\1/p" | head -n 1)
-    [ -z "$redirect_id" ] && break
-    uci -q delete firewall.@redirect[$redirect_id]
+#!/bin/sh
+# Local uninstaller: never download or run another installer to remove RouteWolf.
+set -u
+umask 077
+purge=0
+confirmed=0
+for arg in "$@"; do
+    case "$arg" in
+        --purge) purge=1 ;;
+        --yes) confirmed=1 ;;
+        -h|--help)
+            echo 'Usage: rw uninstall [--purge] [--yes]'
+            echo 'Удаляет RouteWolf, его списки, правила и ночные задания.'
+            echo 'Без --purge сохраняет VPN-конфигурации и пакеты, настройки WAN/LAN/DNS.'
+            echo '--purge дополнительно удаляет awg0/wg0 и известные VPN-конфиги проекта.'
+            echo '--yes пропускает подтверждение. Прошивка и пакеты не удаляются.'
+            exit 0 ;;
+        *) echo "Unknown argument: $arg" >&2; exit 2 ;;
+    esac
 done
-
-ipset_id=$(uci show firewall | grep -E '@ipset.*name=.vpn_domains.' | awk -F '[][{}]' '{print $2}' | head -n 1)
-if [ ! -z "$ipset_id" ]; then
-    while uci -q delete firewall.@ipset[$ipset_id]; do :; done
+if [ "$confirmed" != 1 ]; then
+    echo 'Будут удалены RouteWolf, его маршрутизация, списки и автоматические задания.'
+    [ "$purge" != 1 ] || echo 'Также будут удалены VPN-интерфейсы awg0/wg0 и конфиги проекта.'
+    printf 'Для подтверждения введите DELETE: '
+    answer=''
+    read -r answer || true
+    [ "$answer" = DELETE ] || { echo 'Удаление отменено.'; exit 0; }
 fi
-
-rule_id=$(uci show firewall | grep -E '@rule.*name=.mark_domains.' | awk -F '[][{}]' '{print $2}' | head -n 1)
-if [ ! -z "$rule_id" ]; then
-    while uci -q delete firewall.@rule[$rule_id]; do :; done
-fi
-
-ipset_id=$(uci show firewall | grep -E '@ipset.*name=.vpn_domains_internal.' | awk -F '[][{}]' '{print $2}' | head -n 1)
-if [ ! -z "$ipset_id" ]; then
-    while uci -q delete firewall.@ipset[$ipset_id]; do :; done
-fi
-
-rule_id=$(uci show firewall | grep -E '@rule.*name=.mark_domains_intenal.' | awk -F '[][{}]' '{print $2}' | head -n 1)
-if [ ! -z "$rule_id" ]; then
-    while uci -q delete firewall.@rule[$rule_id]; do :; done
-fi
-
-ipset_id=$(uci show firewall | grep -E '@ipset.*name=.vpn_subnets.' | awk -F '[][{}]' '{print $2}' | head -n 1)
-if [ ! -z "$ipset_id" ]; then
-    while uci -q delete firewall.@ipset[$ipset_id]; do :; done
-fi
-
-rule_id=$(uci show firewall | grep -E '@rule.*name=.mark_subnet.' | awk -F '[][{}]' '{print $2}' | head -n 1)
-if [ ! -z "$rule_id" ]; then
-    while uci -q delete firewall.@rule[$rule_id]; do :; done
-fi
-
-for name in vpn_domains6 vpn_subnets6; do
-    ipset_id=$(uci show firewall | grep -E "@ipset.*name=.$name." | awk -F '[][{}]' '{print $2}' | head -n 1)
-    if [ ! -z "$ipset_id" ]; then
-        while uci -q delete firewall.@ipset[$ipset_id]; do :; done
-    fi
+[ "$(id -u)" = 0 ] || { echo 'Root is required' >&2; exit 1; }
+for config in network firewall dhcp openvpn; do
+    [ -z "$(uci -q changes "$config")" ] || { echo "Unsaved UCI changes in $config; save or revert them first" >&2; exit 1; }
 done
-
-for name in mark_domains6 mark_subnet6; do
-    rule_id=$(uci show firewall | grep -E "@rule.*name=.$name." | awk -F '[][{}]' '{print $2}' | head -n 1)
-    if [ ! -z "$rule_id" ]; then
-        while uci -q delete firewall.@rule[$rule_id]; do :; done
-    fi
+locks=''
+cleanup() {
+    for lock in $locks; do rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || true; done
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+for lock in /tmp/routewolf-code-update.lock /tmp/routewolf-lists.lock /tmp/routewolf-domain-health.lock; do
+    mkdir "$lock" 2>/dev/null || { echo 'RouteWolf task/lock exists; retry after it finishes' >&2; exit 75; }
+    locks="$lock $locks"
+    echo $$ >"$lock/pid"
 done
+# Preserve private configuration for a manual recovery; never publish this archive.
+backup=/tmp/routewolf-uninstall-backup.$$.tgz
+set --
+for file in etc/config etc/routewolf etc/crontabs/root; do
+    [ ! -e "/$file" ] || set -- "$@" "$file"
+done
+tar -czf "$backup" -C / "$@" && tar -tzf "$backup" >/dev/null || { echo 'Backup failed; nothing removed' >&2; exit 1; }
+echo "Резервная копия настроек: $backup (в RAM, исчезнет после перезагрузки)"
 
-
-# Extra cleanup for named ipsets/rules that may have shifted indexes.
-for name in vpn_domains vpn_domains6 vpn_domains_internal vpn_subnets vpn_subnets6; do
-    while true; do
-        id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@ipset\[\([0-9]*\)\]\.name='$name'.*/\1/p" | head -n 1)
-        [ -z "$id" ] && break
-        uci -q delete firewall.@ipset[$id]
+# Resolve each matching section again after deletion: anonymous UCI indexes shift.
+delete_named() {
+    kind=$1; name=$2
+    while :; do
+        section=$(uci -q show firewall | sed -n "s/^\(firewall\.[^.]*\)\.name='$name'$/\1/p" | head -n 1)
+        [ -n "$section" ] || break
+        [ "$(uci -q get "$section")" = "$kind" ] || return 1
+        uci -q delete "$section" || return 1
     done
+}
+for name in vpn_domains vpn_domains6 vpn_domains_internal vpn_subnets vpn_subnets6; do
+    delete_named ipset "$name" || exit 1
 done
 for name in mark_domains mark_domains6 mark_domains_intenal mark_subnet mark_subnet6; do
-    while true; do
-        id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@rule\[\([0-9]*\)\]\.name='$name'.*/\1/p" | head -n 1)
-        [ -z "$id" ] && break
-        uci -q delete firewall.@rule[$id]
-    done
+    delete_named rule "$name" || exit 1
 done
-for zone_name in vpn wg awg ovpn singbox tun2socks; do
-    while true; do
-        id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$zone_name'.*/\1/p" | head -n 1)
-        [ -z "$id" ] && break
-        uci -q delete firewall.@zone[$id]
-    done
-done
-while true; do
-    id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@forwarding\[\([0-9]*\)\]\.src='lan'.*/\1/p" | head -n 1)
-    [ -z "$id" ] && break
-    if uci -q get firewall.@forwarding[$id].dest | grep -qE '^(vpn|wg|awg|ovpn|singbox|tun2socks)$'; then
-        uci -q delete firewall.@forwarding[$id]
-    else
-        break
-    fi
-done
-uci commit firewall
-/etc/init.d/firewall restart
-
-echo "Чистим сеть"
-while ip rule del fwmark 0x1/0x1 table 99 priority 100 2>/dev/null; do :; done
-while ip rule del fwmark 0x1 table vpn 2>/dev/null; do :; done
-ip route flush table vpn 2>/dev/null || true
-ip -6 route flush table vpn 2>/dev/null || true
-sed -i '/[[:space:]]vpn$/d;/^99[[:space:]]/d' /etc/iproute2/rt_tables 2>/dev/null || true
-
-rule_id=$(uci show network | grep -E '@rule.*name=.mark0x1.' | awk -F '[][{}]' '{print $2}' | head -n 1)
-if [ ! -z "$rule_id" ]; then
-    while uci -q delete network.@rule[$rule_id]; do :; done
+delete_named redirect routewolf_force_dns || exit 1
+if ! fw4 check; then
+    uci -q revert firewall
+    echo 'Firewall validation failed; removal cancelled before applying changes' >&2
+    exit 1
 fi
+uci commit firewall || exit 1
 
-rule_id=$(uci show network | grep -E '@rule.*name=.mark0x2.' | awk -F '[][{}]' '{print $2}' | head -n 1)
-if [ ! -z "$rule_id" ]; then
-    while uci -q delete network.@rule[$rule_id]; do :; done
+if [ -f /etc/crontabs/root ]; then
+    sed '/\/usr\/sbin\/routewolf-/d; /\/etc\/init.d\/routewolf[ /]/d; /\/etc\/init.d\/getdomains[ /]/d; /\/usr\/sbin\/routing-openwrt-healthcheck.sh/d; /\/usr\/sbin\/routing-openwrt-update.sh/d; /\/usr\/sbin\/domain-routing-/d' /etc/crontabs/root > /tmp/routewolf-uninstall-cron.$$
+    cat /tmp/routewolf-uninstall-cron.$$ > /etc/crontabs/root || exit 1
+    rm -f /tmp/routewolf-uninstall-cron.$$
+    /etc/init.d/cron restart 2>/dev/null || true
 fi
+for service in routewolf getdomains routewolf-route routewolf-watchdog routewolf-awg-watchdog vpnroute; do
+    [ ! -x "/etc/init.d/$service" ] || {
+        "/etc/init.d/$service" stop 2>/dev/null || true
+        "/etc/init.d/$service" disable 2>/dev/null || true
+    }
+done
+for family in '' '-6'; do
+    while ip $family rule del fwmark 0x1/0x1 table 99 priority 100 2>/dev/null; do :; done
+    while ip $family rule del fwmark 0x1 table vpn 2>/dev/null; do :; done
+    ip $family route flush table 99 2>/dev/null || true
+done
+for name in mark0x1 mark0x2 routewolf_mark routewolf_internal_mark vpn_route vpn_route6 vpn_route_internal vpn_route_blackhole vpn_route_blackhole6; do
+    uci -q delete "network.$name" 2>/dev/null || true
+done
+uci commit network || exit 1
 
-uci -q delete network.mark0x1
-uci -q delete network.mark0x2
-uci -q delete network.routewolf_mark
-uci -q delete network.routewolf_internal_mark
-
-uci -q delete network.ovpn0
-uci -q delete openvpn.routewolf
-uci -q delete openvpn.routing_openwrt
-uci commit openvpn 2>/dev/null || true
-while uci -q delete network.vpn_route; do :; done
-while uci -q delete network.vpn_route6; do :; done
-while uci -q delete network.vpn_route_internal; do :; done
-while uci -q delete network.vpn_route_blackhole; do :; done
-while uci -q delete network.vpn_route_blackhole6; do :; done
-
-uci commit network
-
-if [ "$PURGE_TUNNEL" = "1" ]; then
-    echo "Purge mode: removing project tunnel interfaces awg0/wg0 and peer sections"
-    ifdown awg0 2>/dev/null || true
-    ifdown wg0 2>/dev/null || true
-    /etc/init.d/openvpn stop 2>/dev/null || true
-    /etc/init.d/sing-box stop 2>/dev/null || true
+if [ "$purge" = 1 ]; then
+    for interface in awg0 wg0; do
+        ifdown "$interface" 2>/dev/null || true
+        uci -q delete "network.$interface" || true
+    done
+    for type in amneziawg_awg0 wireguard_wg0; do
+        while uci -q delete "network.@$type[0]" 2>/dev/null; do :; done
+    done
+    uci -q delete network.ovpn0 || true
+    uci -q delete openvpn.routewolf || true
+    uci -q delete openvpn.routing_openwrt || true
     rm -f /etc/openvpn/routewolf.ovpn /etc/openvpn/routing_openwrt.ovpn
-    if grep -Eq 'sbtun0|outline0' /etc/sing-box/config.json 2>/dev/null; then
-        rm -f /etc/sing-box/config.json
-        uci -q delete sing-box.main
-        uci commit sing-box 2>/dev/null || true
-    fi
-    uci -q delete network.awg0
-    uci -q delete network.wg0
-    uci -q delete network.ovpn0
-    uci -q delete openvpn.routewolf
-uci -q delete openvpn.routing_openwrt
+    uci commit network || exit 1
     uci commit openvpn 2>/dev/null || true
-    while uci -q delete network.@amneziawg_awg0[0] 2>/dev/null; do :; done
-    while uci -q delete network.@wireguard_wg0[0] 2>/dev/null; do :; done
-    uci commit network
-
-    for zone_name in awg wg ovpn vpn singbox; do
-        while true; do
-            id=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@zone\[\([0-9]*\)\]\.name='$zone_name'.*/\1/p" | head -n 1)
-            [ -z "$id" ] && break
-            uci -q delete firewall.@zone[$id]
-        done
-    done
-    uci commit firewall
+    /etc/init.d/openvpn reload 2>/dev/null || true
+    /etc/init.d/network reload 2>/dev/null || true
 fi
-
-/etc/init.d/network restart
-
-uci -q del_list dhcp.@dnsmasq[0].confdir='/tmp/dnsmasq.d'
-uci -q delete dhcp.@dnsmasq[0].filter_aaaa
-uci commit dhcp 2>/dev/null || true
-/etc/init.d/dnsmasq restart 2>/dev/null || true
-
-echo "Проверяем Dnsmasq"
-if uci show dhcp | grep -q ipset; then
-    echo "В dnsmasq (/etc/config/dhcp) заданы домены. Нужные из них сохраните, остальные удалите вместе с ipset"
-fi
-
-if [ "$PURGE_TUNNEL" = "1" ]; then
-    echo "Туннели awg0/wg0 проекта удалены"
-else
-    echo "Туннели оставлены. Для полного удаления используйте: uninstall.sh --purge"
-fi
-echo "Dnscrypt, stubby тоже не трогаем"
-
-echo "  ______  _____        _____   _____  ______  _     _  _____   _____"
-echo " |  ____ |     |      |_____] |     | |     \ |____/  |     | |_____]"
-echo " |_____| |_____|      |       |_____| |_____/ |    \_ |_____| |     "
+# Shared dnsmasq confdir, DNS servers, AAAA policy and VPN zones are preserved.
+rm -f /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst
+fw4 reload || { echo 'Firewall reload failed; backup retained' >&2; exit 1; }
+/etc/init.d/dnsmasq restart || { echo 'DNS restart failed; backup retained' >&2; exit 1; }
+for service in routewolf getdomains routewolf-route routewolf-watchdog routewolf-awg-watchdog vpnroute; do
+    rm -f "/etc/init.d/$service"
+done
+rm -f /etc/hotplug.d/iface/30-routewolf-route /etc/hotplug.d/net/30-routewolf-route /etc/hotplug.d/iface/30-vpnroute /etc/hotplug.d/net/30-vpnroute
+for command in rw rwrt row; do rm -f "/usr/sbin/$command"; done
+for script in routewolf-route routewolf-status routewolf-update routewolf-stable-update routewolf-reliability routewolf-fetch routewolf-apply routewolf-purge routewolf-youtube routewolf-uninstall routewolf-healthcheck routewolf-watchdog routewolf-awg-watchdog routewolf-diagnose routewolf-load routewolf-diagnose-update routewolf-singbox-update domain-routing-route domain-routing-status routing-openwrt-diagnose routing-openwrt-load routing-openwrt-healthcheck routing-openwrt-update routing-openwrt-uninstall; do
+    rm -f "/usr/sbin/$script.sh"
+done
+rm -rf /etc/routewolf /etc/domain-routing
+rm -f /etc/domain-routing-route.conf /etc/domain-routing-user.conf /tmp/routewolf-tunnel-unhealthy
+echo 'RouteWolf удалён. Настройки WAN/LAN/DNS и установленные пакеты сохранены.'
+[ "$purge" = 1 ] || echo 'VPN-конфигурации сохранены.'

@@ -1,6 +1,6 @@
 format=1
-version=57
-name=v57-command-compat
-archive=routewolf-v57.tar.gz
-archive_sha256=b2899567e6715e824379453217b876e5d6a46cfce431380ff2fad7ca015c9335
+version=58
+name=v58-uninstall-command
+archive=routewolf-v58.tar.gz
+archive_sha256=e981bdac89f4d585b3c4491248b3c097f69ec8bf9c307763d39a53711ef2ab36
 agent_sha256=74346100e4cfb14b57208fa264e43e1fdb7bf6c340de125596d5fbe19693ffab

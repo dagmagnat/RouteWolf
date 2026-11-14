@@ -29,27 +29,27 @@ fetch_to_file() {
     # OpenWrt's native HTTPS client. Calling the absolute path bypasses
     # a broken /usr/bin/wget alternative such as wget-nossl.
     if [ -x /bin/uclient-fetch ]; then
-        /bin/uclient-fetch --no-check-certificate -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
+        /bin/uclient-fetch -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
         rm -f "$_out"
         /bin/uclient-fetch -O "$_out" "$_url" && [ -s "$_out" ] && return 0
         rm -f "$_out"
     fi
 
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
+        uclient-fetch -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
         rm -f "$_out"
         uclient-fetch -O "$_out" "$_url" && [ -s "$_out" ] && return 0
         rm -f "$_out"
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$_url" -o "$_out" && [ -s "$_out" ] && return 0
+        curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 "$_url" -o "$_out" && [ -s "$_out" ] && return 0
         rm -f "$_out"
     fi
 
     if command -v wget >/dev/null 2>&1; then
         if wget --help 2>&1 | grep -q -- '--no-check-certificate'; then
-            wget --no-check-certificate -O "$_out" "$_url" && [ -s "$_out" ] && return 0
+            wget -O "$_out" "$_url" && [ -s "$_out" ] && return 0
         else
             wget -O "$_out" "$_url" && [ -s "$_out" ] && return 0
         fi
@@ -80,7 +80,7 @@ rm -rf "$TMP_DIR" "$ARCHIVE_FILE"     "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf
 if ! fetch_to_file "$ARCHIVE_URL" "$ARCHIVE_FILE"; then
     echo "Error: no working HTTPS downloader could fetch RouteWolf."
     echo "Try the short OpenWrt command:"
-    echo "  /bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh"
+    echo "  /bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh"
     echo "If /bin/uclient-fetch is missing, install/use curl or upload the ZIP manually."
     exit 1
 fi

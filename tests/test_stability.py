@@ -455,7 +455,121 @@ class RoutingTests(unittest.TestCase):
         self.assertIn('dev rw_wan',call('ip','route','get','8.8.8.8').stdout)
 
 
+@unittest.skipUnless(Path('/.routewolf-test-container').exists(), 'isolated test container required')
+class UninstallTests(unittest.TestCase):
+    config=StabilityTests.config
+    make_set=StabilityTests.make_set
+    tearDown=StabilityTests.tearDown
+
+    def setUp(self):
+        StabilityTests.setUp(self)
+        self.packages={
+            'network':{'wan':{'type':'interface','proto':'dhcp'},'lan':{'type':'interface','ipaddr':'192.168.31.1'},'awg0':{'type':'interface','private_key':'private-fixture'},'routewolf_mark':{'type':'rule','mark':'1'}},
+            'dhcp':{'dns':{'type':'dnsmasq','server':'192.0.2.53','confdir':'/tmp/dnsmasq.d','filter_aaaa':'1'}},
+            'openvpn':{'routewolf':{'type':'openvpn','enabled':'1'},'other':{'type':'openvpn','enabled':'1'}},
+            'firewall':{'first':{'type':'ipset','name':'vpn_domains'},'neighbour':{'type':'ipset','name':'unrelated'},'v6':{'type':'ipset','name':'vpn_domains6'},'marked':{'type':'rule','name':'mark_domains'},'other_rule':{'type':'rule','name':'allow_ssh'},'dns':{'type':'redirect','name':'routewolf_force_dns'},'zone':{'type':'zone','name':'vpn'}}}
+        for package,value in self.packages.items():write('/etc/config/'+package,json.dumps(value,sort_keys=True))
+        write('/mockbin/uci',r'''#!/usr/bin/python3
+from pathlib import Path
+import json,sys
+args=[arg for arg in sys.argv[1:] if arg!='-q'];command=args[0]
+stage=Path('/tmp/rw-uci-stage.json')
+pending=json.loads(stage.read_text()) if stage.exists() else {}
+key=args[1] if len(args)>1 else '';package=key.split('.')[0]
+file=Path('/etc/config')/package
+data=pending.get(package,json.loads(file.read_text()) if file.is_file() else {})
+if command=='changes':
+ if package in pending:print(package+'.pending=1')
+elif command=='show':
+ for section,options in data.items():
+  print(package+'.'+section+'='+options['type'])
+  for option,value in options.items():
+   if option!='type':print(package+'.'+section+'.'+option+"='"+value+"'")
+elif command=='get':
+ parts=key.split('.')
+ try:print(data[parts[1]][parts[2] if len(parts)>2 else 'type'])
+ except KeyError:sys.exit(1)
+elif command=='delete':
+ section=key.split('.',1)[1]
+ if section not in data:sys.exit(1)
+ del data[section];pending[package]=data;stage.write_text(json.dumps(pending))
+elif command=='commit':
+ file.write_text(json.dumps(data,sort_keys=True));pending.pop(package,None);stage.write_text(json.dumps(pending))
+elif command=='revert':
+ pending.pop(package,None);stage.write_text(json.dumps(pending))
+else:sys.exit(2)
+''',True)
+        write('/mockbin/ip','#!/bin/sh\necho "ip $*" >> /tmp/rw-actions\ncase " $* " in *" rule del "*) exit 1 ;; esac\nexit 0\n',True)
+        write('/mockbin/ifdown','#!/bin/sh\necho "ifdown $*" >> /tmp/rw-actions\n',True)
+        write('/etc/init.d/network','#!/bin/sh\necho "network $*" >> /tmp/rw-actions\n',True)
+        write('/etc/init.d/openvpn','#!/bin/sh\necho "openvpn $*" >> /tmp/rw-actions\n',True)
+        write('/etc/crontabs/root','7 4 * * * unrelated-job\n0 2 * * * /usr/sbin/routewolf-update.sh --lists-auto\n0 3 * * * /usr/sbin/routewolf-update.sh --code-auto\n*/5 * * * * /usr/sbin/routewolf-reliability.sh check\n15 3 * * * /usr/sbin/routewolf-healthcheck.sh\n')
+        write('/tmp/dnsmasq.d/other.conf','server=/example.test/192.0.2.53\n')
+        write('/tmp/dnsmasq.d/domains.lst','RouteWolf fixture\n')
+        write('/etc/openvpn/routewolf.ovpn','private-fixture\n')
+        write('/etc/openvpn/unrelated.ovpn','unrelated-fixture\n')
+
+    def run_uninstall(self,*args,input=''):
+        return subprocess.run(['sh',str(ROOT/'routewolf-uninstall.sh'),*args],input=input,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=15)
+
+    def test_help_eof_and_decline_have_no_side_effects(self):
+        before={p:p.read_bytes() for p in Path('/etc/config').iterdir() if p.is_file()}
+        for args,input in [(('--help',),''),((),''),((),'no\n')]:
+            result=self.run_uninstall(*args,input=input)
+            self.assertEqual(result.returncode,0,result.stdout)
+        self.assertEqual(before,{p:p.read_bytes() for p in before})
+        self.assertTrue(Path('/usr/sbin/rw').exists())
+        self.assertNotIn('fw4',StabilityTests.actions(self))
+
+    def test_default_removes_project_and_cron_but_preserves_vpn_dns_and_neighbours(self):
+        dns=Path('/etc/config/dhcp').read_bytes()
+        result=self.run_uninstall('--yes');self.assertEqual(result.returncode,0,result.stdout)
+        self.assertFalse(Path('/usr/sbin/rw').exists())
+        for path in FILES:self.assertFalse(Path('/'+path).exists(),path)
+        self.assertFalse(Path('/etc/routewolf').exists())
+        self.assertEqual(Path('/etc/crontabs/root').read_text(),'7 4 * * * unrelated-job\n')
+        self.assertEqual(Path('/etc/config/dhcp').read_bytes(),dns)
+        network=json.loads(Path('/etc/config/network').read_text())
+        for name in ['wan','lan','awg0']:self.assertEqual(network[name],self.packages['network'][name])
+        self.assertNotIn('routewolf_mark',network)
+        firewall=json.loads(Path('/etc/config/firewall').read_text())
+        self.assertEqual(set(firewall),{'neighbour','other_rule','zone'})
+        self.assertTrue(Path('/etc/openvpn/routewolf.ovpn').exists())
+        self.assertTrue(Path('/tmp/dnsmasq.d/other.conf').exists())
+        self.assertNotIn('network restart',StabilityTests.actions(self))
+        self.assertNotIn('ifdown',StabilityTests.actions(self))
+        backup=next(Path('/tmp').glob('routewolf-uninstall-backup.*.tgz'))
+        with tarfile.open(backup,'r:gz') as archive:self.assertEqual(archive.extractfile('etc/config/dhcp').read(),dns)
+        self.assertEqual(backup.stat().st_mode & 0o777,0o600)
+
+    def test_purge_is_explicit_and_preserves_unrelated_openvpn_and_wan(self):
+        result=self.run_uninstall('--purge',input='DELETE\n');self.assertEqual(result.returncode,0,result.stdout)
+        network=json.loads(Path('/etc/config/network').read_text())
+        self.assertNotIn('awg0',network);self.assertEqual(network['wan'],self.packages['network']['wan'])
+        self.assertFalse(Path('/etc/openvpn/routewolf.ovpn').exists())
+        self.assertTrue(Path('/etc/openvpn/unrelated.ovpn').exists())
+        self.assertIn('other',json.loads(Path('/etc/config/openvpn').read_text()))
+
+    def test_busy_update_or_pending_settings_prevent_removal(self):
+        Path('/tmp/routewolf-code-update.lock').mkdir()
+        result=self.run_uninstall('--yes');self.assertEqual(result.returncode,75,result.stdout)
+        Path('/tmp/routewolf-code-update.lock').rmdir()
+        write('/tmp/rw-uci-stage.json',json.dumps({'network':self.packages['network']}))
+        result=self.run_uninstall('--yes');self.assertEqual(result.returncode,1,result.stdout)
+        self.assertTrue(Path('/usr/sbin/rw').exists());self.assertTrue(Path('/etc/routewolf').exists())
+
+
 class AliasTests(unittest.TestCase):
+    def test_public_uninstall_forwards_arguments_and_help_without_deleting(self):
+        with tempfile.TemporaryDirectory(prefix='routewolf-remove-') as directory:
+            base=Path(directory);helper=base/'uninstall';command=base/'rw'
+            write(helper,'#!/bin/sh\nprintf "ARG:%s\\n" "$@"\nexit 17\n',True)
+            write(command,runtime_files()['usr/sbin/rw'].decode().replace('/usr/sbin/routewolf-uninstall.sh',str(helper)),True)
+            for alias in ['uninstall','remove']:
+                result=call('sh',str(command),alias,'--help')
+                self.assertEqual(result.returncode,17,result.stdout)
+                self.assertEqual(result.stdout,'ARG:--help\n')
+
     def test_update_wrapper_preserves_modes_arguments_and_exit_status(self):
         with tempfile.TemporaryDirectory(prefix='routewolf-update-') as directory:
             base=Path(directory)

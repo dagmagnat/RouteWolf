@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v57-command-compat"
+PROJECT_VERSION="v58-uninstall-command"
 ROUTEWOLF_VERSION_FILE="/etc/routewolf/installed_version"
 
 # Persisted across installs/updates so a re-run can tell "what did this router
@@ -3610,14 +3610,7 @@ fi
 EOF
     chmod +x /usr/sbin/routewolf-youtube.sh
 
-    cat << 'EOF' > /usr/sbin/routewolf-uninstall.sh
-#!/bin/sh
-# Remove RouteWolf rules, lists, cron and helper scripts.
-set -e
-cd /tmp
-/usr/sbin/routewolf-fetch.sh https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh /tmp/routewolf-uninstall.sh
-exec sh /tmp/routewolf-uninstall.sh "$@"
-EOF
+    cp "$SCRIPT_DIR/routewolf-uninstall.sh" /usr/sbin/routewolf-uninstall.sh || return 1
     chmod +x /usr/sbin/routewolf-uninstall.sh
 
     cat << 'EOF' > /usr/sbin/routewolf-diagnose-update.sh
@@ -4261,6 +4254,8 @@ rw commands:
   rw mtu [1280]      show or set WG/AWG MTU, then repair route
   rw cleanup         clean interrupted RouteWolf/APK temporary files
   rw update          update project from GitHub and apply changes
+  rw uninstall       remove RouteWolf after confirmation; keep VPN configs
+  rw uninstall --help show removal options
   rw dco status      show OpenVPN DCO state
   rw dco off         disable OpenVPN DCO and restart OpenVPN
   rw dco on          enable/auto OpenVPN DCO and restart OpenVPN
@@ -4314,6 +4309,10 @@ HELP
     update)
         shift
         /usr/sbin/routewolf-update.sh "$@"
+    ;;
+    uninstall|remove)
+        shift
+        exec /usr/sbin/routewolf-uninstall.sh "$@"
     ;;
     dns)
         case "$2" in

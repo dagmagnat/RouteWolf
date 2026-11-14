@@ -35,6 +35,8 @@ def runtime_files():
         canonical = ROOT / 'runtime' / Path(path).name
         if canonical.exists():
             text = canonical.read_text(encoding='utf-8')
+        elif path == 'usr/sbin/routewolf-uninstall.sh':
+            text = (ROOT / 'routewolf-uninstall.sh').read_text(encoding='utf-8')
         else:
             target = 'etc/hotplug.d/iface/30-routewolf-route' if path == 'etc/hotplug.d/net/30-routewolf-route' else path
             pattern = r"cat\s+<<\s*'EOF'\s*>\s*/" + re.escape(target) + r'\n(.*?)\nEOF'
