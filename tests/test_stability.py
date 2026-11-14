@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 import unittest
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -452,6 +453,36 @@ class RoutingTests(unittest.TestCase):
         self.assertNotEqual(call('/usr/sbin/routewolf-watchdog.sh','check').returncode,0)
         self.assertIn('dev wg0',call('ip','route','get','8.8.8.8','mark','1').stdout)
         self.assertIn('dev rw_wan',call('ip','route','get','8.8.8.8').stdout)
+
+
+class AliasTests(unittest.TestCase):
+    def test_legacy_local_entry_points_preserve_arguments(self):
+        mapping={'getdomains-install.sh':'install.sh','getdomains-check.sh':'routewolf-check.sh','getdomains-uninstall.sh':'uninstall.sh'}
+        with tempfile.TemporaryDirectory(prefix='routewolf-alias-') as directory:
+            base=Path(directory);write(base/'routewolf-install.sh','marker\n')
+            for alias,target in mapping.items():
+                with self.subTest(alias=alias):
+                    write(base/alias,(ROOT/alias).read_text(),True)
+                    write(base/target,'#!/bin/sh\nprintf "CANONICAL:%s\\n" "$1"\n',True)
+                    result=call('sh',str(base/alias),'argument with spaces')
+                    self.assertEqual(result.returncode,0,result.stdout)
+                    self.assertIn('CANONICAL:argument with spaces',result.stdout)
+
+    def test_piped_alias_ignores_stale_installer_in_current_directory(self):
+        with tempfile.TemporaryDirectory(prefix='routewolf-alias-') as directory:
+            base=Path(directory);write(base/'routewolf-install.sh','marker\n')
+            write(base/'install.sh','#!/bin/sh\necho STALE_LOCAL\n',True)
+            write(base/'bin/curl','''#!/bin/sh
+while [ "$#" -gt 0 ]; do
+ if [ "$1" = -o ]; then shift; out=$1; fi
+ shift
+done
+printf '#!/bin/sh\\necho VERIFIED_REMOTE\\n' >"$out"
+''',True)
+            environment=dict(os.environ,PATH=str(base/'bin')+os.pathsep+os.environ['PATH'])
+            result=subprocess.run(['sh'],input=(ROOT/'getdomains-install.sh').read_text(),text=True,cwd=base,env=environment,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=15)
+            self.assertEqual(result.returncode,0,result.stdout)
+            self.assertIn('VERIFIED_REMOTE',result.stdout);self.assertNotIn('STALE_LOCAL',result.stdout)
 
 
 class SourceChecks(unittest.TestCase):
