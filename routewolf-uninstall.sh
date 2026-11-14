@@ -75,7 +75,7 @@ fi
 uci commit firewall || exit 1
 
 if [ -f /etc/crontabs/root ]; then
-    sed '/\/usr\/sbin\/routewolf-/d; /\/etc\/init.d\/routewolf[ /]/d; /\/etc\/init.d\/getdomains[ /]/d; /\/usr\/sbin\/routing-openwrt-healthcheck.sh/d; /\/usr\/sbin\/routing-openwrt-update.sh/d; /\/usr\/sbin\/domain-routing-/d' /etc/crontabs/root > /tmp/routewolf-uninstall-cron.$$
+    sed '/\/usr\/sbin\/routewolf-/d; /\/etc\/init.d\/routewolf[[:space:]]/d; /\/etc\/init.d\/getdomains[[:space:]]/d; /\/usr\/sbin\/routing-openwrt-healthcheck.sh/d; /\/usr\/sbin\/routing-openwrt-update.sh/d; /\/usr\/sbin\/domain-routing-/d' /etc/crontabs/root > /tmp/routewolf-uninstall-cron.$$ || exit 1
     cat /tmp/routewolf-uninstall-cron.$$ > /etc/crontabs/root || exit 1
     rm -f /tmp/routewolf-uninstall-cron.$$
     /etc/init.d/cron restart 2>/dev/null || true

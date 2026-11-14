@@ -2,5 +2,5 @@ format=1
 version=58
 name=v58-uninstall-command
 archive=routewolf-v58.tar.gz
-archive_sha256=e981bdac89f4d585b3c4491248b3c097f69ec8bf9c307763d39a53711ef2ab36
+archive_sha256=ba615fedd770b7955457171bdaef92cb2988891a576af8307317755d1646f045
 agent_sha256=74346100e4cfb14b57208fa264e43e1fdb7bf6c340de125596d5fbe19693ffab
