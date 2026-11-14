@@ -1,6 +1,6 @@
 # RouteWolf
 
-> v55: stable automatic code updates, nftset recovery, rollback. See [CHANGES-v55.md](CHANGES-v55.md).
+> v56: lists at 02:00, GitHub Release updates at 03:00 (router local time). See [CHANGES-v56.md](CHANGES-v56.md) and [AUDIT-v56.md](AUDIT-v56.md).
 
 Simple OpenWrt script: domains and IPv4 CIDR from lists go through the selected tunnel, while normal internet stays on WAN.
 
@@ -69,7 +69,7 @@ For weak routers, use the `lite` profile and WireGuard/AmneziaWG. Sing-box check
 Short command for standard OpenWrt:
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
 ```
 
 It also works when an installed `wget` binary has no HTTPS support. The bootstrap itself can fall back between `uclient-fetch`, `curl`, and a working `wget`.
@@ -77,7 +77,7 @@ It also works when an installed `wget` binary has no HTTPS support. The bootstra
 ## Update
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
 ```
 
 The update keeps the current tunnel configuration, refreshes lists and restores policy routing.
@@ -85,13 +85,13 @@ The update keeps the current tunnel configuration, refreshes lists and restores 
 ## Uninstall
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
 ```
 
 Full project configuration cleanup:
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
 ```
 
 
@@ -108,7 +108,7 @@ rw cleanup
 If a previous installation stopped before the `rw` command was created:
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/cleanup.sh | sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/cleanup.sh | sh
 ```
 
 If less than 1.5 MB remains in `overlay` after cleanup, setup stops before configuring the tunnel.

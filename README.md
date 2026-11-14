@@ -1,6 +1,6 @@
 # RouteWolf
 
-> v55: stable automatic code updates, nftset recovery, rollback. See [CHANGES-v55.md](CHANGES-v55.md).
+> v56: lists at 02:00, GitHub Release updates at 03:00 (router local time). See [CHANGES-v56.md](CHANGES-v56.md) and [AUDIT-v56.md](AUDIT-v56.md).
 
 Простой скрипт для OpenWrt: домены и IPv4 CIDR из списков идут через выбранный туннель, обычный интернет остаётся через WAN.
 
@@ -29,7 +29,7 @@ https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/lists/ipv6.lst
 
 Домены и IPv4 включены по умолчанию. IPv6 выключен по умолчанию.
 
-После миграции на v55 код и списки проверяются каждые два часа; до миграции действует прежнее расписание. Локальный список заменяется полностью: если домен или IP удалён на GitHub, после обновления он удалится и на роутере. Если GitHub временно недоступен, используется последний рабочий кеш.
+В v56 списки проверяются ежедневно в 02:00, опубликованные релизы кода — в 03:00, по времени роутера. Локальный список заменяется полностью: если домен или IP удалён на GitHub, после обновления он удалится и на роутере. Если GitHub временно недоступен, используется последний рабочий кеш.
 
 
 ## Профили списков
@@ -69,7 +69,7 @@ lists/profiles/<name>/ipv6.lst
 Короткая команда для штатного OpenWrt:
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
 ```
 
 Она работает и тогда, когда установленный `wget` собран без HTTPS. Сам bootstrap внутри дополнительно умеет использовать `uclient-fetch`, `curl` или рабочий `wget`.
@@ -77,7 +77,7 @@ lists/profiles/<name>/ipv6.lst
 ## Обновление
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh
 ```
 
 Обновление сохраняет текущую конфигурацию туннеля, обновляет списки и восстанавливает маршрутизацию.
@@ -85,13 +85,13 @@ lists/profiles/<name>/ipv6.lst
 ## Удаление
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh
 ```
 
 Полная очистка конфигов проекта:
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh -s -- --purge
 ```
 
 
@@ -108,7 +108,7 @@ rw cleanup
 Если установка раньше оборвалась и команды `rw` ещё нет:
 
 ```sh
-/bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/cleanup.sh | sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/cleanup.sh | sh
 ```
 
 Если после очистки в `overlay` остаётся меньше 1,5 МБ, установка останавливается без продолжения настройки туннеля.

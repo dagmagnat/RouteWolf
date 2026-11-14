@@ -1,6 +1,6 @@
 format=1
-version=55
-name=v55-nftset-stable-updates
-archive=routewolf-v55.tar.gz
-archive_sha256=58a0d59de7538538a041b93346f25aa0982331c2c61b5db588663bc0c14e4d3d
-agent_sha256=a3a5604d9575441bfac7048d05006474dbfaa46ceb79b915df01368b0dda5895
+version=56
+name=v56-nightly-releases
+archive=routewolf-v56.tar.gz
+archive_sha256=cb59b749ff5b2fc793215d09b4d70799a675849c6f350dc7124ebb6c3d1bf56c
+agent_sha256=74346100e4cfb14b57208fa264e43e1fdb7bf6c340de125596d5fbe19693ffab

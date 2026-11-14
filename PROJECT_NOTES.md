@@ -1,3 +1,5 @@
+> v56: nightly schedules and actual GitHub Releases are documented in CHANGES-v56.md. Preserve DNS/WAN settings. Test failures only in isolated containers, never by dropping the operator router WAN.
+
 > v55: current automatic runtime channel is documented in CHANGES-v55.md. The Gen A/B notes below describe the pre-v55 migration sources.
 
 # RouteWolf — заметки для передачи контекста

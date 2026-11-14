@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v55-nftset-stable-updates"
+PROJECT_VERSION="v56-nightly-releases"
 ROUTEWOLF_VERSION_FILE="/etc/routewolf/installed_version"
 
 # Persisted across installs/updates so a re-run can tell "what did this router
@@ -57,27 +57,27 @@ download_url_to_file() {
     rm -f "$out"
 
     if [ -x /bin/uclient-fetch ]; then
-        /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        /bin/uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
         rm -f "$out"
         /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
         rm -f "$out"
     fi
 
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
         rm -f "$out"
         uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
         rm -f "$out"
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
+        curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
         rm -f "$out"
     fi
 
     if command -v wget >/dev/null 2>&1; then
         if wget_has_no_check; then
-            wget --no-check-certificate -O "$out" "$url" && [ -s "$out" ] && return 0
+            wget -O "$out" "$url" && [ -s "$out" ] && return 0
         else
             wget -O "$out" "$url" && [ -s "$out" ] && return 0
         fi
@@ -2134,6 +2134,7 @@ SERVICE="${WATCHDOG_SERVICE:-}"
 TEST_URL="${WATCHDOG_URL:-https://www.youtube.com/generate_204}"
 LOG_TAG='RouteWolf-watchdog'
 LOCK='/tmp/routewolf-watchdog.lock'
+UNHEALTHY='/tmp/routewolf-tunnel-unhealthy'
 
 log() { logger -t "$LOG_TAG" "$*" 2>/dev/null || echo "$LOG_TAG: $*"; }
 
@@ -2253,18 +2254,23 @@ run_check() {
     ensure_boot_enabled
     route_repair
 
-    check_connectivity && exit 0
+    if check_connectivity; then rm -f "$UNHEALTHY"; route_repair; exit 0; fi
     sleep 10
-    check_connectivity && exit 0
+    if check_connectivity; then rm -f "$UNHEALTHY"; route_repair; exit 0; fi
+
+    # A WG device may stay UP even when the peer/IP is unavailable.
+    # Keep table vpn empty until an actual data-plane check succeeds.
+    printf '%s\n' "$DEV" >"$UNHEALTHY"
 
     restart_selected 'two connectivity checks failed'
     if check_connectivity; then
+        rm -f "$UNHEALTHY"
+        route_repair
         log "recovered: $TYPE/$DEV works after restart"
         exit 0
     fi
 
     fail_open_cleanup
-    route_repair
     log "error: $TYPE/$DEV still unavailable after restart; WAN left in fail-open mode"
     exit 1
 }
@@ -2280,8 +2286,8 @@ case "$1" in
         lock_or_exit
         ensure_boot_enabled
         sleep 30
-        restart_selected 'router boot recovery'
-        check_connectivity || log "boot recovery finished but tunnel test still fails; WAN remains fail-open"
+        # Boot must not restart a healthy tunnel just because the timer fired.
+        run_check
     ;;
     check|test|"") run_check ;;
     *) echo "Usage: $0 [check|status|restart|boot]"; exit 1 ;;
@@ -2546,7 +2552,13 @@ use_vpn_route() {
     return 0
 }
 
-ensure_rule
+ensure_rule || exit 1
+if [ "$(cat /tmp/routewolf-tunnel-unhealthy 2>/dev/null)" = "$VPN_ROUTE_DEV" ]; then
+    fail_open_route
+    # Clear stale IPv6 defaults too, even if IPv6 was disabled after the outage.
+    ip -6 route del default table "$TABLE" >/dev/null 2>&1 || true
+    exit 0
+fi
 apply_runtime_mtu
 
 i=0
@@ -3489,49 +3501,32 @@ install_management_commands() {
 
     cat << 'EOF' > /usr/sbin/routewolf-fetch.sh
 #!/bin/sh
-# Download one HTTPS URL to a file on old and new OpenWrt builds.
-url="$1"
-out="$2"
-[ -n "$url" ] && [ -n "$out" ] || { echo "Usage: $0 URL OUTPUT" >&2; exit 2; }
+# Download data over verified HTTPS with a per-process file-size limit.
+set -u
+url=${1:-}; out=${2:-}; limit=${3:-2097152}
+case "$url" in https://*) ;; *) echo 'HTTPS URL required' >&2; exit 2 ;; esac
+case "$limit" in ''|*[!0-9]*) exit 2 ;; esac
+[ "$limit" -ge 1 ] && [ "$limit" -le 2097152 ] || exit 2
+[ -n "$out" ] || exit 2
+blocks=$(((limit + 511) / 512))
+check_file() { [ -s "$out" ] && [ "$(wc -c <"$out")" -le "$limit" ]; }
 rm -f "$out"
-if [ -x /bin/uclient-fetch ]; then
-    /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && exit 0
-    rm -f "$out"
-    /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && exit 0
-    rm -f "$out"
-fi
-if command -v uclient-fetch >/dev/null 2>&1; then
-    uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && exit 0
-    rm -f "$out"
-    uclient-fetch -O "$out" "$url" && [ -s "$out" ] && exit 0
-    rm -f "$out"
-fi
 if command -v curl >/dev/null 2>&1; then
-    curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" && [ -s "$out" ] && exit 0
+    if (ulimit -f "$blocks"; exec curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 8 --max-time 75 --retry 1 --max-filesize "$limit" "$url" -o "$out") && check_file; then exit 0; fi
     rm -f "$out"
 fi
-if command -v wget >/dev/null 2>&1; then
-    if wget --help 2>&1 | grep -q -- '--no-check-certificate'; then
-        wget --no-check-certificate -O "$out" "$url"
-    else
-        wget -O "$out" "$url"
-    fi
-    [ -s "$out" ] && exit 0
+if [ -x /bin/uclient-fetch ]; then
+    if (ulimit -f "$blocks"; exec /bin/uclient-fetch -T 30 -O "$out" "$url") && check_file; then exit 0; fi
+    rm -f "$out"
 fi
-rm -f "$out"
-echo "No working HTTPS downloader: tried /bin/uclient-fetch, uclient-fetch, curl and wget." >&2
+echo 'Verified HTTPS download failed; current configuration retained' >&2
 exit 1
 EOF
     chmod +x /usr/sbin/routewolf-fetch.sh
 
     cat << 'EOF' > /usr/sbin/routewolf-update.sh
 #!/bin/sh
-# Update RouteWolf from GitHub without deleting the current tunnel config.
-# Arguments are passed through, so cron can call: routewolf-update.sh --auto
-set -e
-cd /tmp
-/usr/sbin/routewolf-fetch.sh https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh /tmp/routewolf-update.sh
-exec sh /tmp/routewolf-update.sh "$@"
+exec /usr/sbin/routewolf-stable-update.sh "${1:-check}" "${2:-}" "${3:-}"
 EOF
     chmod +x /usr/sbin/routewolf-update.sh
 
@@ -3696,27 +3691,27 @@ download_url_to_file() {
     rm -f "$out"
 
     if [ -x /bin/uclient-fetch ]; then
-        /bin/uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        /bin/uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
         rm -f "$out"
         /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
         rm -f "$out"
     fi
 
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
+        uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
         rm -f "$out"
         uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
         rm -f "$out"
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
+        curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
         rm -f "$out"
     fi
 
     if command -v wget >/dev/null 2>&1; then
         if wget_has_no_check; then
-            wget --no-check-certificate -O "$out" "$url" && [ -s "$out" ] && return 0
+            wget -O "$out" "$url" && [ -s "$out" ] && return 0
         else
             wget -O "$out" "$url" && [ -s "$out" ] && return 0
         fi
@@ -4429,7 +4424,7 @@ EOF
 
 
 install_stable_runtime() {
-    for file in routewolf-reliability.sh routewolf-stable-update.sh routewolf-update.sh; do
+    for file in routewolf-fetch.sh routewolf-reliability.sh routewolf-stable-update.sh routewolf-update.sh; do
         [ -f "$SCRIPT_DIR/runtime/$file" ] || return 1
         sh -n "$SCRIPT_DIR/runtime/$file" || return 1
         cp "$SCRIPT_DIR/runtime/$file" "/usr/sbin/$file" || return 1
@@ -4705,13 +4700,14 @@ add_routewolf() {
     dns_force_on >/dev/null 2>&1 || true
 
     mkdir -p /etc/routewolf
-    cat << EOF > /etc/routewolf/user.conf
-LIST_PROFILE='$LIST_PROFILE'
-DOMAINS_URL='$DOMAINS_URL'
-IPV4_URL='$IPV4_URL'
-IPV6_URL='$IPV6_URL'
-IPV6_SUPPORT='$IPV6_SUPPORT'
-EOF
+    {
+        printf "LIST_PROFILE='%s'\n" "$(singbox_shell_quote "$LIST_PROFILE")"
+        printf "DOMAINS_URL='%s'\n" "$(singbox_shell_quote "$DOMAINS_URL")"
+        printf "IPV4_URL='%s'\n" "$(singbox_shell_quote "$IPV4_URL")"
+        printf "IPV6_URL='%s'\n" "$(singbox_shell_quote "$IPV6_URL")"
+        printf "IPV6_SUPPORT='%s'\n" "$(singbox_shell_quote "$IPV6_SUPPORT")"
+    } > /etc/routewolf/user.conf
+    chmod 600 /etc/routewolf/user.conf
 
     printf "\033[32;1mCreate script /etc/init.d/routewolf\033[0m\n"
 cat << 'EOF' > /etc/init.d/routewolf
@@ -4737,40 +4733,7 @@ load_config() {
 wget_has_no_check() { wget --help 2>&1 | grep -q -- '--no-check-certificate'; }
 
 download_url_to_file() {
-    url="$1"
-    out="$2"
-    [ -n "$url" ] && [ -n "$out" ] || return 1
-    rm -f "$out"
-
-    if [ -x /bin/uclient-fetch ]; then
-        /bin/uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
-        rm -f "$out"
-        /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
-        rm -f "$out"
-    fi
-
-    if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
-        rm -f "$out"
-        uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
-        rm -f "$out"
-    fi
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
-        rm -f "$out"
-    fi
-
-    if command -v wget >/dev/null 2>&1; then
-        if wget_has_no_check; then
-            wget -O "$out" "$url" && [ -s "$out" ] && return 0
-        else
-            wget -O "$out" "$url" && [ -s "$out" ] && return 0
-        fi
-        rm -f "$out"
-    fi
-
-    return 1
+    /usr/sbin/routewolf-fetch.sh "$1" "$2" 2097152
 }
 
 restore_cache() {
@@ -4805,28 +4768,30 @@ normalize_domain_list() {
     clean="$raw.clean"
     tr -d '\r' < "$raw" > "$clean"
 
-    # If the file already contains dnsmasq-style tokens, split them into one directive per line.
-    # This fixes GitHub files where nftset=/... entries were pasted in a single space-separated line.
-    if grep -Eq '(^|[[:space:]])(nftset|ipset|server)=/' "$clean"; then
-        awk -v ipv6="$IPV6_SUPPORT" '
+    # Configuration directives are accepted only for our own DNS-to-routing sets.
+    # A data list cannot redirect DNS, load another config or populate an ACL set.
+    if grep -Eq '(^|[[:space:]])[a-zA-Z_-]+=' "$clean"; then
+        if ! awk -v ipv6="$IPV6_SUPPORT" '
+            /^[[:space:]]*#/ {next}
             {
                 sub(/[[:space:]]#.*$/, "", $0)
-                for (i=1; i<=NF; i++) {
+                for(i=1;i<=NF;i++) {
                     token=$i
-                    if (token ~ /^(nftset|ipset|server)=\//) {
+                    if(token !~ /^nftset=\/[a-zA-Z0-9_.\/*-]+\/[46]#inet#fw4#vpn_domains6?$/) {bad=1;continue}
+                    if(token ~ /\/4#inet#fw4#vpn_domains$/) {
                         print token
-                        if (ipv6 == "1" && token ~ /^nftset=\/.+\/4#inet#fw4#vpn_domains$/) {
-                            t=token
-                            sub(/\/4#inet#fw4#vpn_domains$/, "/6#inet#fw4#vpn_domains6", t)
-                            print t
-                        }
-                    }
+                        if(ipv6=="1"){sub(/\/4#inet#fw4#vpn_domains$/,"/6#inet#fw4#vpn_domains6",token);print token}
+                    } else if(token ~ /\/6#inet#fw4#vpn_domains6$/ && ipv6=="1") print token
+                    else {bad=1}
                 }
             }
-        ' "$clean" | sort -u > "$out"
-        rm -f "$clean"
-        [ -f "$out" ]
-        return $?
+            END {exit bad}
+        ' "$clean" >"$out.unsorted"; then
+            rm -f "$clean" "$out.unsorted"; return 1
+        fi
+        sort -u "$out.unsorted" >"$out"
+        rm -f "$clean" "$out.unsorted"
+        return 0
     fi
 
     # Otherwise treat it as a simple domain list. It may be line-separated, comma-separated or space-separated.
@@ -5011,6 +4976,16 @@ refresh_native () {
 # and lists are separate; unchanged lists never restart a healthy DNS/firewall.
 start() (
     umask 077
+    if [ -f /etc/routewolf/pending-runtime ] && [ -x /usr/sbin/routewolf-stable-update.sh ]; then
+        owner=$(cat /tmp/routewolf-code-update.lock/pid 2>/dev/null || true)
+        case "$owner" in ''|*[!0-9]*) owner=0 ;; esac
+        if [ "$owner" = 0 ] || ! kill -0 "$owner" 2>/dev/null; then
+            /usr/sbin/routewolf-stable-update.sh recover || return 1
+            exec /etc/init.d/routewolf start
+        fi
+    fi
+    updater=$(cat /tmp/routewolf-code-update.lock/pid 2>/dev/null || true)
+    case "$updater" in ''|*[!0-9]*) ;; *) [ "$updater" = "$PPID" ] || { kill -0 "$updater" 2>/dev/null && return 75; } ;; esac
     lock=/tmp/routewolf-lists.lock
     work=/tmp/routewolf-lists.$$
     if ! mkdir "$lock" 2>/dev/null; then
@@ -5082,7 +5057,8 @@ EOF
     sed -i '/routewolf start/d;/routewolf-update.sh/d;/routewolf-apply.sh/d;/routewolf-healthcheck/d' /etc/crontabs/root 2>/dev/null || true
     # Nightly auto-update applies new project files from GitHub, regenerates RouteWolf scripts/config,
     # refreshes lists, restarts firewall/dnsmasq and repairs the policy route.
-    echo "0 2 * * * /usr/sbin/routewolf-update.sh --auto >/tmp/routewolf-auto-update.log 2>&1" >> /etc/crontabs/root
+    echo "0 2 * * * /usr/sbin/routewolf-update.sh --lists-auto >/tmp/routewolf-lists-update.log 2>&1" >> /etc/crontabs/root
+    echo "0 3 * * * /usr/sbin/routewolf-update.sh --code-auto >/tmp/routewolf-code-update.log 2>&1" >> /etc/crontabs/root
     echo "15 3 * * * /usr/sbin/routewolf-healthcheck.sh" >> /etc/crontabs/root
     if [ -f /etc/routewolf/singbox.conf ]; then
         . /etc/routewolf/singbox.conf 2>/dev/null || true

@@ -1,33 +1,55 @@
 #!/bin/sh
-# Nightly legacy entry point; migrate to the bounded stable runtime channel.
-auto=0
-for arg in "$@"; do [ "$arg" = --auto ] && auto=1; done
-if [ "$auto" = 1 ]; then
-    if [ -x /usr/sbin/routewolf-stable-update.sh ]; then exec /usr/sbin/routewolf-stable-update.sh --auto; fi
+# Existing installations use stable releases; no full installer runs from cron.
+mode=check
+automatic=0
+for arg in "$@"; do
+    case "$arg" in --auto|--lists-auto|--code-auto) mode="$arg"; automatic=1 ;; esac
+done
+if [ -x /usr/sbin/routewolf-stable-update.sh ]; then
+    exec /usr/sbin/routewolf-stable-update.sh "$mode"
+fi
+if [ "$mode" = --lists-auto ]; then
+    [ ! -x /etc/init.d/routewolf ] || /etc/init.d/routewolf start
+    exit "$?"
+fi
+if [ "$automatic" = 1 ] || [ -f /etc/routewolf/route.conf ] || [ -f /etc/domain-routing-route.conf ]; then
     umask 077
     work=/tmp/routewolf-stable-bootstrap.$$
     mkdir -p "$work" || exit 1
     trap 'rm -rf "$work"' EXIT
     fetch_verified_tls() {
+        limit=$3
         if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 8 --max-time 75 "$1" -o "$2" && return 0
+            (ulimit -f "$(((limit+511)/512))"; exec curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 8 --max-time 75 --max-filesize "$limit" "$1" -o "$2") &&
+                [ "$(wc -c <"$2")" -le "$limit" ] && return 0
         fi
-        [ -x /bin/uclient-fetch ] && /bin/uclient-fetch -T 30 -O "$2" "$1" >/dev/null 2>&1
+        [ -x /bin/uclient-fetch ] &&
+            (ulimit -f "$(((limit+511)/512))"; exec /bin/uclient-fetch -T 30 -O "$2" "$1") >/dev/null 2>&1 &&
+            [ -s "$2" ] && [ "$(wc -c <"$2")" -le "$limit" ]
     }
-    base=https://raw.githubusercontent.com/dagmagnat/RouteWolf/main
-    if ! command -v sha256sum >/dev/null 2>&1 ||
-       ! fetch_verified_tls "$base/releases/stable.manifest" "$work/manifest" ||
-       ! fetch_verified_tls "$base/runtime/routewolf-stable-update.sh" "$work/agent"; then
-        echo 'Stable update bootstrap unavailable/TLS failed; existing code retained' >&2
-        [ ! -x /etc/init.d/routewolf ] || /etc/init.d/routewolf start
+    available=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)
+    case "$available" in ''|*[!0-9]*) available=0 ;; esac
+    if [ "$available" -lt 8192 ]; then
+        echo 'Less than 8 MiB available RAM; existing project retained' >&2
         exit 1
     fi
+    base=https://github.com/dagmagnat/RouteWolf/releases
+    if ! command -v sha256sum >/dev/null 2>&1 ||
+       ! fetch_verified_tls "$base/latest/download/stable.manifest" "$work/manifest" 4096; then
+        echo 'Stable release unavailable/TLS failed; existing code retained' >&2
+        [ "$mode" = --code-auto ] || { [ ! -x /etc/init.d/routewolf ] || /etc/init.d/routewolf start; }
+        exit 1
+    fi
+    version=$(sed -n 's/^version=//p' "$work/manifest")
+    case "$version" in ''|*[!0-9]*) exit 1 ;; esac
+    [ "${#version}" -le 6 ] || exit 1
+    fetch_verified_tls "$base/download/v$version/routewolf-stable-update.sh" "$work/agent" 131072 || exit 1
     expected=$(sed -n 's/^agent_sha256=//p' "$work/manifest")
     [ "${#expected}" = 64 ] || exit 1
     case "$expected" in *[!0-9a-f]*) exit 1 ;; esac
     [ "$(sha256sum "$work/agent" | awk '{print $1}')" = "$expected" ] || exit 1
     sh -n "$work/agent" || exit 1
-    sh "$work/agent" --auto
+    sh "$work/agent" "$mode"
     exit "$?"
 fi
 
@@ -61,27 +83,27 @@ fetch_to_file() {
     # OpenWrt's native HTTPS client. Calling the absolute path bypasses
     # a broken /usr/bin/wget alternative such as wget-nossl.
     if [ -x /bin/uclient-fetch ]; then
-        /bin/uclient-fetch --no-check-certificate -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
+        /bin/uclient-fetch -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
         rm -f "$_out"
         /bin/uclient-fetch -O "$_out" "$_url" && [ -s "$_out" ] && return 0
         rm -f "$_out"
     fi
 
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch --no-check-certificate -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
+        uclient-fetch -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
         rm -f "$_out"
         uclient-fetch -O "$_out" "$_url" && [ -s "$_out" ] && return 0
         rm -f "$_out"
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -kfsSL --connect-timeout 15 --max-time 180 --retry 2 "$_url" -o "$_out" && [ -s "$_out" ] && return 0
+        curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 "$_url" -o "$_out" && [ -s "$_out" ] && return 0
         rm -f "$_out"
     fi
 
     if command -v wget >/dev/null 2>&1; then
         if wget --help 2>&1 | grep -q -- '--no-check-certificate'; then
-            wget --no-check-certificate -O "$_out" "$_url" && [ -s "$_out" ] && return 0
+            wget -O "$_out" "$_url" && [ -s "$_out" ] && return 0
         else
             wget -O "$_out" "$_url" && [ -s "$_out" ] && return 0
         fi
@@ -112,7 +134,7 @@ rm -rf "$TMP_DIR" "$ARCHIVE_FILE"     "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf
 if ! fetch_to_file "$ARCHIVE_URL" "$ARCHIVE_FILE"; then
     echo "Error: no working HTTPS downloader could fetch RouteWolf."
     echo "Try the short OpenWrt command:"
-    echo "  /bin/uclient-fetch --no-check-certificate -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh"
+    echo "  /bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh"
     echo "If /bin/uclient-fetch is missing, install/use curl or upload the ZIP manually."
     exit 1
 fi
