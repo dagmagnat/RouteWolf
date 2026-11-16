@@ -50,42 +50,36 @@ FORCE_REINSTALL="0"
 # Prefer the native client by absolute path so wget-nossl cannot shadow it.
 wget_has_no_check() { wget --help 2>&1 | grep -q -- '--no-check-certificate'; }
 
-download_url_to_file() {
-    url="$1"
-    out="$2"
-    [ -n "$url" ] && [ -n "$out" ] || return 1
-    rm -f "$out"
+download_url_to_file() (
+    # A subshell keeps helper variables and positional arguments out of callers.
+    _rw_url="$1"
+    _rw_out="$2"
+    _rw_header="${3:-}"
+    [ -n "$_rw_url" ] && [ -n "$_rw_out" ] || return 1
+    rm -f "$_rw_out"
 
-    if [ -x /bin/uclient-fetch ]; then
-        /bin/uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
-        rm -f "$out"
-        /bin/uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
-        rm -f "$out"
+    _rw_native="$(command -v uclient-fetch 2>/dev/null)"
+    [ ! -x /bin/uclient-fetch ] || _rw_native="/bin/uclient-fetch"
+    if [ -n "$_rw_native" ]; then
+        set -- -T 30 -O "$_rw_out"
+        [ -z "$_rw_header" ] || set -- "$@" "--header=$_rw_header"
+        "$_rw_native" "$@" "$_rw_url" && [ -s "$_rw_out" ] && return 0
+        rm -f "$_rw_out"
     fi
-
-    if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch -O "$out" "$url" >/dev/null 2>&1 && [ -s "$out" ] && return 0
-        rm -f "$out"
-        uclient-fetch -O "$out" "$url" && [ -s "$out" ] && return 0
-        rm -f "$out"
-    fi
-
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 "$url" -o "$out" 2>/dev/null && [ -s "$out" ] && return 0
-        rm -f "$out"
+        set -- -fSL --connect-timeout 15 --max-time 180 --retry 1
+        [ -z "$_rw_header" ] || set -- "$@" -H "$_rw_header"
+        curl "$@" "$_rw_url" -o "$_rw_out" && [ -s "$_rw_out" ] && return 0
+        rm -f "$_rw_out"
     fi
-
     if command -v wget >/dev/null 2>&1; then
-        if wget_has_no_check; then
-            wget -O "$out" "$url" && [ -s "$out" ] && return 0
-        else
-            wget -O "$out" "$url" && [ -s "$out" ] && return 0
-        fi
-        rm -f "$out"
+        set -- -T 30 -O "$_rw_out"
+        [ -z "$_rw_header" ] || set -- "$@" "--header=$_rw_header"
+        wget "$@" "$_rw_url" && [ -s "$_rw_out" ] && return 0
+        rm -f "$_rw_out"
     fi
-
     return 1
-}
+)
 
 # Colors are used only for orientation during install.
 # Green = success/active, yellow = warning/planned, red = cancel/error/delete, blue = section.
@@ -5291,8 +5285,6 @@ add_internal_wg() {
 }
 
 install_awg_packages() {
-    AWG_INSTALLER_URL="https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/refs/heads/master/amneziawg-install.sh"
-    AWG_INSTALLER="/tmp/amneziawg-install.sh"
     AWG_FEED_ROOT="https://slava-shchipunov.github.io/awg-openwrt"
     AWG_FEED_KEY_URL="${AWG_FEED_ROOT}/keys/awg-openwrt-feed.pem"
     AWG_LOG="/tmp/routewolf-awg-install.log"
@@ -5483,105 +5475,145 @@ install_awg_packages() {
         return 0
     }
 
-    create_awg_curl_wget_wrapper() {
-        mkdir -p /tmp/routewolf-awg-bin || return 1
-        cat > /tmp/routewolf-awg-bin/wget <<'ROUTEWOLF_AWG_WGET_EOF'
-#!/bin/sh
-out="-"
-timeout="180"
-insecure="0"
-url=""
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -O) shift; out="$1" ;;
-        -T) shift; timeout="$1" ;;
-        -q|--quiet) ;;
-        --no-check-certificate) insecure="1" ;;
-        --timeout=*) timeout="${1#*=}" ;;
-        --) shift; url="$1"; break ;;
-        -*) ;;
-        *) url="$1" ;;
-    esac
-    shift
-done
-[ -n "$url" ] || exit 2
-set -- -fL --connect-timeout "$timeout" --max-time "$timeout" --retry 2
-[ "$insecure" = "1" ] && set -- "$@" -k
-if [ "$out" = "-" ]; then
-    exec curl "$@" "$url"
-else
-    exec curl "$@" -o "$out" "$url"
-fi
-ROUTEWOLF_AWG_WGET_EOF
-        chmod 755 /tmp/routewolf-awg-bin/wget
+    awg_valid_ipk() {
+        # A 200 response can still be an HTML error page or API JSON.
+        # Official OpenWrt IPKs are gzip tar archives with these two members.
+        _awg_members="$(tar -tzf - < "$1" 2>/dev/null)" || return 1
+        printf '%s\n' "$_awg_members" | grep -Eq '^(\./)?control\.tar\.gz$' || return 1
+        printf '%s\n' "$_awg_members" | grep -Eq '^(\./)?data\.tar\.gz$'
     }
 
-    prepare_awg_ipk_downloader() {
-        AWG_SAFE_PATH="$PATH"
-        rm -rf /tmp/routewolf-awg-bin
-        mkdir -p /tmp/routewolf-awg-bin || return 1
-
-        if [ -x /bin/uclient-fetch ]; then
-            ln -sf /bin/uclient-fetch /tmp/routewolf-awg-bin/wget || return 1
-            AWG_SAFE_PATH="/tmp/routewolf-awg-bin:$PATH"
-            return 0
+    awg_download_ipk() {
+        AWG_ASSET_NAME="${AWG_PKG}${AWG_POSTFIX}"
+        AWG_IPK_URL="$AWG_RELEASE_URL/$AWG_ASSET_NAME"
+        if [ "$AWG_DIRECT_FAILED" != 1 ]; then
+            printf 'Download: %s\n' "$AWG_IPK_URL" >> "$AWG_LOG"
+            if download_url_to_file "$AWG_IPK_URL" "$AWG_IPK_FILE" >> "$AWG_LOG" 2>&1 && awg_valid_ipk "$AWG_IPK_FILE"; then
+                return 0
+            fi
+            AWG_DIRECT_FAILED=1
         fi
-        if command -v uclient-fetch >/dev/null 2>&1; then
-            ln -sf "$(command -v uclient-fetch)" /tmp/routewolf-awg-bin/wget || return 1
-            AWG_SAFE_PATH="/tmp/routewolf-awg-bin:$PATH"
-            return 0
+        rm -f "$AWG_IPK_FILE"
+        msg "Trying the official GitHub API for $AWG_ASSET_NAME..." \
+            "Пробую официальный GitHub API для $AWG_ASSET_NAME..."
+        # github.com can time out while api.github.com and the official asset
+        # CDN remain reachable. Never use a third-party proxy or another release.
+        if [ "$AWG_API_LOADED" != 1 ]; then
+            AWG_API_LOADED=1
+            AWG_API_INDEX="$AWG_IPK_WORK/release-v${AWG_OWRT_VERSION}.json"
+            if ! download_url_to_file \
+                "https://api.github.com/repos/Slava-Shchipunov/awg-openwrt/releases/tags/v${AWG_OWRT_VERSION}" \
+                "$AWG_API_INDEX" >> "$AWG_LOG" 2>&1; then
+                return 1
+            fi
         fi
-        if command -v curl >/dev/null 2>&1; then
-            create_awg_curl_wget_wrapper || return 1
-            AWG_SAFE_PATH="/tmp/routewolf-awg-bin:$PATH"
-            return 0
+        command -v jsonfilter >/dev/null 2>&1 || return 1
+        AWG_ASSET_ID="$(jsonfilter -i "$AWG_API_INDEX" -e "@.assets[@.name='$AWG_ASSET_NAME'].id" 2>/dev/null)"
+        case "$AWG_ASSET_ID" in ''|*[!0-9]*)
+            printf 'No exact IPK asset in the release API: %s\n' "$AWG_ASSET_NAME" >> "$AWG_LOG"
+            return 1 ;;
+        esac
+        AWG_API_URL="https://api.github.com/repos/Slava-Shchipunov/awg-openwrt/releases/assets/$AWG_ASSET_ID?download=1"
+        printf 'API download: %s\n' "$AWG_API_URL" >> "$AWG_LOG"
+        if ! download_url_to_file "$AWG_API_URL" "$AWG_IPK_FILE" 'Accept: application/octet-stream' >> "$AWG_LOG" 2>&1 ||
+           ! awg_valid_ipk "$AWG_IPK_FILE"; then
+            rm -f "$AWG_IPK_FILE"
+            return 1
         fi
-        if command -v wget >/dev/null 2>&1; then
-            return 0
+        AWG_ASSET_DIGEST="$(jsonfilter -i "$AWG_API_INDEX" -e "@.assets[@.name='$AWG_ASSET_NAME'].digest" 2>/dev/null)"
+        if [ -n "$AWG_ASSET_DIGEST" ] && [ "$AWG_ASSET_DIGEST" != null ]; then
+            AWG_ASSET_HASH="${AWG_ASSET_DIGEST#sha256:}"
+            if [ "${#AWG_ASSET_HASH}" -ne 64 ] ||
+               [ "$AWG_ASSET_DIGEST" = "$AWG_ASSET_HASH" ] ||
+               ! command -v sha256sum >/dev/null 2>&1 ||
+               [ "$(sha256sum "$AWG_IPK_FILE" | awk '{print $1}')" != "$AWG_ASSET_HASH" ]; then
+                printf 'SHA-256 mismatch or unavailable for %s\n' "$AWG_ASSET_NAME" >> "$AWG_LOG"
+                rm -f "$AWG_IPK_FILE"
+                return 1
+            fi
         fi
-        return 1
+        return 0
     }
 
     install_awg_with_ipk_release() {
         AWG_OWRT_VERSION="$(awg_openwrt_version)"
         AWG_OWRT_TARGET="$(awg_openwrt_target)"
-        msgc "$C_BLUE" \
-            "OpenWrt $AWG_OWRT_VERSION uses OPKG. Installing official IPK packages for $AWG_OWRT_TARGET..." \
-            "OpenWrt $AWG_OWRT_VERSION использует OPKG. Установка официальных IPK-пакетов для $AWG_OWRT_TARGET..."
-
-        if ! download_url_to_file "$AWG_INSTALLER_URL" "$AWG_INSTALLER" || [ ! -s "$AWG_INSTALLER" ]; then
-            msgc "$C_RED" \
-                "Failed to download the official AmneziaWG IPK installer." \
-                "Не удалось скачать официальный установщик IPK AmneziaWG."
+        # release.arch is absent in stock OpenWrt's system board response.
+        AWG_PKGARCH="$(opkg print-architecture 2>/dev/null | awk '$3 > max {max=$3; arch=$2} END {print arch}')"
+        if ! printf '%s\n' "$AWG_OWRT_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
+           ! printf '%s\n' "$AWG_OWRT_TARGET" | grep -Eq '^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$' ||
+           ! printf '%s\n' "$AWG_PKGARCH" | grep -Eq '^[a-zA-Z0-9_-]+$'; then
+            msgc "$C_RED" "Cannot identify the exact OpenWrt release, target or package architecture." \
+                "Не удалось определить точную версию OpenWrt, target или архитектуру пакетов."
             return 1
         fi
-
-        if ! prepare_awg_ipk_downloader; then
-            msgc "$C_RED" \
-                "No HTTPS-capable downloader is available for the official IPK installer." \
-                "Нет HTTPS-загрузчика для официального установщика IPK."
-            return 1
-        fi
-
+        AWG_POSTFIX="_v${AWG_OWRT_VERSION}_${AWG_PKGARCH}_${AWG_OWRT_TARGET%/*}_${AWG_OWRT_TARGET#*/}.ipk"
+        AWG_RELEASE_URL="https://github.com/Slava-Shchipunov/awg-openwrt/releases/download/v${AWG_OWRT_VERSION}"
+        AWG_IPK_WORK="${ROUTEWOLF_AWG_IPK_DIR:-/tmp/routewolf-awg-ipk}"
+        AWG_DIRECT_FAILED=0
+        AWG_API_LOADED=0
+        AWG_API_INDEX=""
+        AWG_LUCI_PKG="luci-proto-amneziawg"
+        case "$AWG_OWRT_VERSION" in
+            23.05.[0-5]|24.10.[0-2]) AWG_LUCI_PKG="luci-app-amneziawg" ;;
+        esac
+        AWG_IPK_PACKAGES="kmod-amneziawg amneziawg-tools $AWG_LUCI_PKG"
+        mkdir -p "$AWG_IPK_WORK" || return 1
         : > "$AWG_LOG"
-        env PATH="$AWG_SAFE_PATH" sh "$AWG_INSTALLER" -en >"$AWG_LOG" 2>&1
-        AWG_RC="$?"
-        if [ "$AWG_RC" -ne 0 ]; then
-            env PATH="$AWG_SAFE_PATH" sh "$AWG_INSTALLER" -n >"$AWG_LOG" 2>&1
-            AWG_RC="$?"
-        fi
+        msgc "$C_BLUE" \
+            "OpenWrt $AWG_OWRT_VERSION uses OPKG. AmneziaWG IPK: $AWG_PKGARCH / $AWG_OWRT_TARGET." \
+            "OpenWrt $AWG_OWRT_VERSION использует OPKG. IPK AmneziaWG: $AWG_PKGARCH / $AWG_OWRT_TARGET."
 
-        if [ "$AWG_RC" -ne 0 ] || ! awg_verify_install; then
-            msgc "$C_RED" \
-                "Installation of official AmneziaWG IPK packages failed." \
-                "Установка официальных IPK-пакетов AmneziaWG завершилась ошибкой."
+        # Fetch all missing packages before installing any of them. Use the
+        # shared downloader: a failed uclient-fetch can fall back to curl/wget.
+        # A local directory is explicit: missing files never trigger a download.
+        for AWG_PKG in $AWG_IPK_PACKAGES; do
+            pkg_is_installed "$AWG_PKG" && continue
+            AWG_IPK_FILE="$AWG_IPK_WORK/${AWG_PKG}${AWG_POSTFIX}"
+            if [ -n "${ROUTEWOLF_AWG_IPK_DIR:-}" ]; then
+                if [ ! -s "$AWG_IPK_FILE" ] || ! awg_valid_ipk "$AWG_IPK_FILE"; then
+                    msgc "$C_RED" "Local IPK file is missing or invalid: $AWG_IPK_FILE" \
+                        "Нет локального IPK-файла или файл повреждён: $AWG_IPK_FILE"
+                    return 1
+                fi
+            else
+                AWG_IPK_URL="$AWG_RELEASE_URL/${AWG_PKG}${AWG_POSTFIX}"
+                if ! awg_download_ipk; then
+                    msgc "$C_RED" "Failed to download $AWG_PKG: $AWG_IPK_URL" \
+                        "Не удалось скачать $AWG_PKG: $AWG_IPK_URL"
+                    tail -n 30 "$AWG_LOG" 2>/dev/null || true
+                    msg "Check GitHub connectivity, DNS, time/CA certificates and the exact release assets. Log: $AWG_LOG. You can transfer IPK files from a PC and set ROUTEWOLF_AWG_IPK_DIR." \
+                        "Проверьте доступ к GitHub, DNS, время/CA-сертификаты и наличие файлов в точном релизе. Журнал: $AWG_LOG. Можно перенести IPK с ПК и указать ROUTEWOLF_AWG_IPK_DIR."
+                    return 1
+                fi
+            fi
+        done
+
+        # Dependencies still come from the router's configured OpenWrt feeds.
+        # OPKG must validate the kernel ABI and all dependencies; never force it.
+        if ! opkg update >> "$AWG_LOG" 2>&1; then
+            msgc "$C_RED" "Failed to update OpenWrt package indexes. Log: $AWG_LOG" \
+                "Не удалось обновить индексы пакетов OpenWrt. Журнал: $AWG_LOG"
             tail -n 30 "$AWG_LOG" 2>/dev/null || true
-            msg \
-                "The exact OpenWrt release and target must have matching packages in the official awg-openwrt GitHub release." \
-                "Для точной версии OpenWrt и target должны существовать соответствующие пакеты в официальном релизе awg-openwrt."
             return 1
         fi
-
+        for AWG_PKG in $AWG_IPK_PACKAGES; do
+            pkg_is_installed "$AWG_PKG" && continue
+            AWG_IPK_FILE="$AWG_IPK_WORK/${AWG_PKG}${AWG_POSTFIX}"
+            if ! opkg install "$AWG_IPK_FILE" >> "$AWG_LOG" 2>&1; then
+                msgc "$C_RED" "OPKG could not install $AWG_PKG. Log: $AWG_LOG" \
+                    "OPKG не смог установить $AWG_PKG. Журнал: $AWG_LOG"
+                tail -n 30 "$AWG_LOG" 2>/dev/null || true
+                return 1
+            fi
+            [ -n "${ROUTEWOLF_AWG_IPK_DIR:-}" ] || rm -f "$AWG_IPK_FILE"
+        done
+        if ! awg_verify_install; then
+            msgc "$C_RED" "AmneziaWG command, packages or protocol are missing after installation." \
+                "После установки не обнаружены команда, пакеты или протокол AmneziaWG."
+            return 1
+        fi
+        [ -z "${AWG_API_INDEX:-}" ] || rm -f "$AWG_API_INDEX"
         mkdir -p /etc/routewolf
         printf '%s\n' "ipk-release $AWG_OWRT_VERSION $AWG_OWRT_TARGET" > /etc/routewolf/awg-package-source
         return 0
