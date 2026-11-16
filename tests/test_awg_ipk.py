@@ -11,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / 'routewolf-install.sh').read_text(encoding='utf-8')
 START = SOURCE.index('    awg_valid_ipk() {')
-IPK = SOURCE[START:SOURCE.index('\n    if awg_already_installed;', START)]
+IPK = SOURCE[START:SOURCE.index('\n    AWG_UPGRADE_PACKAGES=0', START)]
 PACKAGES = ['kmod-amneziawg', 'amneziawg-tools', 'luci-proto-amneziawg']
 POSTFIX = '_v24.10.8_mipsel_24kc_ramips_mt76x8.ipk'
 
@@ -20,7 +20,7 @@ class AwgIpkTests(unittest.TestCase):
                  fail_install=False, fail_update=False, invalid_target=False,
                  version="24.10.8", target="ramips/mt76x8", arch="mipsel_24kc",
                  api_fallback=False, bad_digest=False, invalid_local=False,
-                 absent_asset=False, installed=""):
+                 absent_asset=False, installed="", upgrade=False):
         with tempfile.TemporaryDirectory(prefix='rw-awg-') as directory:
             base = Path(directory)
             folder = base / 'ipk'
@@ -83,6 +83,7 @@ jsonfilter() {
                        TEST_VERSION=version, TEST_TARGET=target, TEST_ARCH=arch,
                        API_FALLBACK=str(int(api_fallback)), BAD_DIGEST=str(int(bad_digest)),
                        ABSENT_ASSET=str(int(absent_asset)), INSTALLED=installed,
+                       AWG_UPGRADE_PACKAGES=str(int(upgrade)),
                        FIXTURE=fixture.as_posix(), FIXTURE_HASH=hashlib.sha256(fixture.read_bytes()).hexdigest())
             # Rewrite the owned online scratch directory into this test directory.
             script.write_text(script.read_text(encoding='utf-8').replace('/tmp/routewolf-awg-ipk', folder.as_posix()), encoding='utf-8', newline='\n')
@@ -182,6 +183,13 @@ jsonfilter() {
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('/kmod-amneziawg_', actions)
         self.assertEqual(actions.count('OPKG:install '), 2)
+
+    def test_upgrade_refreshes_existing_packages_from_exact_release(self):
+        result, actions, _ = self.run_case(installed=' '.join(PACKAGES), upgrade=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(actions.count('FETCH:'), 3)
+        self.assertEqual(actions.count('OPKG:install '), 3)
+        self.assertIn('/v24.10.8/', actions)
 
     def test_snapshot_does_not_use_packages_of_another_release(self):
         result, actions, _ = self.run_case(version='SNAPSHOT')

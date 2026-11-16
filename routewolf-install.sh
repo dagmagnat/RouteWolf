@@ -1548,6 +1548,185 @@ routewolf_apply_default_mtu_to_existing_wg_awg() {
     [ "$_changed" = "1" ] && uci commit network >/dev/null 2>&1 || true
 }
 
+# Configuration compatibility and installed package capability are different:
+# a 3.1 package may serve an older profile without rewriting its parameters.
+awg_generation_rank() {
+    case "$1" in 1.0) echo 10 ;; 1.5) echo 15 ;; 2.0) echo 20 ;; 3.1) echo 31 ;; *) echo 0 ;; esac
+}
+
+awg_generation_supports() {
+    [ "$(awg_generation_rank "$1")" -ge "$(awg_generation_rank "$2")" ] &&
+    [ "$(awg_generation_rank "$1")" -gt 0 ]
+}
+
+awg_installed_generation() {
+    # The 2.0 tools historically also used a 1.0.* version string. Check the
+    # installed netifd helper's supported options rather than that prefix alone.
+    for _awg_proto in /lib/netifd/proto/amneziawg.sh /lib/netifd/proto/awg.sh; do
+        [ -f "$_awg_proto" ] || continue
+        if grep -q 'awg_random_trailers' "$_awg_proto"; then
+            awg --version 2>/dev/null | grep -q '3\.1\.' || return 1
+            if [ -r /sys/module/amneziawg/version ] &&
+               ! grep -q '^3\.1\.' /sys/module/amneziawg/version; then
+                msgc "$C_RED" "An older AWG kernel module is still loaded. Reboot the router after the package upgrade, then run setup again." \
+                    "В ядре ещё загружен старый модуль AWG. После обновления пакетов перезагрузите роутер и повторите настройку." >&2
+                return 1
+            fi
+            echo 3.1
+        elif grep -q 'awg_s3' "$_awg_proto"; then echo 2.0
+        elif grep -q 'awg_i1' "$_awg_proto"; then echo 1.5
+        else echo 1.0
+        fi
+        return 0
+    done
+    return 1
+}
+
+awg_choose_profile_mode() {
+    AWG_S3=""
+    AWG_S4=""
+    AWG_I1=""
+    AWG_I2=""
+    AWG_I3=""
+    AWG_I4=""
+    AWG_I5=""
+    AWG_HEADER_PROTECTION_KEY=""
+    AWG_CONTENT_PADDING_ADDITION=""
+    AWG_REKEY_AFTER_TIME=""
+    AWG_REKEY_TIMEOUT=""
+    AWG_REJECT_AFTER_TIME=""
+    AWG_KEEPALIVE_TIMEOUT=""
+    AWG_MAX_HANDSHAKE_ATTEMPTS=""
+    AWG_RANDOM_TRAILERS=""
+    AWG_DISABLE_COOKIES=""
+    AWG_PROFILE_MODE="${ROUTEWOLF_AWG_MODE:-}"
+    while true; do
+        if [ -z "$AWG_PROFILE_MODE" ]; then
+            ui_header "$(prompt "AmneziaWG profile version" "Версия конфига AmneziaWG")"
+            echo "1) $(prompt "Automatic: detect after entering the config [default]" "Автоматически: определить после ввода конфига [по умолчанию]")"
+            echo "2) AmneziaWG 1.5"
+            echo "3) AmneziaWG 2.0"
+            echo "4) AmneziaWG 3.1"
+            echo "5) AmneziaWG 1.0 (legacy)"
+            ask_same_line "Choice [1]: " "Выбор [1]: " AWG_PROFILE_MODE
+            AWG_PROFILE_MODE=${AWG_PROFILE_MODE:-1}
+        fi
+        case "$AWG_PROFILE_MODE" in
+            1|auto) AWG_PROFILE_MODE=auto; return 0 ;;
+            2|1.5) AWG_PROFILE_MODE=1.5; return 0 ;;
+            3|2.0) AWG_PROFILE_MODE=2.0; return 0 ;;
+            4|3.1) AWG_PROFILE_MODE=3.1; return 0 ;;
+            5|1.0) AWG_PROFILE_MODE=1.0; return 0 ;;
+            *) msgc "$C_RED" "Choose auto, 1.0, 1.5, 2.0 or 3.1." "Выберите auto, 1.0, 1.5, 2.0 или 3.1."; AWG_PROFILE_MODE="" ;;
+        esac
+    done
+}
+
+awg_boolean_value() {
+    case "$1" in
+        '') printf '\n' ;;
+        1|on|On|ON|true|True|TRUE|yes|Yes|YES) echo 1 ;;
+        0|off|Off|OFF|false|False|FALSE|no|No|NO) echo 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+awg_detect_profile_generation() {
+    AWG_PROFILE_AMBIGUOUS=0
+    if [ -n "$AWG_HEADER_PROTECTION_KEY$AWG_CONTENT_PADDING_ADDITION$AWG_REKEY_AFTER_TIME$AWG_REKEY_TIMEOUT$AWG_REJECT_AFTER_TIME$AWG_KEEPALIVE_TIMEOUT$AWG_MAX_HANDSHAKE_ATTEMPTS$AWG_RANDOM_TRAILERS$AWG_DISABLE_COOKIES" ]; then
+        AWG_CONFIG_MIN_VERSION=3.1
+    elif { [ -n "$AWG_S3" ] && [ "$AWG_S3" != 0 ]; } ||
+         { [ -n "$AWG_S4" ] && [ "$AWG_S4" != 0 ]; } ||
+         printf '%s\n' "$AWG_H1" "$AWG_H2" "$AWG_H3" "$AWG_H4" | grep -Eq '^[0-9]+-[0-9]+$'; then
+        AWG_CONFIG_MIN_VERSION=2.0
+    elif [ -n "$AWG_I1$AWG_I2$AWG_I3$AWG_I4$AWG_I5" ]; then
+        AWG_CONFIG_MIN_VERSION=1.5
+    else
+        AWG_CONFIG_MIN_VERSION=1.0
+        AWG_PROFILE_AMBIGUOUS=1
+    fi
+}
+
+awg_resolve_profile_version() {
+    AWG_RANDOM_TRAILERS="$(awg_boolean_value "$AWG_RANDOM_TRAILERS")" || {
+        msgc "$C_RED" "Invalid RandomTrailers: use on/off or 1/0." "Некорректный RandomTrailers: используйте on/off или 1/0."; return 1;
+    }
+    AWG_DISABLE_COOKIES="$(awg_boolean_value "$AWG_DISABLE_COOKIES")" || {
+        msgc "$C_RED" "Invalid DisableCookies: use on/off or 1/0." "Некорректный DisableCookies: используйте on/off или 1/0."; return 1;
+    }
+    awg_detect_profile_generation
+    if [ "$AWG_PROFILE_MODE" = auto ]; then
+        AWG_PROFILE_VERSION="$AWG_CONFIG_MIN_VERSION"
+        if [ "$AWG_PROFILE_AMBIGUOUS" = 1 ]; then
+            AWG_PROFILE_VERSION=1.5
+            msg "Only basic AWG parameters are present; 1.0/1.5 cannot be distinguished. Using 1.5 compatibility." \
+                "В конфиге только базовые параметры: точно отличить 1.0 от 1.5 нельзя. Выбран режим совместимости 1.5."
+        fi
+    else
+        AWG_PROFILE_VERSION="$AWG_PROFILE_MODE"
+        if ! awg_generation_supports "$AWG_PROFILE_VERSION" "$AWG_CONFIG_MIN_VERSION"; then
+            msgc "$C_RED" "Config parameters require AWG $AWG_CONFIG_MIN_VERSION; selected $AWG_PROFILE_VERSION. No parameters were discarded." \
+                "Параметры конфига требуют AWG $AWG_CONFIG_MIN_VERSION; выбрана $AWG_PROFILE_VERSION. Параметры не были отброшены."
+            return 1
+        fi
+    fi
+    msg "AmneziaWG profile compatibility: $AWG_PROFILE_VERSION" "Совместимость конфига AmneziaWG: $AWG_PROFILE_VERSION"
+    return 0
+}
+
+awg_set_optional_uci() {
+    if [ -n "$3" ]; then
+        uci set "network.$1.awg_$2=$3"
+    else
+        uci -q delete "network.$1.awg_$2" 2>/dev/null || true
+    fi
+}
+
+awg_apply_optional_config() {
+    awg_set_optional_uci "$1" s3 "$AWG_S3" || return 1
+    awg_set_optional_uci "$1" s4 "$AWG_S4" || return 1
+    awg_set_optional_uci "$1" i1 "$AWG_I1" || return 1
+    awg_set_optional_uci "$1" i2 "$AWG_I2" || return 1
+    awg_set_optional_uci "$1" i3 "$AWG_I3" || return 1
+    awg_set_optional_uci "$1" i4 "$AWG_I4" || return 1
+    awg_set_optional_uci "$1" i5 "$AWG_I5" || return 1
+    awg_set_optional_uci "$1" header_protection_key "$AWG_HEADER_PROTECTION_KEY" || return 1
+    awg_set_optional_uci "$1" content_padding_addition "$AWG_CONTENT_PADDING_ADDITION" || return 1
+    awg_set_optional_uci "$1" rekey_after_time "$AWG_REKEY_AFTER_TIME" || return 1
+    awg_set_optional_uci "$1" rekey_timeout "$AWG_REKEY_TIMEOUT" || return 1
+    awg_set_optional_uci "$1" reject_after_time "$AWG_REJECT_AFTER_TIME" || return 1
+    awg_set_optional_uci "$1" keepalive_timeout "$AWG_KEEPALIVE_TIMEOUT" || return 1
+    awg_set_optional_uci "$1" max_handshake_attempts "$AWG_MAX_HANDSHAKE_ATTEMPTS" || return 1
+    awg_set_optional_uci "$1" random_trailers "$AWG_RANDOM_TRAILERS" || return 1
+    awg_set_optional_uci "$1" disable_cookies "$AWG_DISABLE_COOKIES" || return 1
+    return 0
+}
+
+awg_ask_optional_config() {
+    if [ "$AWG_PROFILE_MODE" != 1.0 ]; then
+        if [ "$AWG_PROFILE_MODE" != 1.5 ]; then
+            ask_line "Enter S3 [optional]:" "Введите S3 [необязательно]:" AWG_S3
+            ask_line "Enter S4 [optional]:" "Введите S4 [необязательно]:" AWG_S4
+        fi
+        ask_line "Enter I1 [optional]:" "Введите I1 [необязательно]:" AWG_I1
+        ask_line "Enter I2 [optional]:" "Введите I2 [необязательно]:" AWG_I2
+        ask_line "Enter I3 [optional]:" "Введите I3 [необязательно]:" AWG_I3
+        ask_line "Enter I4 [optional]:" "Введите I4 [необязательно]:" AWG_I4
+        ask_line "Enter I5 [optional]:" "Введите I5 [необязательно]:" AWG_I5
+    fi
+    case "$AWG_PROFILE_MODE" in auto|3.1)
+        ask_line "Enter HeaderProtectionKey [optional]:" "Введите HeaderProtectionKey [необязательно]:" AWG_HEADER_PROTECTION_KEY
+        ask_line "Enter ContentPaddingAddition [optional]:" "Введите ContentPaddingAddition [необязательно]:" AWG_CONTENT_PADDING_ADDITION
+        ask_line "Enter RekeyAfterTime [optional]:" "Введите RekeyAfterTime [необязательно]:" AWG_REKEY_AFTER_TIME
+        ask_line "Enter RekeyTimeout [optional]:" "Введите RekeyTimeout [необязательно]:" AWG_REKEY_TIMEOUT
+        ask_line "Enter RejectAfterTime [optional]:" "Введите RejectAfterTime [необязательно]:" AWG_REJECT_AFTER_TIME
+        ask_line "Enter KeepaliveTimeout [optional]:" "Введите KeepaliveTimeout [необязательно]:" AWG_KEEPALIVE_TIMEOUT
+        ask_line "Enter MaxHandshakeAttempts [optional]:" "Введите MaxHandshakeAttempts [необязательно]:" AWG_MAX_HANDSHAKE_ATTEMPTS
+        ask_line "Enter RandomTrailers [on/off, optional]:" "Введите RandomTrailers [on/off, необязательно]:" AWG_RANDOM_TRAILERS
+        ask_line "Enter DisableCookies [on/off, optional]:" "Введите DisableCookies [on/off, необязательно]:" AWG_DISABLE_COOKIES
+    ;; esac
+}
+
 parse_awg_config_file() {
     cfg="$1"
     AWG_PRIVATE_KEY=$(cfg_get_section_value Interface PrivateKey "$cfg")
@@ -1570,6 +1749,15 @@ parse_awg_config_file() {
     AWG_I3=$(cfg_get_section_value Interface I3 "$cfg")
     AWG_I4=$(cfg_get_section_value Interface I4 "$cfg")
     AWG_I5=$(cfg_get_section_value Interface I5 "$cfg")
+    AWG_HEADER_PROTECTION_KEY=$(cfg_get_section_value Interface HeaderProtectionKey "$cfg")
+    AWG_CONTENT_PADDING_ADDITION=$(cfg_get_section_value Interface ContentPaddingAddition "$cfg")
+    AWG_REKEY_AFTER_TIME=$(cfg_get_section_value Interface RekeyAfterTime "$cfg")
+    AWG_REKEY_TIMEOUT=$(cfg_get_section_value Interface RekeyTimeout "$cfg")
+    AWG_REJECT_AFTER_TIME=$(cfg_get_section_value Interface RejectAfterTime "$cfg")
+    AWG_KEEPALIVE_TIMEOUT=$(cfg_get_section_value Interface KeepaliveTimeout "$cfg")
+    AWG_MAX_HANDSHAKE_ATTEMPTS=$(cfg_get_section_value Interface MaxHandshakeAttempts "$cfg")
+    AWG_RANDOM_TRAILERS=$(cfg_get_section_value Interface RandomTrailers "$cfg")
+    AWG_DISABLE_COOKIES=$(cfg_get_section_value Interface DisableCookies "$cfg")
     AWG_PUBLIC_KEY=$(cfg_get_section_value Peer PublicKey "$cfg")
     AWG_PRESHARED_KEY=$(cfg_get_section_value Peer PresharedKey "$cfg")
     AWG_ALLOWED_IPS=$(cfg_get_section_value Peer AllowedIPs "$cfg")
@@ -1578,6 +1766,14 @@ parse_awg_config_file() {
     AWG_ENDPOINT=$(cfg_get_endpoint_host "$endpoint_full")
     AWG_ENDPOINT_PORT=$(cfg_get_endpoint_port "$endpoint_full")
     AWG_ENDPOINT_PORT=${AWG_ENDPOINT_PORT:-51820}
+    for _awg_beta_key in Itime J1 J2 J3; do
+        if [ -n "$(cfg_get_section_value Interface "$_awg_beta_key" "$cfg")" ]; then
+            msgc "$C_RED" "Legacy beta option $_awg_beta_key is unsupported by current OpenWrt AWG packages." \
+                "Параметр старой беты $_awg_beta_key не поддерживается текущими пакетами AWG для OpenWrt."
+            return 1
+        fi
+    done
+    return 0
 }
 
 
@@ -2865,16 +3061,17 @@ add_tunnel() {
     if [ "$TUNNEL" = 'awg' ]; then
         msgc "$C_GREEN" "Configure Amnezia WireGuard" "Настройка Amnezia WireGuard"
 
-        install_awg_packages || return 1
-
-        route_vpn
+        awg_choose_profile_mode
 
         ask_same_line "Paste full AmneziaWG config now? (y/n) [y]: " "Вставить полный конфиг AmneziaWG? (y/n) [y]: " PASTE_AWG_CONFIG
         PASTE_AWG_CONFIG=${PASTE_AWG_CONFIG:-y}
         if [ "$PASTE_AWG_CONFIG" = "y" ] || [ "$PASTE_AWG_CONFIG" = "Y" ]; then
             AWG_CFG_TMP="/tmp/awg-client.conf"
             read_multiline_config "$AWG_CFG_TMP"
-            parse_awg_config_file "$AWG_CFG_TMP"
+            if ! parse_awg_config_file "$AWG_CFG_TMP"; then
+                rm -f "$AWG_CFG_TMP"
+                return 1
+            fi
             rm -f "$AWG_CFG_TMP"
         else
             ask_line "Enter the private key (from [Interface]):" "Введите PrivateKey (из [Interface]):" AWG_PRIVATE_KEY
@@ -2893,15 +3090,7 @@ add_tunnel() {
             ask_line "Enter H2 value (from [Interface]):" "Введите H2 (из [Interface]):" AWG_H2
             ask_line "Enter H3 value (from [Interface]):" "Введите H3 (из [Interface]):" AWG_H3
             ask_line "Enter H4 value (from [Interface]):" "Введите H4 (из [Interface]):" AWG_H4
-            if [ "$AWG_VERSION" = "2.0" ]; then
-                ask_line "Enter S3 value [optional]:" "Введите S3 [необязательно]:" AWG_S3
-                ask_line "Enter S4 value [optional]:" "Введите S4 [необязательно]:" AWG_S4
-                ask_line "Enter I1 value [optional]:" "Введите I1 [необязательно]:" AWG_I1
-                ask_line "Enter I2 value [optional]:" "Введите I2 [необязательно]:" AWG_I2
-                ask_line "Enter I3 value [optional]:" "Введите I3 [необязательно]:" AWG_I3
-                ask_line "Enter I4 value [optional]:" "Введите I4 [необязательно]:" AWG_I4
-                ask_line "Enter I5 value [optional]:" "Введите I5 [необязательно]:" AWG_I5
-            fi
+            awg_ask_optional_config
             ask_line "Enter the public key (from [Peer]):" "Введите PublicKey (из [Peer]):" AWG_PUBLIC_KEY
             ask_line "If use PresharedKey, enter it; otherwise leave blank:" "Если используется PresharedKey, введите его; иначе оставьте пустым:" AWG_PRESHARED_KEY
             ask_line "Enter Endpoint host without port (Domain or IP) (from [Peer]):" "Введите Endpoint host без порта (домен или IP) (из [Peer]):" AWG_ENDPOINT
@@ -2919,7 +3108,10 @@ add_tunnel() {
         fi
         AWG_ALLOWED_IPS=${AWG_ALLOWED_IPS:-0.0.0.0/0}
         AWG_KEEPALIVE=${AWG_KEEPALIVE:-25}
-        
+        awg_resolve_profile_version || return 1
+        install_awg_packages || return 1
+        route_vpn
+
         uci set network.awg0=interface
         uci set network.awg0.proto='amneziawg'
         uci set network.awg0.private_key="$AWG_PRIVATE_KEY"
@@ -2949,13 +3141,7 @@ add_tunnel() {
         uci set network.awg0.awg_h2="$AWG_H2"
         uci set network.awg0.awg_h3="$AWG_H3"
         uci set network.awg0.awg_h4="$AWG_H4"
-        [ -n "$AWG_S3" ] && uci set network.awg0.awg_s3="$AWG_S3"
-        [ -n "$AWG_S4" ] && uci set network.awg0.awg_s4="$AWG_S4"
-        [ -n "$AWG_I1" ] && uci set network.awg0.awg_i1="$AWG_I1"
-        [ -n "$AWG_I2" ] && uci set network.awg0.awg_i2="$AWG_I2"
-        [ -n "$AWG_I3" ] && uci set network.awg0.awg_i3="$AWG_I3"
-        [ -n "$AWG_I4" ] && uci set network.awg0.awg_i4="$AWG_I4"
-        [ -n "$AWG_I5" ] && uci set network.awg0.awg_i5="$AWG_I5"
+        awg_apply_optional_config awg0 || return 1
 
         if ! uci show network | grep -q amneziawg_awg0; then
             uci add network amneziawg_awg0
@@ -5109,7 +5295,7 @@ add_internal_wg() {
         PROTO="amneziawg"
         ZONE_NAME="awg_internal"
 
-        install_awg_packages || return 1
+        awg_choose_profile_mode
     fi
 
     ask_line "Enter the private key (from [Interface]):" "Введите PrivateKey (из [Interface]):" WG_PRIVATE_KEY_INT
@@ -5145,6 +5331,9 @@ add_internal_wg() {
         ask_line "Enter H2 value (from [Interface]):" "Введите H2 (из [Interface]):" AWG_H2
         ask_line "Enter H3 value (from [Interface]):" "Введите H3 (из [Interface]):" AWG_H3
         ask_line "Enter H4 value (from [Interface]):" "Введите H4 (из [Interface]):" AWG_H4
+        awg_ask_optional_config
+        awg_resolve_profile_version || return 1
+        install_awg_packages || return 1
     fi
     
     uci set network.${INTERFACE_NAME}=interface
@@ -5169,6 +5358,7 @@ add_internal_wg() {
         uci set network.${INTERFACE_NAME}.awg_h2=$AWG_H2
         uci set network.${INTERFACE_NAME}.awg_h3=$AWG_H3
         uci set network.${INTERFACE_NAME}.awg_h4=$AWG_H4
+        awg_apply_optional_config "$INTERFACE_NAME" || return 1
     fi
 
     if ! uci show network | grep -q ${CONFIG_NAME}; then
@@ -5416,7 +5606,7 @@ install_awg_packages() {
         # A stale nano entry from an older failed RouteWolf run is removed by
         # prepare_install_storage before the first APK transaction.
         for AWG_PKG in kmod-amneziawg amneziawg-tools luci-proto-amneziawg; do
-            if pkg_is_installed "$AWG_PKG"; then
+            if [ "${AWG_UPGRADE_PACKAGES:-0}" != 1 ] && pkg_is_installed "$AWG_PKG"; then
                 msgc "$C_GREEN" "$AWG_PKG is already installed" "$AWG_PKG уже установлен"
                 continue
             fi
@@ -5432,7 +5622,9 @@ install_awg_packages() {
             fi
 
             msgc "$C_BLUE" "Installing $AWG_PKG..." "Установка $AWG_PKG..."
-            if ! apk_run add "$AWG_PKG" >>"$AWG_LOG" 2>&1; then
+            set -- "$AWG_PKG"
+            [ "${AWG_UPGRADE_PACKAGES:-0}" != 1 ] || set -- --upgrade "$AWG_PKG"
+            if ! apk_run add "$@" >>"$AWG_LOG" 2>&1; then
                 awg_restore_apk_repo
                 msgc "$C_RED" \
                     "Installation of $AWG_PKG failed." \
@@ -5568,7 +5760,7 @@ install_awg_packages() {
         # shared downloader: a failed uclient-fetch can fall back to curl/wget.
         # A local directory is explicit: missing files never trigger a download.
         for AWG_PKG in $AWG_IPK_PACKAGES; do
-            pkg_is_installed "$AWG_PKG" && continue
+            [ "${AWG_UPGRADE_PACKAGES:-0}" != 1 ] && pkg_is_installed "$AWG_PKG" && continue
             AWG_IPK_FILE="$AWG_IPK_WORK/${AWG_PKG}${AWG_POSTFIX}"
             if [ -n "${ROUTEWOLF_AWG_IPK_DIR:-}" ]; then
                 if [ ! -s "$AWG_IPK_FILE" ] || ! awg_valid_ipk "$AWG_IPK_FILE"; then
@@ -5598,7 +5790,7 @@ install_awg_packages() {
             return 1
         fi
         for AWG_PKG in $AWG_IPK_PACKAGES; do
-            pkg_is_installed "$AWG_PKG" && continue
+            [ "${AWG_UPGRADE_PACKAGES:-0}" != 1 ] && pkg_is_installed "$AWG_PKG" && continue
             AWG_IPK_FILE="$AWG_IPK_WORK/${AWG_PKG}${AWG_POSTFIX}"
             if ! opkg install "$AWG_IPK_FILE" >> "$AWG_LOG" 2>&1; then
                 msgc "$C_RED" "OPKG could not install $AWG_PKG. Log: $AWG_LOG" \
@@ -5619,14 +5811,16 @@ install_awg_packages() {
         return 0
     }
 
+    AWG_UPGRADE_PACKAGES=0
     if awg_already_installed; then
-        msgc "$C_GREEN" \
-            "AmneziaWG packages are already installed; package installation is skipped." \
-            "Пакеты AmneziaWG уже установлены; установка пакетов пропускается."
-        AWG_VERSION="2.0"
-        return 0
+        AWG_VERSION="$(awg_installed_generation)"
+        if [ "${FORCE_REINSTALL:-0}" != 1 ] && awg_generation_supports "$AWG_VERSION" "${AWG_PROFILE_VERSION:-1.0}"; then
+            msgc "$C_GREEN" "Installed AmneziaWG packages support $AWG_VERSION; installation is skipped." \
+                "Установленные пакеты AmneziaWG поддерживают $AWG_VERSION; установка пропускается."
+            return 0
+        fi
+        AWG_UPGRADE_PACKAGES=1
     fi
-
     msgc "$C_BLUE" "Installing AmneziaWG packages..." "Установка пакетов AmneziaWG..."
 
     case "$PKG_MANAGER" in
@@ -5642,18 +5836,14 @@ install_awg_packages() {
             ;;
     esac
 
-    VERSION="$(awg_openwrt_version)"
-    MAJOR_VERSION="$(echo "$VERSION" | cut -d '.' -f 1)"
-    MINOR_VERSION="$(echo "$VERSION" | cut -d '.' -f 2)"
-    PATCH_VERSION="$(echo "$VERSION" | cut -d '.' -f 3)"
-    AWG_VERSION="1.0"
-    if [ "$MAJOR_VERSION" -gt 24 ] 2>/dev/null || \
-       { [ "$MAJOR_VERSION" -eq 24 ] 2>/dev/null && [ "$MINOR_VERSION" -gt 10 ] 2>/dev/null; } || \
-       { [ "$MAJOR_VERSION" -eq 24 ] 2>/dev/null && [ "$MINOR_VERSION" -eq 10 ] 2>/dev/null && [ "$PATCH_VERSION" -ge 3 ] 2>/dev/null; } || \
-       { [ "$MAJOR_VERSION" -eq 23 ] 2>/dev/null && [ "$MINOR_VERSION" -eq 5 ] 2>/dev/null && [ "$PATCH_VERSION" -ge 6 ] 2>/dev/null; }; then
-        AWG_VERSION="2.0"
+    AWG_VERSION="$(awg_installed_generation)"
+    if ! awg_generation_supports "$AWG_VERSION" "${AWG_PROFILE_VERSION:-1.0}"; then
+        msgc "$C_RED" "Installed AWG capabilities could not satisfy this profile. Configuration was not applied." \
+            "Установленные пакеты AWG не подтверждают поддержку конфига. Настройки не применены."
+        return 1
     fi
-    msg "Detected AmneziaWG protocol generation: $AWG_VERSION" "Определено поколение протокола AmneziaWG: $AWG_VERSION"
+    msg "Installed AmneziaWG package capability: $AWG_VERSION" "Возможности установленных пакетов AmneziaWG: $AWG_VERSION"
+
 }
 
 # Choose installer language before any interactive menu.
