@@ -4,7 +4,7 @@
 обычный интернет — через WAN. Поддерживаются WireGuard, AmneziaWG, OpenVPN;
 есть экспериментальные режимы Sing-box/VLESS REALITY и Outline.
 
-Стабильный выпуск: [v56](https://github.com/dagmagnat/RouteWolf/releases/tag/v56).
+Стабильный выпуск: [последний GitHub Release](https://github.com/dagmagnat/RouteWolf/releases/latest).
 Архитектура, история, аудит и планы — в одном [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
 
 ## Установка
