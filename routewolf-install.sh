@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v58-uninstall-command"
+PROJECT_VERSION="v59-list-validation"
 ROUTEWOLF_VERSION_FILE="/etc/routewolf/installed_version"
 
 # Persisted across installs/updates so a re-run can tell "what did this router
@@ -4426,7 +4426,9 @@ rw commands:
   rw status          show short status
   rw diag            run diagnostics
   rw load            show router load/resources
-  rw lists           refresh GitHub lists + restart firewall/dnsmasq
+  rw lists           refresh GitHub lists + apply valid entries
+  rw lists report    show rejected entries and validation summary
+  rw lists check [N] read-only DNS/ICMP checks (default 5, maximum 20 per kind)
   rw apply           apply current scripts/config/lists to router
   rw purge           clear stale runtime DNS/nft state and re-apply
   rw youtube [IP]    diagnose YouTube/Smart TV domain routing
@@ -4466,7 +4468,32 @@ HELP
     diag|diagnose) /usr/sbin/routewolf-diagnose.sh ;;
     load) /usr/sbin/routewolf-load.sh ;;
     lists|refresh)
-        /usr/sbin/routewolf-apply.sh /tmp/routewolf-lists-apply.log
+        case "${2:-refresh}" in
+            report)
+                if [ -r /tmp/routewolf-list-validation.log ]; then cat /tmp/routewolf-list-validation.log
+                else echo 'No report yet / Отчёта ещё нет: rw lists'; fi
+            ;;
+            check)
+                limit=${3:-5}
+                case "$limit" in ''|*[!0-9]*) echo 'Usage: rw lists check [1-20]'; exit 2;; esac
+                [ "${#limit}" -le 2 ] && [ "$limit" -ge 1 ] && [ "$limit" -le 20 ] || { echo 'Usage: rw lists check [1-20]'; exit 2; }
+                command -v timeout >/dev/null 2>&1 || { echo 'Bounded checks require timeout'; exit 1; }
+                echo 'READ ONLY / БЕЗ ИЗМЕНЕНИЙ: DNS failure or no ICMP reply does not prove an invalid entry.'
+                echo 'Ошибка DNS или отсутствие ICMP-ответа не доказывают некорректность адреса; записи не удаляются.'
+                sed -n 's|^nftset=/\([^/]*\)/4#inet#fw4#vpn_domains$|\1|p' /tmp/dnsmasq.d/domains.lst 2>/dev/null | LC_ALL=C sort -u | head -n "$limit" | while IFS= read -r host; do
+                    printf '%s\n' "$host" | grep -Eq '^[a-z0-9][a-z0-9.-]*[a-z0-9]$' || continue
+                    if timeout 4 nslookup "$host" >/dev/null 2>&1; then echo "DNS_OK $host"; else echo "DNS_NO_ANSWER_OR_ERROR $host"; fi
+                done
+                awk -F/ '$2==32{print $1}' /tmp/lst/ipv4.lst 2>/dev/null | head -n "$limit" | while IFS= read -r address; do
+                    printf '%s\n' "$address" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || continue
+                    if timeout 3 ping -c 1 -W 2 "$address" >/dev/null 2>&1; then echo "ICMP_OK $address"; else echo "ICMP_NO_REPLY_OR_ERROR $address"; fi
+                done
+                echo 'CIDR is an address range; checking one host cannot establish reachability of the whole network.'
+                echo 'CIDR — диапазон адресов; ответ одного узла не подтверждает доступность всей подсети.'
+            ;;
+            refresh) /usr/sbin/routewolf-apply.sh /tmp/routewolf-lists-apply.log ;;
+            *) echo 'Usage: rw lists [report|check [1-20]]'; exit 2 ;;
+        esac
     ;;
     health) /usr/sbin/routewolf-reliability.sh "${2:-check}" ;;
     updates) /usr/sbin/routewolf-stable-update.sh "${2:-status}" ;;
@@ -4948,116 +4975,245 @@ validate_domain_list() {
 
 normalize_domain_list() {
     raw="$1"; out="$2"
-    clean="$raw.clean"
-    tr -d '\r' < "$raw" > "$clean"
-
-    # Configuration directives are accepted only for our own DNS-to-routing sets.
-    # A data list cannot redirect DNS, load another config or populate an ACL set.
-    if grep -Eq '(^|[[:space:]])[a-zA-Z_-]+=' "$clean"; then
-        if ! awk -v ipv6="$IPV6_SUPPORT" '
-            /^[[:space:]]*#/ {next}
-            {
-                sub(/[[:space:]]#.*$/, "", $0)
-                for(i=1;i<=NF;i++) {
-                    token=$i
-                    if(token !~ /^nftset=\/[a-zA-Z0-9_.\/*-]+\/[46]#inet#fw4#vpn_domains6?$/) {bad=1;continue}
-                    if(token ~ /\/4#inet#fw4#vpn_domains$/) {
-                        print token
-                        if(ipv6=="1"){sub(/\/4#inet#fw4#vpn_domains$/,"/6#inet#fw4#vpn_domains6",token);print token}
-                    } else if(token ~ /\/6#inet#fw4#vpn_domains6$/ && ipv6=="1") print token
-                    else {bad=1}
+    report="${VALIDATION_REPORT:-/tmp/routewolf-list-validation.log}"
+    if ! LC_ALL=C awk -v ipv6="$IPV6_SUPPORT" -v report="$report" '
+        function note(reason,token) {
+            rejected++
+            gsub(/[^ -~]/,"?",token)
+            if(samples++<50) printf "REJECT domains line=%d reason=%s value=%s\n",NR,reason,substr(token,1,160) >> report
+        }
+        function domain(d, original,parts,n,j,last) {
+            original=d; d=tolower(d)
+            sub(/^https?:\/\//,"",d); sub(/^\/\//,"",d)
+            sub(/\/.*$/,"",d)
+            # Strip an explicit numeric port, never arbitrary suffixes/userinfo.
+            sub(/:[0-9]+$/,"",d)
+            sub(/^\*\./,"",d); sub(/^\./,"",d); sub(/\.$/,"",d)
+            if(length(d)>253 || d !~ /^[a-z0-9.-]+$/) {note("invalid-hostname",original);return}
+            n=split(d,parts,".")
+            if(n<2) {note("fully-qualified-name-required",original);return}
+            for(j=1;j<=n;j++) {
+                if(length(parts[j])<1 || length(parts[j])>63 || parts[j] !~ /^[a-z0-9]/ || parts[j] !~ /[a-z0-9]$/) {
+                    note("invalid-label",original);return
                 }
             }
-            END {exit bad}
-        ' "$clean" >"$out.unsorted"; then
-            rm -f "$clean" "$out.unsorted"; return 1
-        fi
-        sort -u "$out.unsorted" >"$out"
-        rm -f "$clean" "$out.unsorted"
-        return 0
-    fi
-
-    # Otherwise treat it as a simple domain list. It may be line-separated, comma-separated or space-separated.
-    awk -v ipv6="$IPV6_SUPPORT" '
+            last=parts[n]
+            if(last !~ /[a-z]/) {note("ip-or-numeric-tld-not-domain",original);return}
+            if(seen[d]++) {duplicates++;return}
+            accepted++
+            print "nftset=/"d"/4#inet#fw4#vpn_domains"
+            if(ipv6=="1") print "nftset=/"d"/6#inet#fw4#vpn_domains6"
+        }
         {
-            line=$0
-            sub(/[[:space:]]#.*$/, "", line)
-            gsub(/,/, " ", line)
-            n=split(line, a, /[[:space:]]+/)
-            for (i=1; i<=n; i++) {
-                d=tolower(a[i])
-                gsub(/^https?:\/\//, "", d)
-                gsub(/^\/\//, "", d)
-                sub(/\/.*$/, "", d)
-                sub(/:.*/, "", d)
-                gsub(/^\*\./, "", d)
-                gsub(/^\./, "", d)
-                if (d ~ /^[a-z0-9]([a-z0-9-]*\.)+[a-z0-9-]+$/) {
-                    print "nftset=/"d"/4#inet#fw4#vpn_domains"
-                    if (ipv6 == "1") print "nftset=/"d"/6#inet#fw4#vpn_domains6"
-                }
+            sub(/\r$/,"",$0)
+            if($0 ~ /^[[:space:]]*(#|$)/) next
+            sub(/[[:space:]]#.*$/,"",$0)
+            if($0 ~ /[[:cntrl:]]/ && $0 !~ /\t/) {note("control-character",$0);next}
+            gsub(/,/," ",$0)
+            for(i=1;i<=NF;i++) {
+                token=$i
+                if(token ~ /^nftset=/) {
+                    count=split(token,fields,"/")
+                    target=fields[count]
+                    if(count<3 || fields[1]!="nftset=" || (target!="4#inet#fw4#vpn_domains" && target!="6#inet#fw4#vpn_domains6")) {
+                        note("foreign-or-unsafe-directive",token);fatal=1;continue
+                    }
+                    for(k=2;k<count;k++) domain(fields[k])
+                } else if(token ~ /^[a-zA-Z_-]+=/) {
+                    note("unsafe-dnsmasq-directive",token);fatal=1
+                } else domain(token)
             }
         }
-    ' "$clean" | sort -u > "$out"
-    rm -f "$clean"
-    [ -f "$out" ]
+        END {
+            printf "SUMMARY domains accepted=%d rejected=%d duplicates=%d fatal=%d\n",accepted,rejected,duplicates,fatal >> report
+            exit fatal
+        }
+    ' "$raw" > "$out.unsorted"; then
+        rm -f "$out.unsorted"; return 1
+    fi
+    LC_ALL=C sort -u "$out.unsorted" > "$out" || { rm -f "$out.unsorted"; return 1; }
+    rm -f "$out.unsorted"
 }
 
 normalize_ipv4_cidr_list() {
     raw="$1"; out="$2"
+    report="${VALIDATION_REPORT:-/tmp/routewolf-list-validation.log}"
     min_prefix="${ROUTEWOLF_IPV4_MIN_PREFIX:-16}"
     max_lines="${ROUTEWOLF_IPV4_MAX_LINES:-200000}"
-    case "$min_prefix" in *[!0-9]*|'') min_prefix=16 ;; esac
-    case "$max_lines" in *[!0-9]*|'') max_lines=200000 ;; esac
-    tmp="$out.tmp"
-    tr -d '\r' < "$raw" | awk -v minp="$min_prefix" '
-        function valid_octets(ip, a) {
-            split(ip,a,".")
-            return (a[1] >= 0 && a[1] <= 255 && a[2] >= 0 && a[2] <= 255 && a[3] >= 0 && a[3] <= 255 && a[4] >= 0 && a[4] <= 255)
+    case "$min_prefix" in ''|*[!0-9]*) min_prefix=16;; esac
+    [ "${#min_prefix}" -le 2 ] && [ "$min_prefix" -le 32 ] || min_prefix=16
+    case "$max_lines" in ''|*[!0-9]*) max_lines=200000;; esac
+    [ "${#max_lines}" -le 6 ] && [ "$max_lines" -ge 1 ] && [ "$max_lines" -le 200000 ] || max_lines=200000
+    LC_ALL=C awk -v minp="$min_prefix" -v report="$report" '
+        function note(reason,token) {
+            rejected++;gsub(/[^ -~]/,"?",token)
+            if(samples++<50) printf "REJECT ipv4 line=%d reason=%s value=%s\n",NR,reason,substr(token,1,160) >> report
+        }
+        function address(num,a,b,c,d) {
+            a=int(num/16777216);num-=a*16777216;b=int(num/65536);num-=b*65536;c=int(num/256);d=num-c*256
+            return sprintf("%d.%d.%d.%d",a,b,c,d)
         }
         {
-            sub(/[[:space:]]#.*$/, "", $0)
-            gsub(/,/, " ", $0)
-            for (i=1; i<=NF; i++) {
-                t=$i
-                if (t ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/) {
-                    split(t,p,"/"); ip=p[1]; pref=p[2]
-                    if (pref == "") pref=32
-                    pref += 0
-                    if (pref < 0 || pref > 32) next
-                    if (!valid_octets(ip)) next
-                    if (pref < minp) { dropped++; next }
-                    print ip "/" pref
+            sub(/\r$/,"",$0)
+            if($0 ~ /^[[:space:]]*(#|$)/) next
+            sub(/[[:space:]]#.*$/,"",$0);gsub(/,/," ",$0)
+            for(i=1;i<=NF;i++) {
+                token=$i;n=split(token,p,"/")
+                if(n>2 || (n==2 && p[2]!~/^(0|[1-9][0-9]?)$/)) {note("invalid-prefix",token);continue}
+                ip=p[1];pref=(n==1?32:p[2]+0)
+                if(split(ip,a,".")!=4) {note("invalid-ipv4",token);continue}
+                valid=1;num=0
+                for(j=1;j<=4;j++) {
+                    if(a[j]!~/^[0-9]+$/ || length(a[j])>3 || (length(a[j])>1 && substr(a[j],1,1)=="0") || a[j]+0>255) valid=0
+                    num=num*256+a[j]
                 }
+                if(!valid) {note("invalid-octet",token);continue}
+                if(pref>32) {note("invalid-prefix",token);continue}
+                if(pref<minp || pref==0) {note("network-too-wide",token);continue}
+                size=2^(32-pref);base=int(num/size)*size
+                if(base!=num) {note("host-bits-set_expected="address(base)"/"pref,token);continue}
+                # Loopback, link-local, unspecified, multicast and reserved space
+                # are unsuitable unicast VPN destinations. Private/CGN/documentation
+                # networks remain valid: a user may intentionally route these.
+                if(a[1]==0 || a[1]==127 || (a[1]==169&&a[2]==254) || a[1]>=224) {note("non-unicast-or-link-local",token);continue}
+                accepted++
+                printf "%.0f\t%.0f\t%s/%d\t%d\n",base,base+size-1,address(base),pref,NR
             }
         }
-        END { if (dropped > 0) print dropped > "/tmp/routewolf-ipv4-dropped-wide.count" }
-    ' | sort -u > "$tmp"
-    lines=$(wc -l < "$tmp" 2>/dev/null || echo 0)
-    dropped_wide=$(cat /tmp/routewolf-ipv4-dropped-wide.count 2>/dev/null || echo 0)
-    rm -f /tmp/routewolf-ipv4-dropped-wide.count 2>/dev/null || true
-    [ "$dropped_wide" -gt 0 ] 2>/dev/null && echo "IPv4 safety: dropped $dropped_wide networks wider than /$min_prefix"
-    if [ "$lines" -gt "$max_lines" ] 2>/dev/null; then
-        echo "Warning: IPv4 list has $lines entries, limit is $max_lines; disabling IPv4 list for safety"
-        rm -f "$tmp"
-        return 1
+        END {printf "SUMMARY ipv4 syntax-accepted=%d rejected=%d\n",accepted,rejected >> report}
+    ' "$raw" > "$out.records" || return 1
+    LC_ALL=C sort -k1,1n -k2,2nr "$out.records" > "$out.sorted" || return 1
+    awk -F '\t' -v report="$report" '
+        {
+            if(have && $2+0<=last) {
+                redundant++
+                if(samples++<50) printf "SKIP ipv4 line=%s reason=duplicate-or-covered-by-%s value=%s\n",$4,cover,$3 >> report
+                next
+            }
+            have=1;last=$2+0;cover=$3;print $3;kept++
+        }
+        END {printf "SUMMARY ipv4 kept=%d duplicate-or-covered=%d\n",kept,redundant >> report}
+    ' "$out.sorted" > "$out.tmp" || return 1
+    lines=$(wc -l < "$out.tmp")
+    rm -f "$out.records" "$out.sorted"
+    if [ "$lines" -gt "$max_lines" ]; then
+        printf 'FATAL ipv4 entries=%s limit=%s; previous lists retained\n' "$lines" "$max_lines" >> "$report"
+        rm -f "$out.tmp"; return 1
     fi
-    mv "$tmp" "$out"
-    [ -f "$out" ]
+    mv "$out.tmp" "$out"
 }
+
 normalize_ipv6_cidr_list() {
     raw="$1"; out="$2"
-    tr -d '\r' < "$raw" | awk '
+    report="${VALIDATION_REPORT:-/tmp/routewolf-list-validation.log}"
+    LC_ALL=C awk -v report="$report" '
+        function note(reason,token) {
+            rejected++;gsub(/[^ -~]/,"?",token)
+            if(samples++<50) printf "REJECT ipv6 line=%d reason=%s value=%s\n",NR,reason,substr(token,1,160) >> report
+        }
+        function hex(s, j,v) {v=0;for(j=1;j<=length(s);j++) v=v*16+index("0123456789abcdef",substr(s,j,1))-1;return v}
+        function expand(s,parts,left,right,n,l,r,j,k,ip,bytes,pos,tail) {
+            # IPv4-embedded IPv6 uses two final hextets.
+            if(s ~ /\./) {
+                pos=0;for(j=1;j<=length(s);j++) if(substr(s,j,1)==":") pos=j
+                ip=substr(s,pos+1)
+                if(split(ip,bytes,".")!=4) return 0
+                for(j=1;j<=4;j++) if(bytes[j]!~/^[0-9]+$/ || length(bytes[j])>3 || bytes[j]+0>255 || (length(bytes[j])>1&&substr(bytes[j],1,1)=="0")) return 0
+                tail=sprintf("%x:%x",bytes[1]*256+bytes[2],bytes[3]*256+bytes[4])
+                s=substr(s,1,pos)tail
+            }
+            if(s!~/^[0-9a-f:]+$/) return 0
+            n=split(s,parts,"::");if(n>2) return 0
+            l=(parts[1]==""?0:split(parts[1],left,":"))
+            r=(n==2&&parts[2]!=""?split(parts[2],right,":"):0)
+            if((n==1&&l!=8)||(n==2&&l+r>=8)) return 0
+            for(j=1;j<=l;j++) if(left[j]!~/^[0-9a-f]+$/||length(left[j])>4) return 0
+            for(j=1;j<=r;j++) if(right[j]!~/^[0-9a-f]+$/||length(right[j])>4) return 0
+            k=0
+            for(j=1;j<=l;j++) words[++k]=hex(left[j])
+            while(k<8-r) words[++k]=0
+            for(j=1;j<=r;j++) words[++k]=hex(right[j])
+            return 1
+        }
+        function compact(j,start,len,best,bestlen,s) {
+            best=0;bestlen=0
+            for(j=1;j<=8;j++) if(words[j]==0) {
+                start=j;while(j<=8&&words[j]==0) j++;len=j-start
+                if(len>bestlen&&len>=2) {best=start;bestlen=len}
+                j--
+            }
+            s=""
+            for(j=1;j<=8;j++) {
+                if(j==best) {s=s"::";j+=bestlen-1;continue}
+                if(s!=""&&substr(s,length(s),1)!=":") s=s":"
+                s=s sprintf("%x",words[j])
+            }
+            return s
+        }
         {
-            sub(/[[:space:]]#.*$/, "", $0)
-            gsub(/,/, " ", $0)
-            for (i=1; i<=NF; i++) {
-                t=tolower($i)
-                if (t ~ /^[0-9a-f:]+(\/[0-9]{1,3})?$/ && t ~ /:/) print t
+            sub(/\r$/,"",$0)
+            if($0 ~ /^[[:space:]]*(#|$)/) next
+            sub(/[[:space:]]#.*$/,"",$0);gsub(/,/," ",$0)
+            for(i=1;i<=NF;i++) {
+                token=tolower($i);n=split(token,p,"/")
+                if(n>2 || (n==2 && p[2]!~/^(0|[1-9][0-9]?[0-9]?)$/)) {note("invalid-prefix",token);continue}
+                pref=(n==1?128:p[2]+0)
+                if(pref>128) {note("invalid-prefix",token);continue}
+                if(!expand(p[1])) {note("invalid-ipv6",token);continue}
+                if(pref<32) {note("network-too-wide-minimum-32",token);continue}
+                if(words[1]>=65280 || (words[1]>=65152&&words[1]<=65215)) {note("multicast-or-link-local",token);continue}
+                zero=1;for(j=1;j<=7;j++) if(words[j]!=0) zero=0
+                if(zero && words[8]<=1) {note("unspecified-or-loopback",token);continue}
+                remaining=pref;aligned=1;key=""
+                for(j=1;j<=8;j++) {
+                    bits=(remaining>16?16:remaining);size=2^(16-bits)
+                    if(words[j]%size!=0) aligned=0
+                    key=key sprintf("%04x",words[j]);remaining-=bits
+                }
+                if(!aligned) {note("host-bits-set",token);continue}
+                accepted++;printf "%s\t%d\t%s/%d\t%d\n",key,pref,compact(),pref,NR
             }
         }
-    ' | sort -u > "$out"
-    [ -f "$out" ]
+        END {printf "SUMMARY ipv6 syntax-accepted=%d rejected=%d\n",accepted,rejected >> report}
+    ' "$raw" > "$out.records" || return 1
+    LC_ALL=C sort -k1,1 -k2,2n "$out.records" > "$out.sorted" || return 1
+    awk -F '\t' -v report="$report" '
+        function digit(c) {return index("0123456789abcdef",c)-1}
+        function covered(key,prefix,n,rem) {
+            if(!have || prefix<lastprefix) return 0
+            n=int(lastprefix/4);rem=lastprefix%4
+            if(substr(key,1,n)!=substr(lastkey,1,n)) return 0
+            return rem==0 || int(digit(substr(key,n+1,1))/2^(4-rem))==int(digit(substr(lastkey,n+1,1))/2^(4-rem))
+        }
+        {
+            if(covered($1,$2+0)) {
+                redundant++;if(samples++<50) printf "SKIP ipv6 line=%s reason=duplicate-or-covered-by-%s value=%s\n",$4,cover,$3 >> report
+                next
+            }
+            have=1;lastkey=$1;lastprefix=$2+0;cover=$3;print $3;kept++
+        }
+        END {printf "SUMMARY ipv6 kept=%d duplicate-or-covered=%d\n",kept,redundant >> report}
+    ' "$out.sorted" > "$out.tmp" || return 1
+    rm -f "$out.records" "$out.sorted"
+    lines=$(wc -l < "$out.tmp")
+    if [ "$lines" -gt 200000 ]; then rm -f "$out.tmp"; printf 'FATAL ipv6 too many entries\n' >> "$report"; return 1; fi
+    mv "$out.tmp" "$out"
+}
+
+
+publish_validation_report() {
+    outcome=$1
+    {
+        printf 'RouteWolf list validation / Проверка списков: %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'RESULT %s\n' "$outcome"
+        echo 'REJECT = excluded / исключено; SKIP = duplicate or covered / дубль или вложенная подсеть'
+        echo 'Validation checks syntax and routing safety, not domain ownership or internet reachability.'
+        echo 'Проверяется корректность записи, а не принадлежность сервису или доступность в интернете.'
+        [ ! -f "$VALIDATION_REPORT" ] || cat "$VALIDATION_REPORT"
+    } | head -c 65536 > /tmp/routewolf-list-validation.log.new.$$
+    mv /tmp/routewolf-list-validation.log.new.$$ /tmp/routewolf-list-validation.log
+    [ ! -f "$VALIDATION_REPORT" ] || grep -E '^SUMMARY|^FATAL' "$VALIDATION_REPORT" || true
+    echo 'Validation details / Подробности: rw lists report'
 }
 
 refresh_native () {
@@ -5180,6 +5336,8 @@ start() (
     fi
     echo $$ >"$lock/pid"
     mkdir -p "$work" "$CACHE_DIR" "$TMP_DNSMASQ_DIR" "$TMP_LIST_DIR" || return 1
+    VALIDATION_REPORT=$work/validation.log
+    : > "$VALIDATION_REPORT"
     trap 'rm -rf "$work"; rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || true' EXIT
     trap 'exit 1' HUP INT TERM
     # Restore cache before snapshotting, so boot without internet still has lists.
@@ -5208,10 +5366,13 @@ start() (
             rollback_lists || return 1
             fw4 reload >/dev/null 2>&1 || true
             /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+            publish_validation_report 'APPLY_FAILED_PREVIOUS_LISTS_RESTORED'
             return 1
         fi
         /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
     fi
+    if [ "$refresh_ok" = 1 ]; then publish_validation_report 'VALID_ENTRIES_APPLIED'
+    else publish_validation_report 'INPUT_FAILED_PREVIOUS_LISTS_RESTORED'; fi
     [ "$refresh_ok" = 1 ]
 )
 
