@@ -365,6 +365,40 @@ class StabilityTests(unittest.TestCase):
         r=self.list_service();self.assertNotEqual(r.returncode,0,r.stdout)
         self.assertNotIn('admin_whitelist',Path('/tmp/dnsmasq.d/domains.lst').read_text())
 
+    def test_mixed_invalid_rows_are_filtered_and_reported_without_losing_valid_routes(self):
+        self.seed_lists()
+        write('/tmp/rw-downloads/domains','youtube.com\nbad..example\n111.111.111.111\n')
+        write('/tmp/rw-downloads/ipv4','203.0.113.0/24\n203.0.113.7/32\n111.111.111.111/24\n999.1.2.3\n')
+        result=self.list_service();self.assertEqual(result.returncode,0,result.stdout)
+        self.assertEqual(Path('/tmp/dnsmasq.d/domains.lst').read_text(),'nftset=/youtube.com/4#inet#fw4#vpn_domains\n')
+        self.assertEqual(Path('/tmp/lst/ipv4.lst').read_text(),'203.0.113.0/24\n')
+        report=Path('/tmp/routewolf-list-validation.log').read_text()
+        self.assertIn('VALID_ENTRIES_APPLIED',report)
+        self.assertIn('REJECT domains line=2',report)
+        self.assertIn('host-bits-set_expected=111.111.111.0/24',report)
+        self.assertIn('duplicate-or-covered',report)
+        self.assertNotIn('fw4 reload',self.actions())
+
+    def test_all_invalid_new_input_keeps_previous_lists_and_reports_failure(self):
+        self.seed_lists();before=Path('/tmp/lst/ipv4.lst').read_bytes()
+        write('/tmp/rw-downloads/ipv4','111.111.111.111/24\n999.1.2.3/99\n')
+        result=self.list_service();self.assertNotEqual(result.returncode,0,result.stdout)
+        self.assertEqual(Path('/tmp/lst/ipv4.lst').read_bytes(),before)
+        self.assertIn('INPUT_FAILED_PREVIOUS_LISTS_RESTORED',Path('/tmp/routewolf-list-validation.log').read_text())
+        self.assertNotIn('fw4 reload',self.actions())
+
+    def test_filtered_ipv4_and_ipv6_sets_load_into_real_nftables(self):
+        self.seed_lists()
+        write('/etc/routewolf/user.conf',"DOMAINS_URL='https://lists.example/domains'\nIPV4_URL='https://lists.example/ipv4'\nIPV6_URL='https://lists.example/ipv6'\nIPV6_SUPPORT=1\n")
+        write('/tmp/rw-downloads/ipv4','203.0.113.0/24\n203.0.113.1\n203.0.114.7\n')
+        write('/tmp/rw-downloads/ipv6','2001:db8::/32\n2001:db8::1/128\n2001:db9::1/64\n2001:::db8\n')
+        result=self.list_service();self.assertEqual(result.returncode,0,result.stdout)
+        for family,type_name in [('ipv4','ipv4_addr'),('ipv6','ipv6_addr')]:
+            entries=','.join(Path('/tmp/lst/'+family+'.lst').read_text().splitlines())
+            definition='add set inet fw4 checked_'+family+' { type '+type_name+'; flags interval; auto-merge; elements={'+entries+'}; }'
+            result=nft(definition);self.assertEqual(result.returncode,0,result.stdout)
+        self.assertEqual(Path('/tmp/lst/ipv6.lst').read_text(),'2001:db8::/32\n')
+
     def test_corrupt_rollback_snapshot_keeps_pending_recovery(self):
         r=self.install_local();self.assertEqual(r.returncode,0,r.stdout)
         write('/etc/routewolf/pending-runtime',f'{VERSION}\n')
