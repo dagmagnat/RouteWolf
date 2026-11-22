@@ -374,6 +374,7 @@ class StabilityTests(unittest.TestCase):
 
     def test_opt_in_release_keeps_awg_dns_and_existing_schedules(self):
         self.seed_release()
+        shutil.copyfile(ROOT/'runtime/routewolf-stable-update.sh', '/tmp/rw-downloads/routewolf-stable-update.sh')
         self.seed_lists()
         write('/etc/config/network', "config interface 'awg0'\n\toption proto 'amneziawg'\n")
         write('/etc/config/dhcp', "config dnsmasq\n\toption noresolv '0'\n")
@@ -392,7 +393,7 @@ class StabilityTests(unittest.TestCase):
                     jobs += '0 3 * * 6 /usr/sbin/routewolf-update.sh --code-auto\n'
                 write('/etc/crontabs/root', jobs)
                 before = [path.read_bytes() for path in protected]
-                result = self.updater('--release', str(VERSION))
+                result = call('sh', str(ROOT/'update.sh'), '--version', str(VERSION))
                 self.assertEqual(result.returncode, 0, result.stdout)
                 self.assertEqual(Path('/etc/routewolf/runtime_version').read_text(), f'{VERSION}\n')
                 self.assertEqual([path.read_bytes() for path in protected], before)
@@ -400,6 +401,23 @@ class StabilityTests(unittest.TestCase):
         self.assertNotIn('routewolf-luci', self.actions())
         self.assertNotIn('https://lists.example/', self.actions())
         self.assertNotIn('ifdown awg0', self.actions())
+
+    def test_public_nightly_update_uses_legacy_channel_without_luci(self):
+        shutil.copyfile(ROOT/'releases/stable.manifest', '/tmp/rw-downloads/stable.manifest')
+        with tarfile.open(ROOT/'releases/routewolf-v59.tar.gz', 'r:gz') as release:
+            agent = release.extractfile('payload/usr/sbin/routewolf-stable-update.sh').read().decode()
+            write('/usr/sbin/routewolf-stable-update.sh', agent, True)
+        state = Path('/etc/routewolf/runtime_version')
+        state.write_text('59\n')
+        schedule = Path('/etc/crontabs/root')
+        schedule.write_text('0 3 * * 6 /usr/sbin/routewolf-update.sh --code-auto\n')
+        before = schedule.read_bytes()
+        result = call('sh', str(ROOT/'update.sh'), '--code-auto')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(state.read_text(), '59\n')
+        self.assertEqual(schedule.read_bytes(), before)
+        self.assertIn('/latest/download/stable.manifest', self.actions())
+        self.assertNotIn('routewolf-luci', self.actions())
 
     def test_failed_release_is_not_automatically_retried(self):
         self.seed_release();write('/etc/routewolf/failed-runtime',f'{VERSION}\n')
@@ -741,7 +759,11 @@ class SourceChecks(unittest.TestCase):
         self.assertIn(".name='vpn_domains'\n    uci set firewall.@ipset[-1].match='dst_ip'",text)
 
     def test_no_full_installer_or_insecure_tls_in_automatic_path(self):
-        text=(ROOT/'update.sh').read_text().split('# RouteWolf universal bootstrapper')[0]
-        self.assertNotIn('--no-check-certificate',text);self.assertNotIn('curl -k',text);self.assertNotIn('routewolf-install.sh',text)
+        for path in ('update.sh', 'runtime/routewolf-stable-update.sh', 'runtime/routewolf-update.sh'):
+            text = (ROOT/path).read_text()
+            self.assertNotIn('--no-check-certificate', text)
+            self.assertNotIn('curl -k', text)
+            if path.startswith('runtime/'):
+                self.assertNotIn('routewolf-install.sh', text)
 
 if __name__=='__main__':unittest.main()
