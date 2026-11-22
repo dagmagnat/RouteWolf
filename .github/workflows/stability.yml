@@ -12,6 +12,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Test subscription formats and priority failover
+        run: go test -race subscription/main.go subscription/compile.go subscription/compile_test.go
+      - name: Verify subscription routing and WAN fallback with real packets
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nftables iproute2
+          sudo python3 tests/subscription_policy.py
       - name: Verify immutable release against source and manifest
         run: |
           python3 tools/build_release.py --check

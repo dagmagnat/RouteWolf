@@ -1,0 +1,12 @@
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=95
+STOP=10
+
+start_service() {
+    [ -x /etc/init.d/routewolf ] || return 0
+    procd_open_instance
+    procd_set_param command /usr/bin/sing-box run -c /etc/routewolf-subscription/config.json
+    procd_set_param respawn 3600 5 0
+    procd_close_instance
+}

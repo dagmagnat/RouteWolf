@@ -341,6 +341,32 @@ class StabilityTests(unittest.TestCase):
         self.assertIn('/releases/latest/download/stable.manifest',self.actions())
         self.assertNotIn('https://lists.example/',self.actions());self.assertNotIn('fw4 reload',self.actions())
 
+    def test_scheduled_checks_keep_existing_awg_and_cron_on_same_release(self):
+        self.seed_release()
+        self.seed_lists()
+        write('/etc/routewolf/runtime_version', f'{VERSION}\n')
+        write('/etc/config/network', "config interface 'awg0'\n\toption proto 'amneziawg'\n")
+        write('/etc/routewolf/route.conf', "VPN_ROUTE_DEV='awg0'\n")
+        write('/etc/crontabs/root',
+              '0 2 * * * /usr/sbin/routewolf-update.sh --lists-auto\n'
+              '0 3 * * 6 /usr/sbin/routewolf-update.sh --code-auto\n')
+        write('/etc/init.d/routewolf', runtime_files()['etc/init.d/routewolf'].decode(), True)
+        write('/usr/sbin/routewolf-fetch.sh', (ROOT/'runtime/routewolf-fetch.sh').read_text(), True)
+        protected = [Path(path) for path in (
+            '/etc/config/network', '/etc/routewolf/route.conf', '/etc/crontabs/root',
+            '/usr/sbin/routewolf-watchdog.sh',
+        )]
+        before = [path.read_bytes() for path in protected]
+
+        for mode in ('--lists-auto', '--code-auto', '--auto'):
+            with self.subTest(mode=mode):
+                result = self.updater(mode)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertEqual([path.read_bytes() for path in protected], before)
+                self.assertFalse(Path('/etc/routewolf-subscription').exists())
+        self.assertNotIn('ifdown awg0', self.actions())
+        self.assertNotIn('ifup awg0', self.actions())
+
     def test_new_release_is_downloaded_from_its_fixed_tag(self):
         self.seed_release();r=self.updater('--code-auto');self.assertEqual(r.returncode,0,r.stdout)
         self.assertIn(f'/releases/download/v{VERSION}/routewolf-v{VERSION}.tar.gz',self.actions())
