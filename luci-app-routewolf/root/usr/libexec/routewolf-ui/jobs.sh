@@ -114,6 +114,36 @@ control_routing() {
     esac
 }
 
+stage_backup() (
+    profile=$1
+    reason invalid-profile
+    [ "$(uci -q get "routewolf_ui.$profile" || :)" = profile ] &&
+        [ "$(uci -q get routewolf_ui.ui.active_profile || :)" != "$profile" ] || return 1
+    protocol=$(uci -q get "routewolf_ui.$profile.protocol") || return 1
+    case "$protocol" in amneziawg|wireguard|openvpn|singbox|outline) ;; *) return 1 ;; esac
+    set -- $(missing_backup_tools "$protocol")
+    if [ "$#" -gt 0 ]; then
+        phase packages
+        reason package-install
+        . "$lib/installer-functions.sh"
+        pkg_update || :
+        pkg_install "$@" || return 1
+        [ -z "$(missing_backup_tools "$protocol")" ] || return 1
+    fi
+    case "$protocol" in
+        singbox|outline) "$lib/singbox.sh" "$profile" yes ;;
+        *) "$lib/profiles.sh" backup "$profile" ;;
+    esac
+)
+
+clear_backup() {
+    /etc/init.d/routewolf-ui-backup stop &&
+        /etc/init.d/routewolf-ui-backup disable &&
+        { uci -q delete routewolf_ui.ui.backup_profile || :; } &&
+        { uci -q delete routewolf_ui.ui.backup_device || :; } &&
+        uci commit routewolf_ui
+}
+
 if [ "${1:-}" = worker ]; then
     shift
     export RW_JOB_STATE="$work"
@@ -121,7 +151,22 @@ if [ "${1:-}" = worker ]; then
     trap 'exit 1' HUP INT TERM
     # Never return raw VPN diagnostics or provider responses through RPC.
     case "$1" in
-        activate) "$lib/profiles.sh" activate "$2" ;;
+        activate)
+            if "$lib/profiles.sh" activate "$2"; then
+                if [ "$(uci -q get routewolf_ui.ui.backup_profile || :)" = "$2" ]; then clear_backup || :; fi
+            else
+                (exit "$?")
+            fi
+            ;;
+        backup)
+            if [ "$2" = none ]; then
+                clear_backup
+            else
+                stage_backup "$2" &&
+                    /etc/init.d/routewolf-ui-backup enable &&
+                    /etc/init.d/routewolf-ui-backup restart
+            fi
+            ;;
         local_lists) "$lib/lists.sh" apply ;;
         lists) /usr/sbin/routewolf-stable-update.sh --lists-auto ;;
         update) /usr/sbin/routewolf-stable-update.sh check && "$lib/schedule.sh" keep ;;
@@ -161,6 +206,9 @@ case "${1:-}" in
     activate)
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
         [ ! -e "$state/paused-route.conf" ] && [ ! -e "$state/paused-singbox" ] || exit 2
+        ;;
+    backup)
+        case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
         ;;
     local_lists|lists|update|reload_project|repair|check|pause|resume|dns_on|dns_off|restart|dco_on|dco_off) ;;
     *) exit 2 ;;

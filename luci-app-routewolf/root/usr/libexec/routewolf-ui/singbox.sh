@@ -13,13 +13,14 @@ watchdog=/etc/routewolf/watchdog.conf
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
 profile=$1
+reserve=${2:-no}
 reason invalid-profile
 case "$profile" in ''|*[!a-zA-Z0-9_]*) fail 'Invalid profile ID.' ;; esac
 [ "$(uci -q get "routewolf_ui.$profile")" = profile ] || fail 'Profile not found.'
 [ -x /etc/init.d/routewolf ] || fail 'Install RouteWolf first.'
 mode=$(uci -q get "routewolf_ui.$profile.routing")
 case "$mode" in full|routewolf|json) ;; *) fail 'Invalid routing mode.' ;; esac
-launch=$(uci -q get "routewolf_ui.$profile.launch")
+launch=$(uci -q get "routewolf_ui.$profile.launch" || echo boot)
 case "$launch" in boot|manual) ;; *) fail 'Invalid launch mode.' ;; esac
 for package in firewall network; do
     [ -z "$(uci changes "$package")" ] || fail 'Save or revert pending changes before activating a tunnel.'
@@ -105,9 +106,23 @@ case "$(cat "$stage/source")" in
 esac
 phase config
 reason config-invalid
-sh "$lib/subscription/install.sh" prepare "$stage" "$mode"
+if sh "$lib/subscription/install.sh" prepare "$stage" "$mode"; then
+    :
+else
+    result=$?
+    case "$result" in
+        3) reason subscription-format ;;
+        4) reason engine-config ;;
+    esac
+    exit "$result"
+fi
 phase start
 reason tunnel-start
+if [ "$reserve" = yes ]; then
+    "$lib/backup-proxy.sh" install "$stage" "$profile"
+    completed=yes
+    exit 0
+fi
 if [ -e "$route" ]; then cp "$route" "$backup/route.conf"; fi
 if [ -e "$watchdog" ]; then cp "$watchdog" "$backup/watchdog.conf"; fi
 if [ -f "$managed/mode" ]; then

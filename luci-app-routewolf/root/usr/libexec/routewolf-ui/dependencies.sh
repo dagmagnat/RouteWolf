@@ -42,6 +42,13 @@ missing_components() {
     esac
 }
 
+missing_backup_tools() {
+    ip -4 rule help 2>&1 | grep -qw oif || printf '%s\n' ip-tiny
+    case "$1" in
+        singbox|outline) present curl || printf '%s\n' curl ca-bundle ;;
+    esac
+}
+
 prepare_package_index() {
     local missing
     missing=$(missing_components "$1") || return 1

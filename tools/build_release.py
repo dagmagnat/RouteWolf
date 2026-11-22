@@ -14,6 +14,8 @@ NAME = re.search(r'^PROJECT_VERSION="([a-zA-Z0-9._-]+)"$', (ROOT / 'routewolf-in
 RELEASES = ROOT / 'releases'
 MANIFEST = RELEASES / (f'v{VERSION}.manifest' if VERSION >= 60 else 'stable.manifest')
 PANEL = RELEASES / f'routewolf-luci-v{VERSION}.tar.gz'
+PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r2.tar.gz' if VERSION == 60 else None
+PANEL_MANIFEST = RELEASES / 'luci-v60-r2.manifest' if VERSION == 60 else None
 FILES = (
     'etc/init.d/routewolf', 'etc/init.d/routewolf-watchdog', 'etc/init.d/routewolf-route',
     'etc/init.d/getdomains', 'etc/init.d/vpnroute',
@@ -79,7 +81,14 @@ def verify_existing():
     if VERSION >= 60:
         assert fields['luci_archive'] == PANEL.name
         assert fields['luci_sha256'] == hashlib.sha256(PANEL.read_bytes()).hexdigest()
-        verify_archive(PANEL, panel_files())
+        if PANEL_UPDATE is None:
+            verify_archive(PANEL, panel_files())
+        else:
+            ui = dict(line.split('=', 1) for line in PANEL_MANIFEST.read_text(encoding='utf-8').splitlines())
+            assert ui['format'] == '1' and ui['version'] == str(VERSION)
+            assert ui['luci_archive'] == PANEL_UPDATE.name
+            assert ui['luci_sha256'] == hashlib.sha256(PANEL_UPDATE.read_bytes()).hexdigest()
+            verify_archive(PANEL_UPDATE, panel_files())
     print(f'Verified immutable v{VERSION}: manifest, archive and {len(expected)} source files agree')
 
 def archive_content(files):
@@ -97,7 +106,7 @@ def archive_content(files):
 
 def build():
     archive_path = RELEASES / f'routewolf-v{VERSION}.tar.gz'
-    if archive_path.exists() and '--replace-unpublished' not in sys.argv:
+    if archive_path.exists() and (PANEL_UPDATE is not None or '--replace-unpublished' not in sys.argv):
         # Deflate output may differ between zlib versions. Never rewrite a good
         # published artifact just to reproduce another compressor's byte stream.
         try:
@@ -122,8 +131,24 @@ def build():
     MANIFEST.write_text('\n'.join(fields) + '\n', encoding='utf-8', newline='\n')
     print(f'Built v{VERSION}: {len(content)} bytes, {len(FILES)} regular files')
 
+
+def build_panel_update():
+    if PANEL_UPDATE is None:
+        raise SystemExit('This source has no separate LuCI update.')
+    content = archive_content(panel_files())
+    PANEL_UPDATE.write_bytes(content)
+    PANEL_MANIFEST.write_text(
+        f'format=1\nversion={VERSION}\nluci_archive={PANEL_UPDATE.name}\n'
+        f'luci_sha256={hashlib.sha256(content).hexdigest()}\n',
+        encoding='utf-8', newline='\n',
+    )
+    print(f'Built {PANEL_UPDATE.name}: {len(content)} bytes')
+
+
 if __name__ == '__main__':
     if '--check' in sys.argv:
         verify_existing()
+    elif '--luci-update' in sys.argv:
+        build_panel_update()
     else:
         build()

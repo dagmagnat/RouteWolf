@@ -12,6 +12,7 @@ key_ok() { printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9+/]{43}=$'; }
 
 native_profile() (
     profile=$1
+    backup=${2:-no}
     reason invalid-profile
     case "$profile" in ''|*[!a-zA-Z0-9_]*) fail 'Invalid profile ID.' ;; esac
     [ "$(uci -q get "routewolf_ui.$profile")" = profile ] || fail 'Profile not found.'
@@ -22,10 +23,13 @@ native_profile() (
 
     protocol=$(uci -q get "routewolf_ui.$profile.protocol")
     routing=$(uci -q get "routewolf_ui.$profile.routing")
-    launch=$(uci -q get "routewolf_ui.$profile.launch")
+    launch=$(uci -q get "routewolf_ui.$profile.launch" || echo boot)
     case "$protocol" in wireguard) tool=wg ;; amneziawg) tool=awg ;; openvpn) tool=openvpn ;; *) fail 'This profile type cannot be activated by the trial.' ;; esac
     case "$routing" in routewolf|full) ;; *) fail 'Choose selective or full routing for this profile.' ;; esac
     case "$launch" in boot) auto=1 ;; manual) auto=0 ;; *) fail 'Invalid launch mode.' ;; esac
+    if [ "$backup" = yes ]; then
+        auto=0
+    fi
 
     temp=$(mktemp -d /tmp/routewolf-ui-vpn.XXXXXX)
     token_dir="$temp"
@@ -50,13 +54,15 @@ native_profile() (
                 uci -q revert "$c" || :
                 cp "$token_dir/$c" "/etc/config/$c"
             done
-            for file in "$route" "$watchdog" "$state/full.nft"; do
-                name=${file##*/}
-                if [ -e "$token_dir/$name" ]; then cp "$token_dir/$name" "$file"; else rm -f "$file"; fi
-            done
+            if [ "$backup" != yes ]; then
+                for file in "$route" "$watchdog" "$state/full.nft"; do
+                    name=${file##*/}
+                    if [ -e "$token_dir/$name" ]; then cp "$token_dir/$name" "$file"; else rm -f "$file"; fi
+                done
+            fi
             ubus call network reload >/dev/null 2>&1 || :
             fw4 reload >/dev/null 2>&1 || :
-            /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || :
+            [ "$backup" = yes ] || /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || :
             if [ "$stopped_singbox" = yes ]; then
                 /etc/init.d/routewolf-subscription-engine start >/dev/null 2>&1 || :
                 /etc/init.d/routewolf-subscription start >/dev/null 2>&1 || :
@@ -71,6 +77,7 @@ native_profile() (
     [ "$bytes" -gt 0 ] && [ "$bytes" -le 65536 ] || fail 'Profile is empty or too large.'
     set -- --luci-profile
     . "$lib/installer-functions.sh"
+    phase config
     if [ "$tool" = openvpn ]; then
         [ -z "$(uci changes openvpn)" ] || fail 'Save or revert pending OpenVPN changes first.'
         phase config
@@ -132,15 +139,18 @@ native_profile() (
     reason tunnel-start
 
     active=$(sed -n "s/^VPN_ROUTE_DEV='\([a-zA-Z0-9_.-]*\)'$/\1/p" "$route" 2>/dev/null | head -n1)
-    case "$tool" in
-        openvpn) dev=tunrw0; [ "$active" != "$dev" ] || dev=tunrw1 ;;
+    case "$backup:$tool" in
+        yes:openvpn) dev=tunrwb ;;
+        yes:*) dev="${tool}rwb" ;;
+        no:openvpn) dev=tunrw0; [ "$active" != "$dev" ] || dev=tunrw1 ;;
         *) dev="${tool}ui0"; [ "$active" != "$dev" ] || dev="${tool}ui1" ;;
     esac
     peer="routewolf_ui_$dev"
     zone="routewolf_ui_$dev"
     forwarding="${zone}_lan"
     if uci -q get "network.$dev" >/dev/null &&
-       [ "$(uci -q get "network.$dev.routewolf_ui" || :)" != 1 ]; then
+       { [ "$(uci -q get "network.$dev.routewolf_ui" || :)" != 1 ] ||
+         { [ "$backup" = yes ] && [ "$(uci -q get "network.$dev.routewolf_ui_backup" || :)" != 1 ]; }; }; then
         fail 'The candidate interface name is already in use.'
     fi
 
@@ -186,6 +196,13 @@ native_profile() (
         uci set "network.$peer.route_allowed_ips=0"
         uci set "network.$peer.persistent_keepalive=5"
         uci add_list "network.$peer.allowed_ips=0.0.0.0/0"
+        if [ "$backup" = yes ]; then
+            uci set "network.$peer.persistent_keepalive=$keepalive"
+        fi
+    fi
+    if [ "$backup" = yes ]; then
+        uci set "network.$dev.routewolf_ui_backup=1"
+        uci set "network.$dev.routewolf_backup_mode=$routing"
     fi
     uci commit network
     ubus call network reload >/dev/null
@@ -206,51 +223,70 @@ native_profile() (
         uci set "openvpn.$peer=openvpn"
         uci set "openvpn.$peer.config=$ovpn_file"
         uci set "openvpn.$peer.routewolf_ui=1"
-        uci set "openvpn.$peer.enabled=1"
+        start_after_save=1
+        [ "$backup" != yes ] || start_after_save=0
+        uci set "openvpn.$peer.enabled=$start_after_save"
         uci set "openvpn.$peer.script_security=1"
         uci commit openvpn
-        /etc/init.d/openvpn start "$peer"
-    else
+        if [ "$backup" != yes ]; then /etc/init.d/openvpn start "$peer"; fi
+    elif [ "$backup" != yes ]; then
         ifup "$dev"
     fi
 
-    phase verify
-    reason tunnel-unreachable
-    healthy=no
-    for attempt in $(seq 1 25); do
-        if [ "$tool" = openvpn ]; then
-            if ip -4 addr show dev "$dev" 2>/dev/null | grep -q 'inet '; then
+    if [ "$backup" != yes ]; then
+        phase verify
+        reason tunnel-unreachable
+        healthy=no
+        for attempt in $(seq 1 25); do
+            if [ "$tool" = openvpn ]; then
+                if ip -4 addr show dev "$dev" 2>/dev/null | grep -q 'inet '; then
+                    healthy=yes
+                    break
+                fi
+            elif "$tool" show "$dev" latest-handshakes 2>/dev/null | awk '$2>0{ok=1} END{exit !ok}'; then
                 healthy=yes
                 break
             fi
-        elif "$tool" show "$dev" latest-handshakes 2>/dev/null | awk '$2>0{ok=1} END{exit !ok}'; then
-            healthy=yes
-            break
+            sleep 1
+        done
+        [ "$healthy" = yes ] || fail 'The candidate did not complete a handshake. Previous routing restored.'
+        [ "$(ip -4 route show table main default)" = "$main" ] || fail 'WAN default route changed unexpectedly.'
+        if [ "$tool" = openvpn ]; then
+            uci set "openvpn.$peer.enabled=$auto"
+            uci commit openvpn
+        else
+            "$tool" set "$dev" peer "$public" persistent-keepalive "$keepalive"
+            uci set "network.$peer.persistent_keepalive=$keepalive"
+            uci set "network.$dev.auto=$auto"
+            uci commit network
         fi
-        sleep 1
-    done
-    [ "$healthy" = yes ] || fail 'The candidate did not complete a handshake. Previous routing restored.'
-    [ "$(ip -4 route show table main default)" = "$main" ] || fail 'WAN default route changed unexpectedly.'
-    if [ "$tool" = openvpn ]; then
-        uci set "openvpn.$peer.enabled=$auto"
-        uci commit openvpn
-    else
-        "$tool" set "$dev" peer "$public" persistent-keepalive "$keepalive"
-        uci set "network.$peer.persistent_keepalive=$keepalive"
-        uci set "network.$dev.auto=$auto"
-        uci commit network
     fi
 
     uci set "firewall.$zone=zone"
     uci set "firewall.$zone.name=$dev"
     uci -q delete "firewall.$zone.network" || :
-    uci add_list "firewall.$zone.network=$dev"
+    if [ "$backup" = yes ]; then
+        uci -q delete "firewall.$zone.device" || :
+        uci add_list "firewall.$zone.device=$dev"
+    else
+        uci add_list "firewall.$zone.network=$dev"
+    fi
     for entry in input=REJECT output=ACCEPT forward=REJECT masq=1 mtu_fix=1; do
         uci set "firewall.$zone.$entry"
     done
     uci set "firewall.$forwarding=forwarding"
     uci set "firewall.$forwarding.src=lan"
     uci set "firewall.$forwarding.dest=$dev"
+    if [ "$backup" = yes ]; then
+        fw4 check
+        uci commit firewall
+        fw4 reload
+        uci set "routewolf_ui.ui.backup_device=$dev"
+        uci set "routewolf_ui.ui.backup_profile=$profile"
+        uci commit routewolf_ui
+        done_ok=yes
+        return 0
+    fi
     if [ "$routing" = full ]; then
         cat > "$state/full.nft" <<EOF
 chain rwui_full {
@@ -306,6 +342,7 @@ EOF
 )
 
 case "${1:-}" in
+    backup) native_profile "$2" yes ;;
     activate)
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
         case "$(uci -q get "routewolf_ui.$2.protocol" || :)" in

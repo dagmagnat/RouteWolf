@@ -10,8 +10,12 @@ put_file() {
     mode=$2
     source=$3
     mkdir -p "$(dirname -- "$dest")"
-    cp "$source" "$dest"
-    chmod "$mode" "$dest"
+    staged=$(mktemp "$dest.new.XXXXXX")
+    if cp "$source" "$staged" && chmod "$mode" "$staged" && mv -f "$staged" "$dest"; then
+        return 0
+    fi
+    rm -f "$staged"
+    return 1
 }
 
 config=/etc/config/routewolf_ui
@@ -25,12 +29,14 @@ put_file /usr/share/rpcd/acl.d/luci-app-routewolf.json 644 "$here/root/usr/share
 put_file /usr/share/luci/menu.d/luci-app-routewolf.json 644 "$here/root/usr/share/luci/menu.d/luci-app-routewolf.json"
 put_file /www/luci-static/resources/view/routewolf/manage.js 644 "$here/htdocs/luci-static/resources/view/routewolf/manage.js"
 put_file /www/luci-static/resources/view/routewolf/manage.css 644 "$here/htdocs/luci-static/resources/view/routewolf/manage.css"
-for script in dependencies jobs lists profiles singbox schedule; do
+for script in dependencies jobs lists profiles singbox schedule backup backup-proxy; do
     put_file "/usr/libexec/routewolf-ui/$script.sh" 755 "$here/root/usr/libexec/routewolf-ui/$script.sh"
 done
 put_file /usr/libexec/routewolf-ui/library.awk 644 "$here/root/usr/libexec/routewolf-ui/library.awk"
 put_file /usr/libexec/routewolf-ui/openvpn.awk 644 "$here/root/usr/libexec/routewolf-ui/openvpn.awk"
 put_file /etc/init.d/routewolf-ui-lists 755 "$here/root/etc/init.d/routewolf-ui-lists"
+put_file /etc/init.d/routewolf-ui-backup 755 "$here/root/etc/init.d/routewolf-ui-backup"
+put_file /etc/init.d/routewolf-ui-backup-engine 755 "$here/root/etc/init.d/routewolf-ui-backup-engine"
 installer="$here/../routewolf-install.sh"
 [ -f "$installer" ] || installer="$here/installer-source.sh"
 if [ -f "$installer" ]; then

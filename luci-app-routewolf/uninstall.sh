@@ -1,6 +1,13 @@
 #!/bin/sh
 set -eu
 [ "$(id -u)" = 0 ] || { echo 'Run as root on OpenWrt.' >&2; exit 1; }
+if [ -x /etc/init.d/routewolf-ui-backup ]; then
+    /etc/init.d/routewolf-ui-backup stop || :
+    /etc/init.d/routewolf-ui-backup disable || :
+fi
+if [ -x /etc/init.d/routewolf-ui-backup-engine ]; then
+    /etc/init.d/routewolf-ui-backup-engine stop || :
+fi
 rm -f /usr/libexec/rpcd/routewolf_ui \
     /usr/share/rpcd/acl.d/luci-app-routewolf.json \
     /usr/share/luci/menu.d/luci-app-routewolf.json \

@@ -80,6 +80,33 @@ status() {
     now=$(date +%s)
     handshake=$(latest_handshake "$tunnel" "$proto")
     selected_state=$(interface_state "$tunnel" "$proto" "$handshake")
+    backup_profile=$(uci -q get routewolf_ui.ui.backup_profile || :)
+    backup_state=$(head -c 16 /var/run/routewolf-ui-backup/status 2>/dev/null)
+    backup_mode=
+    if [ "$backup_state" = active ]; then
+        backup_state=wan
+        lan=$(ubus call network.interface.lan status | jsonfilter -e '@.l3_device')
+        case "$lan" in
+            ''|*[!a-zA-Z0-9_.-]*) ;;
+            *)
+                if [ -n "$backup_profile" ] && [ "$paused" = 0 ] &&
+                    nft get element inet routewolf_ui_backup active_lans "{ \"$lan\" }" >/dev/null 2>&1; then
+                    backup_state=active
+                    if [ -n "$tunnel" ]; then
+                        selected_state=backup
+                        backup_device=$(uci -q get routewolf_ui.ui.backup_device || :)
+                        case "$backup_device" in
+                            awgrwb|wgrwb|tunrwb) backup_mode=$(uci -q get "network.$backup_device.routewolf_backup_mode" || :) ;;
+                            rwsubb0) backup_mode=$(head -c 16 /etc/routewolf-ui/backup-proxy/mode 2>/dev/null) ;;
+                        esac
+                    fi
+                fi
+                ;;
+        esac
+    fi
+    if [ -n "$backup_profile" ] && [ "$paused" = 0 ]; then
+        case "$backup_state" in checking|wan|conflict) selected_state=fallback ;; esac
+    fi
     read -r load _ </proc/loadavg
     mem_used=$(awk '/^MemTotal:/ {total=$2} /^MemAvailable:/ {free=$2}
                     END {if(total>0 && free>0) printf "%d", 100*(total-free)/total; else print -1}' /proc/meminfo)
@@ -111,6 +138,9 @@ status() {
     json_add_boolean paused "$paused"
     json_add_boolean dns_force "$dns_force"
     json_add_string active_profile "$(uci -q get routewolf_ui.ui.active_profile || :)"
+    json_add_string backup_profile "$backup_profile"
+    json_add_string backup_state "$backup_state"
+    json_add_string backup_mode "$backup_mode"
     json_add_string version "$version"
     json_add_string tunnel "$tunnel"
     json_add_string protocol "$proto"
@@ -215,11 +245,15 @@ preflight() (
     read -r request || [ -n "$request" ] || return 1
     json_load "$request" 2>/dev/null || return 1
     json_get_var profile profile
+    json_get_var role role
     case "$profile" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
     [ "$(uci -q get "routewolf_ui.$profile" || :)" = profile ] || return 1
     protocol=$(uci -q get "routewolf_ui.$profile.protocol") || return 1
     . /usr/libexec/routewolf-ui/dependencies.sh
     missing=$(missing_components "$protocol") || return 1
+    if [ "$role" = backup ]; then
+        missing="$missing $(missing_backup_tools "$protocol")"
+    fi
     json_init
     json_add_string protocol "$protocol"
     json_add_array missing
@@ -237,7 +271,7 @@ job_start() {
 }
 
 case "${1:-}:${2:-}" in
-    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
+    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
     call:status) status ;;
     call:job_status) job_status ;;
     call:preflight) preflight ;;

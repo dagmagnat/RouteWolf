@@ -28,7 +28,7 @@ const commitProfiles = rpc.declare({ object: 'uci', method: 'commit', params: ['
 
 const jobStart = rpc.declare({ object: 'routewolf_ui', method: 'job', params: ['action', 'profile'], reject: true, expect: { ok: false } });
 const jobStatus = rpc.declare({ object: 'routewolf_ui', method: 'job_status', reject: true });
-const preflight = rpc.declare({ object: 'routewolf_ui', method: 'preflight', params: ['profile'], reject: true });
+const preflight = rpc.declare({ object: 'routewolf_ui', method: 'preflight', params: ['profile', 'role'], reject: true });
 const jobPhases = {
     preflight: [5, _('Проверка профиля')],
     packages: [20, _('Загрузка и установка компонентов')],
@@ -43,6 +43,8 @@ const jobErrors = {
     'package-install': _('Не удалось установить компоненты. Проверьте DNS, доступ к репозиторию OpenWrt и свободное место.'),
     'source-download': _('Не удалось загрузить подписку или её компоненты. Проверьте ссылку и доступ в интернет.'),
     'config-invalid': _('Профиль не прошёл проверку формата или содержит неподдерживаемые параметры.'),
+    'subscription-format': _('Подписка загружена. В ней не удалось найти совместимые серверы или прочитать её правила. Проверьте формат подписки и выбранную маршрутизацию.'),
+    'engine-config': _('Установленный sing-box отклонил конфигурацию. Проверьте поддержку протокола и транспорта в этой версии.'),
     'tunnel-start': _('Интерфейс туннеля не удалось запустить.'),
     'tunnel-unreachable': _('Туннель запустился, но проверка связи не прошла.'),
     'route-unavailable': _('Туннель поднят, но маршрут через него недоступен.'),
@@ -71,8 +73,17 @@ const linkStates = {
     up: [_('Интерфейс поднят'), 'on'],
     paused: [_('Пауза · WAN'), 'waiting'],
     fallback: [_('Переключён на WAN'), 'off'],
+    backup: [_('Резерв подключён'), 'on'],
     down: [_('Остановлен'), 'off'],
     none: [_('Без туннеля'), 'off']
+};
+const backupStates = {
+    active: _('Резерв подключён'),
+    checking: _('Через WAN · проверяется основной профиль'),
+    waiting: _('В ожидании'),
+    wan: _('Через WAN · резерв проверяется'),
+    idle: _('Ожидает основной профиль'),
+    conflict: _('Этот ключ уже используется другим интерфейсом')
 };
 const pageSize = 35;
 const bulkPageSize = 150;
@@ -170,7 +181,7 @@ function statusPanel(result) {
 
     const tunnel = [protocols[result.protocol], result.tunnel].filter(Boolean).join(' · ');
     const primary = [
-        [_('Маршрутизация'), result.paused ? _('Через WAN') : routeNames[result.mode] || '—'],
+        [_('Маршрутизация'), result.paused ? _('Через WAN') : routeNames[result.backup_mode || result.mode] || '—'],
         [_('Интернет по умолчанию'), result.wan_device || '—']
     ];
     const facts = [
@@ -198,7 +209,11 @@ function statusPanel(result) {
             E('dt', {}, [label]), E('dd', {}, [value])
         ]))),
         E('div', { class: 'rw-interfaces', 'aria-label': _('Настроенные интерфейсы') },
-            interfaces.length ? interfaces : [E('span', {}, [tunnel || _('Профиль пока не выбран')])])
+            interfaces.length ? interfaces : [E('span', {}, [tunnel || _('Профиль пока не выбран')])]),
+        result.backup_profile ? E('p', { class: 'rw-list-hint' }, [
+            _('Резервный профиль'), ' · ', uci.get(settings, result.backup_profile, 'name') || '—',
+            ' · ', backupStates[result.backup_state] || backupStates.waiting
+        ]) : ''
     ]);
 }
 
@@ -520,9 +535,9 @@ function profileForm() {
     };
 
     option = section.option(form.ListValue, 'launch', _('Режим запуска'));
-    option.value('manual', _('Вручную'));
     option.value('boot', _('При загрузке'));
-    option.default = 'manual';
+    option.value('manual', _('Вручную'));
+    option.default = 'boot';
     option.rmempty = false;
     option.modalonly = true;
 
@@ -560,10 +575,19 @@ function profileForm() {
     return map;
 }
 
-async function confirmActivation(profile, action) {
+async function confirmActivation(profile, action, backup = false) {
     try {
-        const check = await preflight(profile);
+        const role = backup ? 'backup' : 'primary';
+        const check = await preflight(profile, role);
         const missing = check.missing || [];
+        const packageInfo = E('p', {}, []);
+        function updatePackages(packages) {
+            packageInfo.replaceChildren(...(packages.length ? [
+                _('Будут установлены компоненты '), E('code', {}, [packages.join(', ')])
+            ] : []));
+            packageInfo.hidden = !packages.length;
+        }
+        updatePackages(missing);
         const spinner = E('span', { class: 'rw-install-spinner', 'aria-hidden': 'true', hidden: true });
         const status = E('span', {}, []);
         const meter = E('progress', { max: 100, value: 0, 'aria-label': _('Прогресс активации') });
@@ -585,7 +609,8 @@ async function confirmActivation(profile, action) {
             reading.textContent = meter.value + '%';
             status.textContent = name;
         }
-        const confirm = button(missing.length ? _('Установить и активировать') : _('Активировать'),
+        const readyLabel = backup ? _('Назначить резерв') : _('Активировать');
+        const confirm = button(missing.length ? (backup ? _('Установить и назначить') : _('Установить и активировать')) : readyLabel,
             ui.createHandlerFn(null, async () => {
                 close.disabled = true;
                 error.textContent = '';
@@ -593,8 +618,13 @@ async function confirmActivation(profile, action) {
                 spinner.hidden = false;
                 meter.value = 0;
                 setProgress('preflight');
-                const ok = await action('activate', profile, false, {
-                    update: state => setProgress(state.phase),
+                const ok = await action(backup ? 'backup' : 'activate', profile, false, {
+                    update: state => {
+                        setProgress(state.phase);
+                        if (['download', 'config', 'start', 'verify', 'done'].includes(state.phase) &&
+                            meter.value >= 45)
+                            packageInfo.hidden = true;
+                    },
                     fail: message => { error.textContent = message; }
                 });
                 spinner.hidden = true;
@@ -604,13 +634,22 @@ async function confirmActivation(profile, action) {
                     setProgress('done');
                     reloadOnClose = true;
                     confirm.hidden = true;
+                } else {
+                    progress.hidden = true;
+                    try {
+                        const remaining = (await preflight(profile, role)).missing || [];
+                        updatePackages(remaining);
+                        if (!remaining.length)
+                            confirm.textContent = readyLabel;
+                    } catch (error) {
+                        // Keep the diagnostic from the job when the status check fails.
+                    }
                 }
             }), true);
-        ui.showModal(_('Активация профиля'), [
-            missing.length ? E('p', {}, [_('Отсутствуют компоненты. При активации RouteWolf загрузит и установит следующие пакеты:')]) :
-                E('p', {}, [_('Необходимые компоненты найдены.')]),
-            missing.length ? E('p', {}, [E('code', {}, [missing.join(', ')])]) : '',
-            E('p', {}, [_('Маршрут переключится после проверки нового туннеля.')]),
+        ui.showModal(backup ? _('Резервный профиль') : _('Активация профиля'), [
+            E('p', {}, [backup ? _('Резерв включится при отказе основного профиля. Для подписки сначала проверяются все серверы.') :
+                _('Маршрут переключится после проверки нового туннеля.')]),
+            packageInfo,
             progress,
             error,
             E('div', { class: 'rw-actions rw-activate-actions' }, [confirm, close])
@@ -669,9 +708,17 @@ return view.extend({
             }
             return false;
         };
-        const profileSelect = E('select', { 'aria-label': _('Профиль для подключения') });
-        const connect = button(_('Активировать профиль'), ui.createHandlerFn(null, () =>
+        const profileSelect = E('select', { id: 'rw-primary-profile' });
+        const backupSelect = E('select', { id: 'rw-backup-profile' });
+        const connect = button(_('Сделать основным'), ui.createHandlerFn(null, () =>
             profileSelect.value ? confirmActivation(profileSelect.value, action) : null), true);
+        const saveBackup = button(_('Сохранить резерв'), ui.createHandlerFn(null, () =>
+            backupSelect.value ? confirmActivation(backupSelect.value, action, true) :
+                action('backup', 'none', true)), true);
+        function updateBackupButton() {
+            saveBackup.disabled = !result.project_auth || (!backupSelect.value && !result.backup_profile);
+        }
+        backupSelect.addEventListener('change', updateBackupButton);
         function updateProfiles() {
             const profiles = uci.sections(settings, 'profile').filter(section =>
                 ['wireguard', 'amneziawg', 'openvpn', 'singbox', 'outline'].includes(section.protocol));
@@ -679,6 +726,12 @@ return view.extend({
                 value: section['.name'], selected: section['.name'] === result.active_profile || null
             }, [section.name])));
             connect.disabled = !profiles.length || result.paused || !result.project_auth;
+            const eligible = profiles.filter(section =>
+                section['.name'] !== result.active_profile || section['.name'] === result.backup_profile);
+            backupSelect.replaceChildren(E('option', { value: '' }, [_('Без резерва')]), ...eligible.map(section =>
+                E('option', { value: section['.name'], selected: section['.name'] === result.backup_profile || null },
+                    [section.name])));
+            updateBackupButton();
         }
 
         this.map = profileForm();
@@ -688,7 +741,9 @@ return view.extend({
             const profiles = E('div', {}, [
                 E('div', { class: 'rw-compact-table' }, [node]),
                 E('div', { class: 'rw-actions rw-profile-actions' }, [
-                    E('div', { class: 'rw-profile-picker' }, [profileSelect, connect]),
+                    E('div', { class: 'rw-profile-picker' }, [
+                        E('label', { for: 'rw-primary-profile' }, [_('Основной профиль')]), profileSelect, connect
+                    ]),
                     button(_('Сохранить профили'), ui.createHandlerFn(project, async () => {
                         try {
                             await project.map.save();
@@ -699,6 +754,14 @@ return view.extend({
                             ui.addNotification(null, E('p', {}, [error.message]));
                         }
                     }), true)
+                ]),
+                E('div', { class: 'rw-actions rw-profile-actions' }, [
+                    E('div', { class: 'rw-profile-picker' }, [
+                        E('label', { for: 'rw-backup-profile' }, [_('Резервный профиль')]), backupSelect, saveBackup
+                    ])
+                ]),
+                E('p', { class: 'rw-list-hint' }, [
+                    _('Выберите другой сохранённый профиль для резерва.')
                 ])
             ]);
             const controls = servicePanel(result, action);

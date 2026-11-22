@@ -58,10 +58,12 @@ prepare() {
     stage=$1
     mode=$2
     printf '%s\n' "$mode" > "$stage/mode"
-    "$stage/subscription" render "$stage/input" "$stage/token" "$mode" "$stage/config.json"
+    "$stage/subscription" render "$stage/input" "$stage/token" "$mode" "$stage/config.json" || return 3
     [ -c /dev/net/tun ] || fail "TUN device unavailable. Install kmod-tun for this kernel."
-    sing-box check -c "$stage/config.json" >/dev/null 2>&1 ||
-        fail "The installed sing-box cannot load this subscription. Some transports require the full package or a newer engine."
+    if ! sing-box check -c "$stage/config.json" >/dev/null 2>&1; then
+        printf '%s\n' 'The installed sing-box cannot load this subscription. Some transports require the full package or a newer engine.' >&2
+        return 4
+    fi
     cp "$here/controller.sh" "$stage/controller"
     cp "$here/install.sh" "$stage/manage"
     chmod 700 "$stage/controller" "$stage/manage"

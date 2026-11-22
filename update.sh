@@ -45,12 +45,12 @@ fetch() {
 }
 
 verify() {
-    expected=$(field "$1")
+    expected=$(field "$1" "${3:-$work/manifest}")
     printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' &&
         [ "$(sha256sum "$2" | awk '{print $1}')" = "$expected" ]
 }
 
-field() { sed -n "s/^$1=//p" "$work/manifest"; }
+field() { sed -n "s/^$1=//p" "${2:-$work/manifest}"; }
 
 available=$(awk '/MemAvailable:/ {print $2}' /proc/meminfo)
 case "$available" in ''|*[!0-9]*) available=0 ;; esac
@@ -69,8 +69,11 @@ version=$(field version)
 case "$version" in ''|0*|*[!0-9]*) exit 1 ;; esac
 [ "${#version}" -le 6 ] && [ "${requested:-$version}" = "$version" ] || exit 1
 release="$base/download/v$version"
-fetch "$release/routewolf-stable-update.sh" "$work/agent" 131072 &&
-    verify agent_sha256 "$work/agent" && sh -n "$work/agent" || exit 1
+current=$(cat "$state/runtime_version" 2>/dev/null || :)
+if [ -z "$requested" ] || [ "$current" != "$version" ]; then
+    fetch "$release/routewolf-stable-update.sh" "$work/agent" 131072 &&
+        verify agent_sha256 "$work/agent" && sh -n "$work/agent" || exit 1
+fi
 
 if [ -z "$requested" ]; then
     sh "$work/agent" "$mode"
@@ -78,15 +81,20 @@ if [ -z "$requested" ]; then
 fi
 
 if [ "$panel" = 1 ]; then
-    archive="routewolf-luci-v$version.tar.gz"
-    [ "$(field luci_archive)" = "$archive" ] &&
+    archive="routewolf-luci-v$version-r2.tar.gz"
+    fetch "$release/luci-v$version-r2.manifest" "$work/luci.manifest" 4096 &&
+        [ "$(field format "$work/luci.manifest")" = 1 ] &&
+        [ "$(field version "$work/luci.manifest")" = "$version" ] &&
+        [ "$(field luci_archive "$work/luci.manifest")" = "$archive" ] &&
         fetch "$release/$archive" "$work/luci.tar.gz" 1048576 &&
-        verify luci_sha256 "$work/luci.tar.gz" || exit 1
+        verify luci_sha256 "$work/luci.tar.gz" "$work/luci.manifest" || exit 1
     mkdir "$work/luci"
     tar -xzf "$work/luci.tar.gz" -C "$work/luci"
     sh -n "$work/luci/routewolf-install.sh"
 fi
-sh "$work/agent" --release "$version"
+if [ "$current" != "$version" ]; then
+    sh "$work/agent" --release "$version"
+fi
 [ "$(cat "$state/runtime_version" 2>/dev/null)" = "$version" ] ||
     { echo 'Runtime has not reached the requested release; retry the update.' >&2; exit 1; }
 if [ "$panel" = 1 ]; then
