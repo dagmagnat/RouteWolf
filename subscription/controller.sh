@@ -161,7 +161,7 @@ monitor() {
             exit 0
         fi
         now=$(monotonic_seconds)
-        if [ -z "$refresh_pid" ] && [ "$now" -ge "$next_refresh" ]; then
+        if [ -z "$refresh_pid" ] && [ "$now" -ge "$next_refresh" ] && grep -q '^https://' "$state/source"; then
             refresh &
             refresh_pid=$!
             next_refresh=$((now+3600))

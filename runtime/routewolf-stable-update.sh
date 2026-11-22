@@ -192,7 +192,12 @@ apply_release() {
     done
     # Existing interval sets must migrate before fw4 validates the new configuration.
     /usr/sbin/routewolf-reliability.sh repair || return 1
-    local_health && configure_cron || return 1
+    local_health || return 1
+    # Explicit upgrades preserve the existing cron, including list-only and
+    # custom weekly schedules. Fresh provisioning still initializes it.
+    if [ "$MODE" = --local ]; then
+        configure_cron || return 1
+    fi
     printf '%s\n' "$version" >"$STATE/runtime_version" || return 1
     printf '%s\n' "$name" >"$STATE/installed_version" || return 1
     rm -f "$STATE/failed-runtime"
@@ -222,8 +227,13 @@ finish() {
 case "$MODE" in
     status) status; exit 0 ;;
     on|off) mkdir -p "$STATE"; value=1; [ "$MODE" = off ] && value=0; printf 'AUTO_CODE_UPDATES=%s\n' "$value" >"$STATE/update.conf"; status; exit 0 ;;
+    --release)
+        requested=${2:-}
+        case "$requested" in ''|0*|*[!0-9]*) exit 2 ;; esac
+        [ "${#requested}" -le 6 ] && [ "$requested" -ge 60 ] || exit 2
+        ;;
     --auto|--lists-auto|--code-auto|check|--local|rollback|recover) ;;
-    *) echo 'Usage: routewolf-stable-update.sh --lists-auto|--code-auto|--auto|check|status|on|off|rollback|recover|--local ARCHIVE MANIFEST' >&2; exit 2 ;;
+    *) echo 'Usage: routewolf-stable-update.sh --lists-auto|--code-auto|--auto|check|status|on|off|rollback|recover|--release VERSION|--local ARCHIVE MANIFEST' >&2; exit 2 ;;
 esac
 command -v sha256sum >/dev/null 2>&1 || { log 'sha256sum unavailable; update skipped'; exit 1; }
 for required in uci nft fw4 tar; do
@@ -267,9 +277,11 @@ if { [ "$MODE" != --auto ] && [ "$MODE" != --code-auto ]; } || [ "$(sed -n 's/^A
     if [ "$MODE" = --local ]; then
         cp "$2" "$WORK/runtime.tgz" && cp "$3" "$WORK/release.manifest" || exit 1
     else
-        if ! fetch "$BASE/latest/download/stable.manifest" "$WORK/release.manifest" 4096; then
+        manifest_url="$BASE/latest/download/stable.manifest"
+        [ "$MODE" != --release ] || manifest_url="$BASE/download/v$requested/stable.manifest"
+        if ! fetch "$manifest_url" "$WORK/release.manifest" 4096; then
             record 'stable manifest unavailable or TLS verification failed; existing code retained'
-            [ "$MODE" = --code-auto ] || refresh_lists || true
+            case "$MODE" in --code-auto|--release) ;; *) refresh_lists || true ;; esac
             exit 1
         fi
         # No shell evaluation of downloaded manifest fields.
@@ -278,8 +290,12 @@ if { [ "$MODE" != --auto ] && [ "$MODE" != --code-auto ]; } || [ "$(sed -n 's/^A
         [ "${#version}" -le 6 ] || exit 1
         current=$(cat "$STATE/runtime_version" 2>/dev/null || echo 0)
         case "$current" in ''|*[!0-9]*) current=0 ;; esac
+        if [ "$MODE" = --release ]; then
+            [ "$version" = "$requested" ] || { log 'release manifest version mismatch'; exit 1; }
+            [ "$version" -ge "$current" ] || { log 'runtime downgrade refused'; exit 1; }
+        fi
         blocked=$(cat "$STATE/failed-runtime" 2>/dev/null || true)
-        if [ "$version" -gt "$current" ] && { [ "$version" != "$blocked" ] || [ "$MODE" = check ]; }; then
+        if [ "$version" -gt "$current" ] && { [ "$version" != "$blocked" ] || [ "$MODE" = check ] || [ "$MODE" = --release ]; }; then
             fetch "$BASE/download/v$version/routewolf-v$version.tar.gz" "$WORK/runtime.tgz" || { record 'runtime download failed; existing code retained'; exit 1; }
         fi
     fi
@@ -288,7 +304,7 @@ if { [ "$MODE" != --auto ] && [ "$MODE" != --code-auto ]; } || [ "$(sed -n 's/^A
         apply_release || exit 1
     fi
 fi
-if [ "$MODE" = --code-auto ]; then record 'release check complete'; exit 0; fi
+case "$MODE" in --code-auto|--release) record 'release check complete'; exit 0 ;; esac
 # Lists remain independent of code version and use their own transaction/cache.
 if [ -x /usr/sbin/routewolf-reliability.sh ]; then /usr/sbin/routewolf-reliability.sh check || exit 1; fi
 refresh_lists || { record 'list refresh failed; previous lists retained where possible'; exit 1; }

@@ -1,0 +1,31 @@
+{
+  "luci-app-routewolf": {
+    "description": "Manage RouteWolf and its saved tunnel profiles",
+    "read": {
+      "ubus": {
+        "routewolf_ui": [
+          "status",
+          "job_status",
+          "preflight",
+          "library"
+        ]
+      },
+      "uci": [
+        "routewolf_ui"
+      ]
+    },
+    "write": {
+      "ubus": {
+        "routewolf_ui": [
+          "startup",
+        "job",
+        "code_updates",
+        "list_schedule"
+        ]
+      },
+      "uci": [
+        "routewolf_ui"
+      ]
+    }
+  }
+}

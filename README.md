@@ -4,7 +4,8 @@
 обычный интернет — через WAN. Поддерживаются WireGuard, AmneziaWG, OpenVPN;
 есть режимы Sing-box/VLESS REALITY, подписки sing-box и Outline.
 
-Стабильный выпуск: [последний GitHub Release](https://github.com/dagmagnat/RouteWolf/releases/latest).
+Выпуск с панелью LuCI — [v60](https://github.com/dagmagnat/RouteWolf/releases/tag/v60).
+Канал автоматических обновлений — [v59](https://github.com/dagmagnat/RouteWolf/releases/latest).
 Архитектура, история, аудит и планы — в одном [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
 
 ## Установка
@@ -12,6 +13,11 @@
 ```sh
 /bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/install.sh | sh
 ```
+
+В установщике выберите **Настроить в терминале** (по умолчанию), чтобы пройти
+обычные шаги выбора протокола, импорта конфига и маршрутизации. Чтобы
+настроить профиль из браузера, выберите **Установить для управления через LuCI**.
+Панель появится в **Службы → RouteWolf**.
 
 Нужны совместимые OpenWrt/fw4/nftables и пакеты для точной версии прошивки/ядра.
 Поддерживаются `opkg` и `apk`. Если проверяемая HTTPS-загрузка не проходит,
@@ -86,6 +92,24 @@ rw update
 Старые ссылки `getdomains-install.sh`, `getdomains-check.sh` и
 `getdomains-uninstall.sh` сохранены как маленькие совместимые загрузчики.
 
+### Переход на v60
+
+Чтобы обновить скрипты и добавить панель к действующей установке:
+
+```sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh -s -- --luci
+```
+
+Чтобы обновить только скрипты до v60:
+
+```sh
+/bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/update.sh | sh -s -- --version 60
+```
+
+Переход сохраняет активный профиль, режим маршрутизации, DNS, источники списков
+и существующее расписание. Панель устанавливается только по выбору пользователя.
+Обычная команда `rw update` и ночные проверки используют автоматический канал.
+
 ## Ночные задания
 
 | Время роутера | Действие |
@@ -96,6 +120,9 @@ rw update
 Неизменившиеся списки не перезапускают DNS/firewall. При той же версии архив
 кода не скачивается. Изменения в `main` сами по себе не обновляют runtime
 уже перешедших на v56 устройств.
+
+Это расписание новой установки. При переходе на v60 сохраняются действующие
+задания роутера, в том числе обновление только списков или проверка кода по субботам.
 
 Обновление проверяет SHA-256, состав архива и состояние после установки;
 предыдущая версия сохраняется для отката. Ключи VPN и настройки WAN/DNS

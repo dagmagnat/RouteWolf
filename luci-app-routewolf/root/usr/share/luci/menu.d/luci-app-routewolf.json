@@ -1,0 +1,15 @@
+{
+  "admin/services/routewolf": {
+    "title": "RouteWolf",
+    "order": 50,
+    "action": {
+      "type": "view",
+      "path": "routewolf/manage"
+    },
+    "depends": {
+      "acl": [
+        "luci-app-routewolf"
+      ]
+    }
+  }
+}

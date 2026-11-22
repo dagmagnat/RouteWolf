@@ -8,7 +8,7 @@ engine=/etc/init.d/routewolf-subscription-engine
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 
-download() {
+download_helper() {
     stage=$1
     case "$(uname -m)" in
         x86_64) arch=amd64 ;;
@@ -39,7 +39,18 @@ download() {
     gzip -dc "$stage/$asset" > "$stage/subscription"
     rm -f "$stage/$asset"
     chmod 700 "$stage/subscription"
-    od -An -N24 -tx1 /dev/urandom | tr -d ' \n' > "$stage/token"
+    if command -v hexdump >/dev/null 2>&1; then
+        token=$(hexdump -v -n 24 -e '1/1 "%02x"' /dev/urandom)
+    else
+        token=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
+    fi
+    printf '%s\n' "$token" | grep -Eq '^[a-f0-9]{48}$' ||
+        fail 'Cannot generate the local sing-box API token.'
+    printf '%s\n' "$token" > "$stage/token"
+}
+
+download() {
+    download_helper "$1"
     "$stage/subscription" fetch "$stage/source" > "$stage/input"
 }
 
@@ -138,6 +149,7 @@ activate() {
 
 case "${1:-}" in
     download) download "$2" ;;
+    helper) download_helper "$2" ;;
     prepare) prepare "$2" "$3" ;;
     activate) activate "$2" ;;
     remove) remove ;;

@@ -1,7 +1,7 @@
 #!/bin/sh
 
 #set -x
-PROJECT_VERSION="v59-list-validation"
+PROJECT_VERSION="v60-luci"
 ROUTEWOLF_VERSION_FILE="/etc/routewolf/installed_version"
 
 # Persisted across installs/updates so a re-run can tell "what did this router
@@ -28,7 +28,7 @@ DEFAULT_DOMAIN_LIST_URL="${ROUTEWOLF_DOMAINS_URL:-${ROUTING_OPENWRT_DOMAINS_URL:
 DEFAULT_IPV4_LIST_URL="${ROUTEWOLF_IPV4_URL:-${ROUTING_OPENWRT_IPV4_URL:-${DEFAULT_LISTS_BASE_URL}/ipv4.lst}}"
 DEFAULT_IPV6_LIST_URL="${ROUTEWOLF_IPV6_URL:-${ROUTING_OPENWRT_IPV6_URL:-${DEFAULT_LISTS_BASE_URL}/ipv6.lst}}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
-[ -d "$SCRIPT_DIR/lists" ] || SCRIPT_DIR="$(pwd)"
+[ -f "$SCRIPT_DIR/routewolf-install.sh" ] || SCRIPT_DIR="$(pwd)"
 
 # Safe defaults. 1 = use, 0 = skip.
 # Domain and IPv4 CIDR routing are enabled by default. IPv6, DNS redirect and blackhole are OFF by default
@@ -1569,29 +1569,6 @@ routewolf_apply_interface_mtu() {
     msgc "$C_GREEN" "MTU for $_iface set to $_mtu" "MTU для $_iface установлен $_mtu"
 }
 
-routewolf_apply_default_mtu_to_existing_wg_awg() {
-    _changed=0
-    for _iface in wg0 awg0 wg1 awg1; do
-        _proto="$(uci -q get network.$_iface.proto 2>/dev/null)"
-        case "$_proto" in
-            wireguard)
-                _mtu="$(uci -q get network.$_iface.mtu 2>/dev/null)"
-                if ! routewolf_valid_mtu "$_mtu"; then
-                    routewolf_apply_interface_mtu "$_iface" "" "$DEFAULT_WG_MTU"
-                    _changed=1
-                fi
-            ;;
-            amneziawg)
-                _mtu="$(uci -q get network.$_iface.mtu 2>/dev/null)"
-                if ! routewolf_valid_mtu "$_mtu"; then
-                    routewolf_apply_interface_mtu "$_iface" "" "$DEFAULT_AWG_MTU"
-                    _changed=1
-                fi
-            ;;
-        esac
-    done
-    [ "$_changed" = "1" ] && uci commit network >/dev/null 2>&1 || true
-}
 
 # Configuration compatibility and installed package capability are different:
 # a 3.1 package may serve an older profile without rewriting its parameters.
@@ -4708,112 +4685,15 @@ install_stable_runtime() {
     done
     /usr/sbin/routewolf-reliability.sh repair || return 1
     # The bundled release is local and checksummed; no extra network installer.
-    release_archive=$(sed -n 's/^archive=//p' "$SCRIPT_DIR/releases/stable.manifest")
+    release_version=$(cat "$SCRIPT_DIR/version")
+    release_manifest="$SCRIPT_DIR/releases/$release_version.manifest"
+    [ -f "$release_manifest" ] || release_manifest="$SCRIPT_DIR/releases/stable.manifest"
+    release_archive=$(sed -n 's/^archive=//p' "$release_manifest")
     case "$release_archive" in routewolf-v[0-9]*.tar.gz) ;; *) return 1 ;; esac
     case "$release_archive" in *[!a-zA-Z0-9.-]*) return 1 ;; esac
-    /usr/sbin/routewolf-stable-update.sh --local "$SCRIPT_DIR/releases/$release_archive" "$SCRIPT_DIR/releases/stable.manifest"
+    /usr/sbin/routewolf-stable-update.sh --local "$SCRIPT_DIR/releases/$release_archive" "$release_manifest"
 }
 
-update_existing_installation() {
-    clear_screen
-    echo "RouteWolf update mode / режим обновления RouteWolf"
-    echo "This updates project scripts, list URLs, cron, firewall marks and cached lists."
-    echo "Tunnel configuration is kept. / Конфиг туннеля сохраняется."
-
-    # Detect existing tunnel only for the policy route helper.
-    routewolf_apply_default_mtu_to_existing_wg_awg
-
-    if [ -f /etc/routewolf-subscription/mode ]; then
-        TUNNEL=singbox-subscription
-        SUB_MODE=$(cat /etc/routewolf-subscription/mode)
-    elif [ "$(uci -q get network.awg0.proto 2>/dev/null)" = "amneziawg" ]; then
-        TUNNEL="awg"
-        route_vpn
-    elif [ "$(uci -q get network.wg0.proto 2>/dev/null)" = "wireguard" ]; then
-        TUNNEL="wg"
-        route_vpn
-    elif [ -f /etc/routewolf/route.conf ]; then
-        . /etc/routewolf/route.conf
-        case "$VPN_ROUTE_DEV" in
-            awg0) TUNNEL="awg"; route_vpn ;;
-            wg0) TUNNEL="wg"; route_vpn ;;
-            sbtun0) TUNNEL="singbox"; SINGBOX_ROUTE_DEV="sbtun0"; route_vpn ;;
-            outline0) TUNNEL="outline"; OUTLINE_ROUTE_DEV="outline0"; route_vpn ;;
-            tun*) TUNNEL="ovpn"; OVPN_ROUTE_DEV="$VPN_ROUTE_DEV"; route_vpn ;;
-        esac
-    else
-        echo "Warning: no existing awg0/wg0/tun0 route config found. Lists/firewall will be updated, but tunnel route may need reinstall."
-    fi
-
-    if [ -n "${TUNNEL:-}" ] && [ "$TUNNEL" != "0" ] && [ "$TUNNEL" != singbox-subscription ]; then
-        install_routewolf_watchdog
-    fi
-
-    dnsmasqfull
-    dnsmasqconfdir
-    # Migration v46: for domain routing to work reliably on Smart TV/Android TV,
-    # LAN clients must use router dnsmasq. Many TVs ignore DHCP DNS and try
-    # 8.8.8.8/1.1.1.1 directly, so RouteWolf would never see domains and
-    # vpn_domains would stay empty for that device. Enable DNS interception on update.
-    case "${TUNNEL:-}:${SUB_MODE:-}" in
-        singbox-subscription:full|singbox-subscription:json) ;;
-        *)
-            dns_force_on >/dev/null 2>&1 || true
-            # When IPv6 routing is disabled, prevent IPv6 from bypassing the lists.
-            if [ "${IPV6_SUPPORT:-0}" != "1" ]; then
-                uci set dhcp.@dnsmasq[0].filter_aaaa='1' >/dev/null 2>&1 || true
-                remove_firewall_section_by_name ipset vpn_domains6 2>/dev/null || true
-                remove_firewall_section_by_name ipset vpn_subnets6 2>/dev/null || true
-            fi
-            ;;
-    esac
-    add_mark || {
-        msgc "$C_RED" "Policy rule update failed" "Не удалось обновить правило маршрутизации"
-        return 1
-    }
-    add_set || return 1
-    install_management_commands
-    add_routewolf update
-
-    echo "Refreshing GitHub lists / Обновляю списки из GitHub..."
-    install_stable_runtime || return 1
-    # Drop stale temporary files and old example caches. routewolf will download
-    # fresh lists from GitHub and then write new cache files. If GitHub is down,
-    # non-example cache can still be restored by routewolf.
-    rm -f /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst 2>/dev/null || true
-    if [ -f /etc/routewolf/lists/domains.lst ] && [ "$(wc -l < /etc/routewolf/lists/domains.lst 2>/dev/null)" -lt 5 ]; then
-        rm -f /etc/routewolf/lists/domains.lst
-    fi
-    if grep -q '^203\.0\.113\.0/24$' /etc/routewolf/lists/ipv4.lst 2>/dev/null; then
-        rm -f /etc/routewolf/lists/ipv4.lst
-    fi
-    if [ -x /usr/sbin/routewolf-apply.sh ]; then
-        /usr/sbin/routewolf-apply.sh /tmp/routewolf-update-apply.log || return 1
-    else
-        /etc/init.d/routewolf start || true
-        /etc/init.d/firewall restart >/dev/null 2>&1 || true
-        /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-        /etc/init.d/routewolf-route start >/dev/null 2>&1 || true
-        /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || true
-    fi
-    validate_routewolf_installation || {
-        msgc "$C_RED" "Update validation failed" "Проверка после обновления завершилась ошибкой"
-        return 1
-    }
-
-    echo "List counts / Количество строк списков:"
-    [ -f /tmp/dnsmasq.d/domains.lst ] && wc -l /tmp/dnsmasq.d/domains.lst || echo "0 /tmp/dnsmasq.d/domains.lst"
-    [ -f /tmp/lst/ipv4.lst ] && wc -l /tmp/lst/ipv4.lst || echo "0 /tmp/lst/ipv4.lst"
-    if grep -q '^203\.0\.113\.0/24$' /tmp/lst/ipv4.lst 2>/dev/null; then
-        echo "ERROR: IPv4 list still contains example TEST-NET 203.0.113.0/24"
-    fi
-
-    write_installed_version
-    echo "Update done / Обновление завершено"
-    echo "Status command / Проверка: /usr/sbin/routewolf-status.sh"
-    echo "Load check / Проверка нагрузки: /usr/sbin/routewolf-load.sh"
-    echo "Quick command / Быстрая команда: rw help"
-}
 
 add_routewolf() {
     clear_screen
@@ -4966,8 +4846,8 @@ add_routewolf() {
             uci commit firewall
         fi
     else
-        case "${TUNNEL:-}:${SUB_MODE:-}" in
-            singbox-subscription:full|singbox-subscription:json) ;;
+        case "${ROUTEWOLF_SETUP_LUCI:-0}:${TUNNEL:-}:${SUB_MODE:-}" in
+            1:*|*:singbox-subscription:full|*:singbox-subscription:json) ;;
             *)
                 echo "IPv6 disabled: dnsmasq will filter AAAA answers / IPv6 отключён: dnsmasq будет фильтровать AAAA"
                 uci set dhcp.@dnsmasq[0].filter_aaaa='1'
@@ -4985,8 +4865,8 @@ add_routewolf() {
     # Fresh installs also enable TV-safe DNS interception. Without this, many
     # Smart TV/Android TV devices may bypass dnsmasq and RouteWolf never sees
     # the domains that must fill vpn_domains.
-    case "${TUNNEL:-}:${SUB_MODE:-}" in
-        singbox-subscription:full|singbox-subscription:json) ;;
+    case "${ROUTEWOLF_SETUP_LUCI:-0}:${TUNNEL:-}:${SUB_MODE:-}" in
+        1:*|*:singbox-subscription:full|*:singbox-subscription:json) ;;
         *) dns_force_on >/dev/null 2>&1 || true ;;
     esac
 
@@ -6088,9 +5968,57 @@ install_awg_packages() {
 
 }
 
+install_luci_panel() {
+    if [ ! -d /usr/share/luci/menu.d ] || [ ! -x /etc/init.d/rpcd ]; then
+        check_repo || return 1
+        pkg_install luci || return 1
+    fi
+    sh "$SCRIPT_DIR/luci-app-routewolf/install.sh" || return 1
+    msg "Open LuCI → Services → RouteWolf." "Откройте LuCI → Службы → RouteWolf."
+}
+
+install_luci_mode() {
+    if [ ! -x /etc/init.d/routewolf ] || [ ! -x /usr/sbin/rw ]; then
+        [ -z "$(uci changes firewall)" ] && [ -z "$(uci changes dhcp)" ] || {
+            msg "Save pending firewall and DNS changes first." "Сначала сохраните ожидающие изменения firewall и DNS."
+            return 1
+        }
+        ROUTEWOLF_SETUP_LUCI=1
+        TUNNEL=0
+        INSTALL_TOTAL_STEPS=8
+        INSTALL_STEP=0
+        check_repo || return 1
+        add_packages || return 1
+        add_mark || return 1
+        add_set || return 1
+        dnsmasqfull || return 1
+        dnsmasqconfdir || return 1
+        install_management_commands || return 1
+        add_routewolf update || return 1
+        install_stable_runtime || return 1
+        validate_routewolf_installation || return 1
+        write_installed_version
+    fi
+    install_luci_panel
+}
+
 # Choose installer language before any interactive menu.
-# Do not ask during non-interactive update mode.
-if [ "$1" != "--update" ] && [ "${ROUTEWOLF_UPDATE_ONLY:-0}" != "1" ]; then
+if [ "${1:-}" = --update ]; then
+    shift
+    exec sh "$SCRIPT_DIR/update.sh" "$@"
+fi
+if [ "${ROUTEWOLF_UPDATE_ONLY:-0}" = 1 ]; then
+    exec sh "$SCRIPT_DIR/update.sh" "$@"
+fi
+if [ "${1:-}" = --luci-panel ]; then
+    if [ ! -x /etc/init.d/routewolf ] || [ ! -x /usr/sbin/rw ]; then
+        msg "An installed RouteWolf runtime is required." "Сначала установите или обновите RouteWolf."
+        exit 1
+    fi
+    install_luci_panel
+    exit "$?"
+fi
+if [ "${1:-}" != --luci ]; then
     choose_language
 fi
 
@@ -6170,12 +6098,22 @@ msgc "$C_RED" "All actions performed here cannot be rolled back automatically." 
 printf "%b========================================%b\n" "$C_BLUE" "$C_RESET"
 echo ""
 
-migrate_legacy_paths
-
-if [ "$1" = "--update" ] || [ "${ROUTEWOLF_UPDATE_ONLY:-0}" = "1" ]; then
-    update_existing_installation
+if [ "$1" = --luci ]; then
+    install_luci_mode
     exit "$?"
 fi
+if [ "${FORCE_REINSTALL:-0}" != 1 ]; then
+    echo "1) $(prompt "Configure in the terminal" "Настроить в терминале")"
+    echo "2) $(prompt "Install for LuCI management" "Установить для управления через LuCI")"
+    printf '%s' "$(prompt "Setup [1]: " "Способ установки [1]: ")"
+    read -r SETUP_METHOD || SETUP_METHOD=
+    case "$SETUP_METHOD" in
+        2) install_luci_mode; exit "$?" ;;
+        1|'') ;;
+        *) msg "Choose 1 or 2." "Выберите 1 или 2."; exit 1 ;;
+    esac
+fi
+migrate_legacy_paths
 
 INSTALL_TOTAL_STEPS=13
 INSTALL_STEP=0

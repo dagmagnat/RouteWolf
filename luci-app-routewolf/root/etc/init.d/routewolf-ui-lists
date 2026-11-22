@@ -1,0 +1,11 @@
+#!/bin/sh /etc/rc.common
+START=18
+
+start() {
+    /usr/libexec/routewolf-ui/lists.sh boot
+}
+
+boot() {
+    start
+    /usr/libexec/routewolf-ui/schedule.sh keep
+}

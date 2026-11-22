@@ -17,7 +17,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from build_release import FILES, VERSION, NAME, runtime_files
+from build_release import FILES, MANIFEST, VERSION, NAME, runtime_files
 
 def call(*args, check=False):
     return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=check, timeout=35)
@@ -122,7 +122,7 @@ class StabilityTests(unittest.TestCase):
             write('/mockbin/'+name,MOCK,True)
         self.previous_path=os.environ['PATH'];os.environ['PATH']='/mockbin:'+self.previous_path
         self.bundle=Path('/tmp/test-runtime.tgz');shutil.copyfile(ROOT/f'releases/routewolf-v{VERSION}.tar.gz',self.bundle)
-        self.manifest=Path('/tmp/test-release.manifest');shutil.copyfile(ROOT/'releases/stable.manifest',self.manifest)
+        self.manifest=Path('/tmp/test-release.manifest');shutil.copyfile(MANIFEST,self.manifest)
 
     def tearDown(self):
         os.environ['PATH']=self.previous_path
@@ -371,6 +371,35 @@ class StabilityTests(unittest.TestCase):
         self.seed_release();r=self.updater('--code-auto');self.assertEqual(r.returncode,0,r.stdout)
         self.assertIn(f'/releases/download/v{VERSION}/routewolf-v{VERSION}.tar.gz',self.actions())
         self.assertEqual(Path('/etc/routewolf/runtime_version').read_text(),f'{VERSION}\n')
+
+    def test_opt_in_release_keeps_awg_dns_and_existing_schedules(self):
+        self.seed_release()
+        self.seed_lists()
+        write('/etc/config/network', "config interface 'awg0'\n\toption proto 'amneziawg'\n")
+        write('/etc/config/dhcp', "config dnsmasq\n\toption noresolv '0'\n")
+        write('/etc/routewolf/route.conf', "VPN_ROUTE_DEV='awg0'\n")
+        write('/etc/routewolf/watchdog.conf', "WATCHDOG_TYPE='awg'\nWATCHDOG_DEVICE='awg0'\n")
+        protected = [Path(path) for path in (
+            '/etc/config/network', '/etc/config/dhcp', '/etc/routewolf/route.conf',
+            '/etc/routewolf/watchdog.conf', '/etc/routewolf/user.conf',
+            '/etc/crontabs/root', '/etc/routewolf/lists/domains.lst', '/etc/routewolf/lists/ipv4.lst',
+        )]
+        for old in (58, 59):
+            with self.subTest(old=old):
+                write('/etc/routewolf/runtime_version', f'{old}\n')
+                jobs = '0 2 * * * /usr/sbin/routewolf-update.sh --lists-auto\n'
+                if old == 59:
+                    jobs += '0 3 * * 6 /usr/sbin/routewolf-update.sh --code-auto\n'
+                write('/etc/crontabs/root', jobs)
+                before = [path.read_bytes() for path in protected]
+                result = self.updater('--release', str(VERSION))
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(Path('/etc/routewolf/runtime_version').read_text(), f'{VERSION}\n')
+                self.assertEqual([path.read_bytes() for path in protected], before)
+        self.assertIn(f'/download/v{VERSION}/stable.manifest', self.actions())
+        self.assertNotIn('routewolf-luci', self.actions())
+        self.assertNotIn('https://lists.example/', self.actions())
+        self.assertNotIn('ifdown awg0', self.actions())
 
     def test_failed_release_is_not_automatically_retried(self):
         self.seed_release();write('/etc/routewolf/failed-runtime',f'{VERSION}\n')
@@ -692,7 +721,7 @@ printf '#!/bin/sh\\necho VERIFIED_REMOTE\\n' >"$out"
 
 class SourceChecks(unittest.TestCase):
     def test_release_bytes_match_manifest_and_source(self):
-        manifest=dict(line.split('=',1) for line in (ROOT/'releases/stable.manifest').read_text().splitlines())
+        manifest=dict(line.split('=',1) for line in MANIFEST.read_text().splitlines())
         data=(ROOT/f'releases/routewolf-v{VERSION}.tar.gz').read_bytes();self.assertEqual(hashlib.sha256(data).hexdigest(),manifest['archive_sha256'])
         self.assertEqual(hashlib.sha256((ROOT/'runtime/routewolf-stable-update.sh').read_bytes()).hexdigest(),manifest['agent_sha256'])
         with tarfile.open(fileobj=io.BytesIO(data),mode='r:gz') as t:

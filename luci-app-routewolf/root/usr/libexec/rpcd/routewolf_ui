@@ -1,0 +1,256 @@
+#!/bin/sh
+# rpcd executes this plugin as root. Only fixed init actions are exposed.
+. /usr/share/libubox/jshn.sh
+
+lists=/etc/init.d/routewolf
+updater=/usr/sbin/routewolf-stable-update.sh
+state=/etc/routewolf
+
+enabled() {
+    [ -x "$1" ] && "$1" enabled >/dev/null 2>&1
+}
+
+latest_handshake() {
+    case "$2" in amneziawg) utility=awg ;; wireguard) utility=wg ;; *) echo 0; return ;; esac
+    "$utility" show "$1" latest-handshakes 2>/dev/null |
+        awk '$2+0 > newest { newest=$2 } END { print newest+0 }'
+}
+
+interface_state() {
+    [ -n "$1" ] || { echo none; return; }
+    if [ "$1" = "$tunnel" ] && [ "$paused" = 1 ]; then echo paused; return; fi
+    flags=$(cat "/sys/class/net/$1/flags" 2>/dev/null)
+    if [ -z "$flags" ] || [ "$((flags & 1))" -eq 0 ]; then echo down; return; fi
+    if [ "$(cat /tmp/routewolf-tunnel-unhealthy 2>/dev/null)" = "$1" ]; then echo fallback; return; fi
+    if [ "$1" = rwsub0 ]; then
+        case "$(cat /var/run/routewolf-subscription/status 2>/dev/null)" in
+            'Proxy available') echo active ;;
+            'WAN fallback:'*) echo fallback ;;
+            *) echo waiting ;;
+        esac
+        return
+    fi
+    case "$2" in
+        wireguard|amneziawg)
+            timestamp=$3
+            if [ "$timestamp" -gt 0 ] && [ "$((now-timestamp))" -le 180 ]; then
+                echo active
+            else
+                echo waiting
+            fi
+            ;;
+        *) echo up ;;
+    esac
+}
+
+append_interface() {
+    json_add_object ''
+    json_add_string name "$1"
+    json_add_string protocol "$2"
+    json_add_string state "$(interface_state "$1" "$2" "$3")"
+    json_add_boolean selected "$(if [ "$1" = "$tunnel" ]; then echo 1; else echo 0; fi)"
+    json_close_object
+}
+
+status() {
+    json_init
+    version=$(head -c 80 "$state/installed_version" 2>/dev/null)
+    tunnel=$(sed -n "s/^VPN_ROUTE_DEV='\([a-zA-Z0-9_.-]*\)'$/\1/p" "$state/route.conf" 2>/dev/null | head -n 1)
+    mode=$(uci -q get routewolf_ui.ui.active_mode || echo routewolf)
+    paused=0
+    if [ -e /etc/routewolf-ui/paused-route.conf ] || [ -e /etc/routewolf-ui/paused-singbox ]; then
+        paused=1
+        tunnel=$(sed -n "s/^VPN_ROUTE_DEV='\([a-zA-Z0-9_.-]*\)'$/\1/p" /etc/routewolf-ui/paused-route.conf 2>/dev/null | head -n 1)
+    fi
+    if [ -f /etc/routewolf-subscription/mode ] && [ ! -e /etc/routewolf-ui/native-active ]; then
+        tunnel=rwsub0
+        mode=$(head -c 16 /etc/routewolf-subscription/mode)
+    fi
+
+    proto=
+    case "$tunnel" in
+        awg*) proto=amneziawg ;;
+        wg*) proto=wireguard ;;
+        tun*|tap*) proto=openvpn ;;
+        rwsub0|sbtun0) proto=singbox ;;
+        outline0) proto=outline ;;
+        '') mode=none ;;
+    esac
+
+    now=$(date +%s)
+    handshake=$(latest_handshake "$tunnel" "$proto")
+    selected_state=$(interface_state "$tunnel" "$proto" "$handshake")
+    read -r load _ </proc/loadavg
+    mem_used=$(awk '/^MemTotal:/ {total=$2} /^MemAvailable:/ {free=$2}
+                    END {if(total>0 && free>0) printf "%d", 100*(total-free)/total; else print -1}' /proc/meminfo)
+
+    json_add_string link_state "$selected_state"
+    json_add_string load "$load"
+    json_add_int ram "$mem_used"
+    json_add_array interfaces
+    if [ -n "$tunnel" ]; then
+        append_interface "$tunnel" "$proto" "$handshake"
+    fi
+    interfaces=$(uci -q show network |
+        sed -n "s/^network\.\([a-zA-Z0-9_]*\)\.proto='\(wireguard\|amneziawg\)'$/\1:\2/p" |
+        head -n 12)
+    for configured in $interfaces; do
+        name=${configured%:*}
+        protocol=${configured#*:}
+        [ "$name" != "$tunnel" ] || continue
+        append_interface "$name" "$protocol" "$(latest_handshake "$name" "$protocol")"
+    done
+    json_close_array
+
+    wan_device=$(ip -4 route show table main default 2>/dev/null |
+        awk '{for(i=1;i<NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+    code_auto=1
+    grep -qx 'AUTO_CODE_UPDATES=0' "$state/update.conf" 2>/dev/null && code_auto=0
+    dns_force=0
+    uci -q show firewall | grep -q "\.name='routewolf_force_dns'$" && dns_force=1
+    json_add_boolean paused "$paused"
+    json_add_boolean dns_force "$dns_force"
+    json_add_string active_profile "$(uci -q get routewolf_ui.ui.active_profile || :)"
+    json_add_string version "$version"
+    json_add_string tunnel "$tunnel"
+    json_add_string protocol "$proto"
+    json_add_string mode "$mode"
+    json_add_string wan_device "$wan_device"
+    json_add_int handshake "$handshake"
+    json_add_boolean project_auth "$(if [ -x "$lists" ]; then echo 1; else echo 0; fi)"
+    json_add_boolean tunnel_present "$(if [ -n "$tunnel" ] && [ -d "/sys/class/net/$tunnel" ]; then echo 1; else echo 0; fi)"
+    json_add_boolean watchdog_boot "$(if enabled /etc/init.d/routewolf-watchdog || enabled /etc/init.d/routewolf-subscription; then echo 1; else echo 0; fi)"
+    json_add_boolean lists_boot "$(if enabled "$lists"; then echo 1; else echo 0; fi)"
+    json_add_boolean updater_available "$(if [ -x "$updater" ]; then echo 1; else echo 0; fi)"
+    json_add_boolean code_auto "$code_auto"
+    schedule=$(/usr/libexec/routewolf-ui/schedule.sh status)
+    json_add_boolean lists_scheduled "${schedule%% *}"
+    json_add_boolean lists_schedule_available "${schedule#* }"
+    json_dump
+}
+
+configuration() {
+    method=$1
+    read -r request || [ -n "$request" ] || return 1
+    json_load "$request" 2>/dev/null || return 1
+    json_get_var requested action
+    case "$method:$requested" in
+        startup:enable|startup:disable)
+            [ -x "$lists" ] && "$lists" "$requested" >/dev/null 2>&1
+            ;;
+        code_updates:enable)
+            [ -x "$updater" ] && "$updater" on >/dev/null 2>&1
+            ;;
+        code_updates:disable)
+            [ -x "$updater" ] && "$updater" off >/dev/null 2>&1
+            ;;
+        list_schedule:enable|list_schedule:disable)
+            /usr/libexec/routewolf-ui/schedule.sh "$requested" >/dev/null 2>&1
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+library() (
+    read -r request || [ -n "$request" ] || return 1
+    json_load "$request" 2>/dev/null || return 1
+    json_get_var kind kind
+    json_get_var query query
+    json_get_var offset offset
+    json_get_var group group
+    json_get_var limit limit
+    case "$kind" in all|domains|ipv4|ipv6) ;; *) return 1 ;; esac
+    case "${group:-all}" in all|4pda|youtube|meta|telegram) ;; *) return 1 ;; esac
+    case "$offset" in ''|*[!0-9]*) return 1 ;; esac
+    case "${limit:-35}" in 35|150) ;; *) return 1 ;; esac
+    [ "${#offset}" -le 6 ] && [ "${#query}" -le 80 ] || return 1
+    page=$(mktemp /tmp/routewolf-library.XXXXXX) || return 1
+    trap 'rm -f "$page"' EXIT
+    set --
+    updated=0
+    revision=
+    for source in domains ipv4 ipv6; do
+        [ "$kind" = all ] || [ "$kind" = "$source" ] || continue
+        file="$state/lists/$source.lst"
+        [ -s "$file" ] || continue
+        set -- "$@" "$file"
+        mtime=$(date -r "$file" +%s 2>/dev/null || echo 0)
+        [ "$mtime" -le "$updated" ] || updated=$mtime
+        revision="$revision:$mtime:$(wc -c < "$file")"
+    done
+    if [ "$#" -gt 0 ]; then
+        LC_ALL=C awk -v group="${group:-all}" -v query="$query" -v offset="$offset" -v limit="${limit:-35}" \
+            -f /usr/libexec/routewolf-ui/library.awk "$@" > "$page" || return 1
+    else
+        echo 0 > "$page"
+    fi
+    json_init
+    json_add_int total "$(tail -n 1 "$page")"
+    json_add_int updated "$updated"
+    json_add_string revision "$revision"
+    json_add_array entries
+    while read -r kind item; do
+        [ -n "$item" ] || continue
+        json_add_object ''
+        json_add_string kind "$kind"
+        json_add_string value "$item"
+        json_close_object
+    done < "$page"
+    json_close_array
+    json_dump
+)
+
+job_status() {
+    path=/tmp/routewolf-ui-job
+    json_init
+    json_add_boolean running "$(if [ -d "$path/lock" ]; then echo 1; else echo 0; fi)"
+    json_add_string action "$(head -c 32 "$path/action" 2>/dev/null)"
+    json_add_string result "$(head -c 8 "$path/result" 2>/dev/null)"
+    json_add_string phase "$(head -c 24 "$path/phase" 2>/dev/null)"
+    json_add_string reason "$(head -c 32 "$path/reason" 2>/dev/null)"
+    json_dump
+}
+
+preflight() (
+    read -r request || [ -n "$request" ] || return 1
+    json_load "$request" 2>/dev/null || return 1
+    json_get_var profile profile
+    case "$profile" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
+    [ "$(uci -q get "routewolf_ui.$profile" || :)" = profile ] || return 1
+    protocol=$(uci -q get "routewolf_ui.$profile.protocol") || return 1
+    . /usr/libexec/routewolf-ui/dependencies.sh
+    missing=$(missing_components "$protocol") || return 1
+    json_init
+    json_add_string protocol "$protocol"
+    json_add_array missing
+    for component in $missing; do json_add_string '' "$component"; done
+    json_close_array
+    json_dump
+)
+
+job_start() {
+    read -r request || [ -n "$request" ] || return 1
+    json_load "$request" 2>/dev/null || return 1
+    json_get_var action action
+    json_get_var profile profile
+    /usr/libexec/routewolf-ui/jobs.sh "$action" "$profile" >/dev/null 2>&1
+}
+
+case "${1:-}:${2:-}" in
+    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
+    call:status) status ;;
+    call:job_status) job_status ;;
+    call:preflight) preflight ;;
+    call:library) library ;;
+    call:job)
+        if job_start; then printf '%s\n' '{"ok":true}'; else printf '%s\n' '{"ok":false}'; fi
+        ;;
+    call:startup|call:code_updates|call:list_schedule)
+        if configuration "$2"; then
+            printf '%s\n' '{"ok":true}'
+        else
+            printf '%s\n' '{"ok":false}'
+        fi
+        ;;
+    *) exit 1 ;;
+esac
