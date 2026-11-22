@@ -1867,6 +1867,15 @@ cleanup_existing_routing_config() {
     rm -f /usr/sbin/routewolf-watchdog.sh /usr/sbin/routewolf-awg-watchdog.sh
     rm -f /etc/routewolf/watchdog.conf
 
+    if [ -f /etc/routewolf-transport/managed-by-routewolf ]; then
+        /etc/init.d/routewolf-wg-transport stop >/dev/null 2>&1 || true
+        /etc/init.d/routewolf-wg-transport disable >/dev/null 2>&1 || true
+        rm -f /etc/init.d/routewolf-wg-transport /etc/routewolf-transport/managed-by-routewolf \
+            /etc/routewolf-transport/config.json /etc/routewolf-transport/transport
+        rmdir /etc/routewolf-transport 2>/dev/null || true
+        uci -q delete network.routewolf_transport_local
+    fi
+
     uci -q delete network.wg0
     uci -q delete network.awg0
     uci -q delete network.ovpn0
@@ -2930,6 +2939,17 @@ add_mark() {
     return 0
 }
 
+configure_openwrt_wireguard() (
+    umask 077
+    private_dir=$(mktemp -d /tmp/routewolf-wg-profile.XXXXXX) || exit 1
+    trap 'rm -rf "$private_dir"' EXIT
+    trap 'exit 1' HUP INT TERM
+    msg "Export the WireGuard for RouteWolf profile from Amnezia Control." \
+        "Экспортируйте профиль «WireGuard для RouteWolf» из Amnezia Control."
+    read_multiline_config "$private_dir/profile.conf"
+    sh "$SCRIPT_DIR/transport/install-openwrt.sh" "$private_dir/profile.conf"
+)
+
 add_tunnel() {
     clear_screen
     if [ "$FORCE_REINSTALL" = "1" ]; then
@@ -2940,6 +2960,7 @@ add_tunnel() {
     fi
     clear_screen
     ui_header "$(prompt "Select a tunnel" "Выберите туннель")"
+    WG_OPENWRT=0
     if is_ru; then
         printf "1) %bAmneziaWG / Amnezia WireGuard%b     %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "2) %bWireGuard%b                         %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
@@ -2948,6 +2969,7 @@ add_tunnel() {
         printf "5) %bOutline%b                           %b[тестовый режим, статический ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
         printf "6) %bОтмена / выход%b\n" "$C_RED" "$C_RESET"
         printf "7) %bПропустить настройку туннеля%b\n" "$C_YELLOW" "$C_RESET"
+        printf "8) %bWireGuard для OpenWrt%b\n" "$C_GREEN" "$C_RESET"
     else
         printf "1) %bAmneziaWG / Amnezia WireGuard%b     %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "2) %bWireGuard%b                         %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
@@ -2956,6 +2978,7 @@ add_tunnel() {
         printf "5) %bOutline%b                           %b[test mode, static ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
         printf "6) %bCancel / exit%b\n" "$C_RED" "$C_RESET"
         printf "7) %bSkip tunnel setup%b\n" "$C_YELLOW" "$C_RESET"
+        printf "8) %bWireGuard for OpenWrt%b\n" "$C_GREEN" "$C_RESET"
     fi
 
     while true; do
@@ -2970,7 +2993,8 @@ add_tunnel() {
             5) TUNNEL=outline; break ;;
             6) msgc "$C_RED" "Cancelled" "Отменено"; exit 1 ;;
             7) msgc "$C_YELLOW" "Skip tunnel setup" "Настройка туннеля пропущена"; TUNNEL=0; break ;;
-            *) msgc "$C_RED" "Choose 1, 2, 3, 4, 5, 6 or 7." "Выберите 1, 2, 3, 4, 5, 6 или 7." ;;
+            8) TUNNEL=wg; WG_OPENWRT=1; break ;;
+            *) msgc "$C_RED" "Choose 1–8." "Выберите 1–8." ;;
         esac
     done
 
@@ -2980,9 +3004,15 @@ add_tunnel() {
             msgc "$C_GREEN" "WireGuard is already installed" "WireGuard уже установлен"
         else
             msgc "$C_BLUE" "Installing WireGuard..." "Установка WireGuard..."
-            pkg_install wireguard-tools
+            pkg_install wireguard-tools || return 1
         fi
+    fi
 
+    if [ "$TUNNEL" = 'wg' ] && [ "$WG_OPENWRT" = 1 ]; then
+        configure_openwrt_wireguard || return 1
+        WG_MTU=$(uci -q get network.wg0.mtu) || return 1
+        route_vpn || return 1
+    elif [ "$TUNNEL" = 'wg' ]; then
         route_vpn
 
         ask_line "Enter the private key (from [Interface]):" "Введите PrivateKey (из [Interface]):" WG_PRIVATE_KEY

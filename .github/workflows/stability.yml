@@ -1,7 +1,7 @@
 name: RouteWolf stability
 on:
   push:
-    branches: [main, 'fix/**']
+    branches: [main, 'fix/**', wireguard-openwrt]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -12,6 +12,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Test WireGuard transport
+        run: go test transport/main.go transport/main_test.go
       - name: Verify immutable release against source and manifest
         run: |
           python3 tools/build_release.py --check
