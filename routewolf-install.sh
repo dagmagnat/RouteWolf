@@ -838,6 +838,16 @@ check_singbox_requirements() {
         echo "Router resources: flash total=${DISK_TOTAL_MB}MB, free=${DISK_FREE_MB}MB, RAM=${RAM_TOTAL_MB}MB"
     fi
 
+    if [ "${1:-}" = subscription ]; then
+        sb_min_free=40
+        if command -v sing-box >/dev/null 2>&1; then sb_min_free=12; fi
+        if [ "$DISK_FREE_MB" -ge "$sb_min_free" ] && [ "$RAM_TOTAL_MB" -ge 128 ]; then return 0; fi
+        msgc "$C_RED" \
+            "Sing-box subscriptions require 128MB RAM and at least ${sb_min_free}MB free flash on this setup." \
+            "Для подписок sing-box нужно 128 МБ RAM и не менее ${sb_min_free} МБ свободной flash при этой настройке."
+        return 1
+    fi
+
     # The official sing-box-tiny package is about 10 MB compressed and much larger
     # after installation. Keep a safety reserve for package extraction and upgrades.
     if [ "$DISK_TOTAL_MB" -lt 64 ] || [ "$DISK_FREE_MB" -lt 40 ] || [ "$RAM_TOTAL_MB" -lt 128 ]; then
@@ -1111,7 +1121,7 @@ EOF
 
 install_singbox_packages() {
     msgc "$C_BLUE" "Checking Sing-box/Outline requirements" "Проверка требований Sing-box/Outline"
-    check_singbox_requirements || return 1
+    check_singbox_requirements "${1:-}" || return 1
 
     if pkg_is_installed sing-box-tiny || pkg_is_installed sing-box || command -v sing-box >/dev/null 2>&1; then
         msgc "$C_GREEN" "Sing-box engine is already installed" "Движок Sing-box уже установлен"
@@ -1172,37 +1182,77 @@ configure_singbox_service() {
     return 0
 }
 
+configure_singbox_subscription() {
+    [ -f "$SCRIPT_DIR/subscription/install.sh" ] || {
+        msgc "$C_RED" "Run the installer from the complete RouteWolf archive." "Запустите установщик из полного архива RouteWolf."
+        return 1
+    }
+    if [ -z "${ROUTEWOLF_SUB_STAGE:-}" ]; then
+        ROUTEWOLF_SUB_STAGE=$(mktemp -d /tmp/routewolf-sub.XXXXXX) || return 1
+        trap 'rm -rf "$ROUTEWOLF_SUB_STAGE"' EXIT
+    fi
+    printf "%s" "$(prompt "HTTPS subscription URL: " "HTTPS-ссылка подписки: ")"
+    (
+        umask 077
+        if [ -t 0 ] && stty -echo 2>/dev/null; then
+            trap 'stty echo 2>/dev/null || true; printf "\n"' EXIT
+            trap 'exit 1' INT TERM HUP
+        fi
+        read -r SUB_SOURCE && [ -n "$SUB_SOURCE" ] &&
+            printf '%s\n' "$SUB_SOURCE" > "$ROUTEWOLF_SUB_STAGE/source"
+    ) || return 1
+    if ! sh "$SCRIPT_DIR/subscription/install.sh" download "$ROUTEWOLF_SUB_STAGE"; then
+        rm -f "$ROUTEWOLF_SUB_STAGE/source" "$ROUTEWOLF_SUB_STAGE/input"
+        return 1
+    fi
+    SUB_FORMAT=$("$ROUTEWOLF_SUB_STAGE/subscription" format "$ROUTEWOLF_SUB_STAGE/input") || return 1
+    install_singbox_packages subscription || return 1
+
+    while true; do
+        echo "1) $(prompt "Full: LAN internet via the first available server" "Full: интернет LAN через первый доступный сервер")"
+        echo "2) $(prompt "RouteWolf: selected traffic from RouteWolf lists" "RouteWolf: выборочно по спискам проекта")"
+        if [ "$SUB_FORMAT" = json ]; then
+            echo "3) $(prompt "JSON: use routing rules from the subscription" "JSON: использовать правила маршрутизации подписки")"
+        fi
+        echo "0) $(prompt "Back" "Назад")"
+        printf "%s" "$(prompt "Routing [1]: " "Маршрутизация [1]: ")"
+        read -r SUB_CHOICE || return 1
+        case "$SUB_CHOICE" in
+            ''|1) SUB_MODE=full ;;
+            2) SUB_MODE=routewolf ;;
+            3) [ "$SUB_FORMAT" = json ] || continue; SUB_MODE=json ;;
+            0) return 1 ;;
+            *) continue ;;
+        esac
+        if sh "$SCRIPT_DIR/subscription/install.sh" prepare "$ROUTEWOLF_SUB_STAGE" "$SUB_MODE"; then
+            break
+        fi
+        [ "$SUB_MODE" = json ] || return 1
+        msgc "$C_YELLOW" "JSON routing could not be imported. Choose a different mode or go back." "Правила JSON перенести не удалось. Выберите другой режим или вернитесь назад."
+    done
+    rm -f "$ROUTEWOLF_SUB_STAGE/input"
+    replace_tunnel_if_requested
+    TUNNEL=singbox-subscription
+    return 0
+}
+
 configure_singbox_menu() {
     msgc "$C_BLUE" "Sing-box setup" "Настройка Sing-box"
-    msgc "$C_YELLOW" "Safe mode: sing-box auto_route is OFF. RouteWolf will send only marked domains/IPs to sbtun0." "Безопасный режим: auto_route у sing-box выключен. RouteWolf отправляет в sbtun0 только отмеченные домены/IP."
     echo "1) $(prompt "Ordinary VLESS Reality link (static)" "Обычная ссылка VLESS Reality (статичная)")"
     echo "2) $(prompt "Subscription/JSON URL (auto-update every hour)" "Ссылка подписки/JSON (автообновление каждый час)")"
     echo "3) $(prompt "Cancel" "Отмена")"
     while true; do
-        printf "%s" "$(prompt "Choice [1]: " "Выбор [1]: ")"
-        read -r SB_MODE
-        SB_MODE=${SB_MODE:-1}
-        SB_KIND=""
-        SB_SOURCE=""
-        SB_AUTO="0"
-        SB_MINUTES="60"
+        printf "%s" "$(prompt "Choice [2]: " "Выбор [2]: ")"
+        read -r SB_MODE || return 1
+        SB_MODE=${SB_MODE:-2}
         case "$SB_MODE" in
             1)
                 printf "%s" "$(prompt "Paste vless:// link: " "Вставьте vless:// ссылку: ")"
-                read -r SB_SOURCE
-                SB_KIND="vless"
-                SB_AUTO="0"
+                read -r SB_SOURCE || return 1
                 ;;
             2)
-                printf "%s" "$(prompt "Paste subscription or JSON URL: " "Вставьте ссылку подписки или JSON URL: ")"
-                read -r SB_SOURCE
-                SB_KIND="subscription"
-                SB_AUTO="1"
-                printf "%s" "$(prompt "Update interval minutes [60]: " "Интервал обновления в минутах [60]: ")"
-                read -r SB_MINUTES
-                SB_MINUTES=${SB_MINUTES:-60}
-                case "$SB_MINUTES" in *[!0-9]*|'') SB_MINUTES="60" ;; esac
-                [ "$SB_MINUTES" -lt 15 ] 2>/dev/null && SB_MINUTES="15"
+                configure_singbox_subscription && return 0
+                continue
                 ;;
             3) return 1 ;;
             *) msgc "$C_RED" "Choose 1, 2 or 3." "Выберите 1, 2 или 3."; continue ;;
@@ -1225,15 +1275,10 @@ configure_singbox_menu() {
 
         msg "Source accepted: $(singbox_mask_secret "$SB_SOURCE")" "Источник принят: $(singbox_mask_secret "$SB_SOURCE")"
         install_singbox_packages || return 1
+        replace_tunnel_if_requested
         singbox_write_vless_config
-        singbox_save_source "$SB_KIND" "$SB_SOURCE" "$SB_AUTO" "$SB_MINUTES"
+        singbox_save_source vless "$SB_SOURCE" 0 60
         configure_singbox_service || return 1
-        if [ "$SB_AUTO" = "1" ]; then
-            sed -i '/routewolf-singbox-update/d' /etc/crontabs/root 2>/dev/null || true
-            echo "*/$SB_MINUTES * * * * /usr/sbin/routewolf-singbox-update.sh >/dev/null 2>&1" >> /etc/crontabs/root
-            /etc/init.d/cron restart >/dev/null 2>&1 || true
-            msgc "$C_GREEN" "Subscription auto-update enabled." "Автообновление подписки включено."
-        fi
         msgc "$C_GREEN" "Sing-box routing is configured via sbtun0." "Маршрутизация Sing-box настроена через sbtun0."
         return 0
     done
@@ -1813,7 +1858,10 @@ detect_existing_routing_config() {
     EXISTING_TUNNEL=""
     EXISTING_IFACE=""
 
-    if [ "$(uci -q get network.awg0.proto 2>/dev/null)" = "amneziawg" ]; then
+    if [ -f /etc/routewolf-subscription/mode ]; then
+        EXISTING_TUNNEL="singbox-subscription"
+        EXISTING_IFACE="rwsub0"
+    elif [ "$(uci -q get network.awg0.proto 2>/dev/null)" = "amneziawg" ]; then
         EXISTING_TUNNEL="awg"
         EXISTING_IFACE="awg0"
     elif [ "$(uci -q get network.wg0.proto 2>/dev/null)" = "wireguard" ]; then
@@ -1856,6 +1904,10 @@ detect_existing_routing_config() {
 
 cleanup_existing_routing_config() {
     msgc "$C_YELLOW" "Removing old project tunnel/routing config..." "Удаляю старый конфиг туннеля/маршрутизации проекта..."
+
+    if [ -x /etc/routewolf-subscription/manage ]; then
+        /etc/routewolf-subscription/manage remove || return 1
+    fi
 
     # Stop the old monitor first so it cannot restart a tunnel while it is being replaced.
     /etc/init.d/routewolf-watchdog stop >/dev/null 2>&1 || true
@@ -1938,7 +1990,10 @@ handle_existing_routing_config() {
             1)
                 TUNNEL="$EXISTING_TUNNEL"
                 [ -z "$TUNNEL" ] && TUNNEL=0
-                if [ "$TUNNEL" != "0" ]; then
+                if [ "$TUNNEL" = singbox-subscription ]; then
+                    SUB_MODE=$(cat /etc/routewolf-subscription/mode)
+                fi
+                if [ "$TUNNEL" != "0" ] && [ "$TUNNEL" != "singbox-subscription" ]; then
                     route_vpn
                     install_routewolf_watchdog
                 fi
@@ -1946,7 +2001,7 @@ handle_existing_routing_config() {
                 return 0
                 ;;
             2)
-                cleanup_existing_routing_config
+                REPLACE_TUNNEL=1
                 return 1
                 ;;
             3)
@@ -2950,11 +3005,18 @@ configure_openwrt_wireguard() (
     sh "$SCRIPT_DIR/transport/install-openwrt.sh" "$private_dir/profile.conf"
 )
 
+replace_tunnel_if_requested() {
+    if [ "${REPLACE_TUNNEL:-0}" = 1 ]; then
+        cleanup_existing_routing_config || exit 1
+        REPLACE_TUNNEL=0
+    fi
+}
+
 add_tunnel() {
     clear_screen
     if [ "$FORCE_REINSTALL" = "1" ]; then
         echo "Forced reinstall requested / Запрошена принудительная переустановка"
-        cleanup_existing_routing_config
+        REPLACE_TUNNEL=1
     elif handle_existing_routing_config; then
         return
     fi
@@ -2965,7 +3027,7 @@ add_tunnel() {
         printf "1) %bAmneziaWG / Amnezia WireGuard%b     %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "2) %bWireGuard%b                         %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "3) %bOpenVPN%b                           %b[тестируется]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
-        printf "4) %bSing-box%b                          %b[экспериментально, VLESS Reality]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "4) %bSing-box%b                          %b[VLESS и подписки]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
         printf "5) %bOutline%b                           %b[тестовый режим, статический ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
         printf "6) %bОтмена / выход%b\n" "$C_RED" "$C_RESET"
         printf "7) %bПропустить настройку туннеля%b\n" "$C_YELLOW" "$C_RESET"
@@ -2974,7 +3036,7 @@ add_tunnel() {
         printf "1) %bAmneziaWG / Amnezia WireGuard%b     %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "2) %bWireGuard%b                         %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "3) %bOpenVPN%b                           %b[testing]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
-        printf "4) %bSing-box%b                          %b[experimental, VLESS Reality]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        printf "4) %bSing-box%b                          %b[VLESS and subscriptions]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
         printf "5) %bOutline%b                           %b[test mode, static ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
         printf "6) %bCancel / exit%b\n" "$C_RED" "$C_RESET"
         printf "7) %bSkip tunnel setup%b\n" "$C_YELLOW" "$C_RESET"
@@ -2997,6 +3059,10 @@ add_tunnel() {
             *) msgc "$C_RED" "Choose 1–8." "Выберите 1–8." ;;
         esac
     done
+
+    if [ "$TUNNEL" != singbox ]; then
+        replace_tunnel_if_requested
+    fi
 
     if [ "$TUNNEL" = 'wg' ]; then
         msgc "$C_GREEN" "Configure WireGuard" "Настройка WireGuard"
@@ -3069,7 +3135,7 @@ add_tunnel() {
     if [ "$TUNNEL" = 'singbox' ]; then
         configure_singbox_menu || {
             msgc "$C_RED" "Sing-box setup cancelled" "Настройка Sing-box отменена"
-            TUNNEL=0
+            return 1
         }
     fi
 
@@ -3190,7 +3256,7 @@ add_tunnel() {
 
     fi
 
-    if [ "${TUNNEL:-0}" != "0" ]; then
+    if [ "${TUNNEL:-0}" != "0" ] && [ "$TUNNEL" != "singbox-subscription" ]; then
         install_routewolf_watchdog
     fi
 
@@ -3247,7 +3313,7 @@ remove_forwarding() {
 }
 
 add_zone() {
-    if [ "$TUNNEL" = "0" ]; then
+    if [ "$TUNNEL" = "0" ] || [ "$TUNNEL" = singbox-subscription ]; then
         printf "\033[32;1mZone setting skipped\033[0m\n"
         return 0
     fi
@@ -4687,7 +4753,10 @@ update_existing_installation() {
     # Detect existing tunnel only for the policy route helper.
     routewolf_apply_default_mtu_to_existing_wg_awg
 
-    if [ "$(uci -q get network.awg0.proto 2>/dev/null)" = "amneziawg" ]; then
+    if [ -f /etc/routewolf-subscription/mode ]; then
+        TUNNEL=singbox-subscription
+        SUB_MODE=$(cat /etc/routewolf-subscription/mode)
+    elif [ "$(uci -q get network.awg0.proto 2>/dev/null)" = "amneziawg" ]; then
         TUNNEL="awg"
         route_vpn
     elif [ "$(uci -q get network.wg0.proto 2>/dev/null)" = "wireguard" ]; then
@@ -4706,7 +4775,7 @@ update_existing_installation() {
         echo "Warning: no existing awg0/wg0/tun0 route config found. Lists/firewall will be updated, but tunnel route may need reinstall."
     fi
 
-    if [ -n "${TUNNEL:-}" ] && [ "$TUNNEL" != "0" ]; then
+    if [ -n "${TUNNEL:-}" ] && [ "$TUNNEL" != "0" ] && [ "$TUNNEL" != singbox-subscription ]; then
         install_routewolf_watchdog
     fi
 
@@ -4716,10 +4785,13 @@ update_existing_installation() {
     # LAN clients must use router dnsmasq. Many TVs ignore DHCP DNS and try
     # 8.8.8.8/1.1.1.1 directly, so RouteWolf would never see domains and
     # vpn_domains would stay empty for that device. Enable DNS interception on update.
-    dns_force_on >/dev/null 2>&1 || true
+    case "${SUB_MODE:-}" in
+        full|json) ;;
+        *) dns_force_on >/dev/null 2>&1 || true ;;
+    esac
     # If IPv6 routing is not explicitly enabled, suppress AAAA answers. TVs often
     # prefer IPv6 and bypass IPv4 domain-routing completely.
-    if [ "${IPV6_SUPPORT:-0}" != "1" ]; then
+    if [ "${IPV6_SUPPORT:-0}" != "1" ] && [ "${SUB_MODE:-}" != full ] && [ "${SUB_MODE:-}" != json ]; then
         uci set dhcp.@dnsmasq[0].filter_aaaa='1' >/dev/null 2>&1 || true
         remove_firewall_section_by_name ipset vpn_domains6 2>/dev/null || true
         remove_firewall_section_by_name ipset vpn_subnets6 2>/dev/null || true
@@ -4922,6 +4994,12 @@ add_routewolf() {
             remove_firewall_section_by_name rule mark_subnet6
             uci commit firewall
         fi
+    elif [ "${SUB_MODE:-}" = full ] || [ "${SUB_MODE:-}" = json ]; then
+        remove_firewall_section_by_name ipset vpn_domains6
+        remove_firewall_section_by_name rule mark_domains6
+        remove_firewall_section_by_name ipset vpn_subnets6
+        remove_firewall_section_by_name rule mark_subnet6
+        IPV6_URL=""
     else
         echo "IPv6 disabled: dnsmasq will filter AAAA answers / IPv6 отключён: dnsmasq будет фильтровать AAAA"
         uci set dhcp.@dnsmasq[0].filter_aaaa='1'
@@ -4937,7 +5015,10 @@ add_routewolf() {
     # Fresh installs also enable TV-safe DNS interception. Without this, many
     # Smart TV/Android TV devices may bypass dnsmasq and RouteWolf never sees
     # the domains that must fill vpn_domains.
-    dns_force_on >/dev/null 2>&1 || true
+    case "${SUB_MODE:-}" in
+        full|json) ;;
+        *) dns_force_on >/dev/null 2>&1 || true ;;
+    esac
 
     mkdir -p /etc/routewolf
     {
@@ -6069,7 +6150,7 @@ validate_routewolf_installation() {
         return 1
     fi
 
-    if ip route show default 2>/dev/null | grep -Eq ' dev (awg0|wg0|tun[0-9]+|sbtun0|outline0)( |$)'; then
+    if ip route show default 2>/dev/null | grep -Eq ' dev (awg0|wg0|tun[0-9]+|sbtun0|rwsub0|outline0)( |$)'; then
         msgc "$C_RED" "Unsafe VPN default route found in main table" "В основной таблице найден опасный маршрут по умолчанию через VPN"
         ip route show default 2>/dev/null || true
         return 1
@@ -6143,6 +6224,11 @@ run_step "$(prompt "Configuring lists and RouteWolf service" "Настройка
 run_step "$(prompt "Restarting network" "Перезапуск сети")" /etc/init.d/network restart || exit 1
 run_step "Stable runtime and rollback" install_stable_runtime || exit 1
 run_step "$(prompt "Final routing verification" "Финальная проверка маршрутизации")" validate_routewolf_installation || exit 1
+
+if [ -n "${ROUTEWOLF_SUB_STAGE:-}" ] && [ "$TUNNEL" = singbox-subscription ]; then
+    sh "$SCRIPT_DIR/subscription/install.sh" activate "$ROUTEWOLF_SUB_STAGE" || exit 1
+    msg "Subscription status: /etc/routewolf-subscription/controller status" "Проверка подписки: /etc/routewolf-subscription/controller status"
+fi
 
 ui_header "$(prompt "Installation completed" "Установка завершена")"
 write_installed_version
