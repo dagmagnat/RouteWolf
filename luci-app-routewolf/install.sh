@@ -26,10 +26,27 @@ chmod 600 "$config"
 
 put_file /usr/libexec/rpcd/routewolf_ui 755 "$here/root/usr/libexec/rpcd/routewolf_ui"
 put_file /usr/share/rpcd/acl.d/luci-app-routewolf.json 644 "$here/root/usr/share/rpcd/acl.d/luci-app-routewolf.json"
-put_file /usr/share/luci/menu.d/luci-app-routewolf.json 644 "$here/root/usr/share/luci/menu.d/luci-app-routewolf.json"
-put_file /www/luci-static/resources/view/routewolf/manage.js 644 "$here/htdocs/luci-static/resources/view/routewolf/manage.js"
-put_file /www/luci-static/resources/view/routewolf/manage.css 644 "$here/htdocs/luci-static/resources/view/routewolf/manage.css"
-put_file /www/luci-static/resources/view/routewolf/geo-catalog.js 644 "$here/htdocs/luci-static/resources/view/routewolf/geo-catalog.js"
+view_dir=/www/luci-static/resources/view/routewolf
+view_source="$here/htdocs/luci-static/resources/view/routewolf"
+# LuCI's resource query string only changes when LuCI itself is upgraded.
+view_hash=$(sha256sum "$view_source/manage.js")
+view_name="manage-$(printf '%.16s' "$view_hash")"
+put_file "$view_dir/manage.js" 644 "$view_source/manage.js"
+if [ "$(readlink "$view_dir/$view_name.js" || :)" != manage.js ]; then
+    ln -sfn manage.js "$view_dir/$view_name.js"
+fi
+put_file "$view_dir/manage.css" 644 "$view_source/manage.css"
+put_file "$view_dir/geo-catalog.js" 644 "$view_source/geo-catalog.js"
+menu_dir=/usr/share/luci/menu.d
+menu_stage=$(mktemp "$menu_dir/.routewolf.XXXXXX")
+trap 'rm -f "$menu_stage"' EXIT
+sed "s#routewolf/manage\"#routewolf/$view_name\"#" "$here/root$menu_dir/luci-app-routewolf.json" > "$menu_stage"
+put_file "$menu_dir/luci-app-routewolf.json" 644 "$menu_stage"
+rm -f "$menu_stage"
+trap - EXIT
+for view in "$view_dir"/manage-*.js; do
+    [ ! -L "$view" ] || [ "$view" = "$view_dir/$view_name.js" ] || rm -f "$view"
+done
 if [ -f "$here/../routewolf-uninstall.sh" ]; then
     put_file /usr/sbin/routewolf-uninstall.sh 755 "$here/../routewolf-uninstall.sh"
 fi
