@@ -10,6 +10,8 @@ fail() { printf '%s\n' "$*" >&2; exit 1; }
 
 download_helper() {
     stage=$1
+    manifest="$here/assets.txt"
+    if [ "${2:-}" = vless ]; then manifest="$here/assets-vless.txt"; fi
     case "$(uname -m)" in
         x86_64) arch=amd64 ;;
         aarch64) arch=arm64 ;;
@@ -23,8 +25,8 @@ download_helper() {
         *) fail "Unsupported CPU for RouteWolf sing-box subscriptions." ;;
     esac
     asset="routewolf-subscription-$arch.gz"
-    ref=$(sed -n '1p' "$here/assets.txt")
-    checksum=$(awk -v name="$asset" '$2 == name { print $1; exit }' "$here/assets.txt")
+    ref=$(sed -n '1p' "$manifest")
+    checksum=$(awk -v name="$asset" '$2 == name { print $1; exit }' "$manifest")
     printf '%s\n' "$ref" | grep -Eq '^[a-f0-9]{40}$' || fail "Invalid subscription asset manifest."
     printf '%s\n' "$checksum" | grep -Eq '^[a-f0-9]{64}$' || fail "No verified subscription helper for this CPU."
     url="https://raw.githubusercontent.com/dagmagnat/RouteWolf/$ref/$asset"
@@ -50,19 +52,24 @@ download_helper() {
 }
 
 download() {
-    download_helper "$1"
+    download_helper "$1" "${2:-}"
     "$stage/subscription" fetch "$stage/source" > "$stage/input"
 }
 
 prepare() {
     stage=$1
     mode=$2
+    profile_type=${3:-}
     printf '%s\n' "$mode" > "$stage/mode"
-    "$stage/subscription" render "$stage/input" "$stage/token" "$mode" "$stage/config.json" || return 3
     [ -c /dev/net/tun ] || fail "TUN device unavailable. Install kmod-tun for this kernel."
-    if ! sing-box check -c "$stage/config.json" >/dev/null 2>&1; then
-        printf '%s\n' 'The installed sing-box cannot load this subscription. Some transports require the full package or a newer engine.' >&2
-        return 4
+    if [ "$profile_type" = vless ]; then
+        printf '%s\n' xray > "$stage/engine"
+        "$stage/subscription" render-xray "$stage/input" "$stage/token" "$mode" "$stage/config.json" || return 3
+        xray run -test -c "$stage/config.json" >/dev/null 2>&1 || return 4
+    else
+        printf '%s\n' sing-box > "$stage/engine"
+        "$stage/subscription" render "$stage/input" "$stage/token" "$mode" "$stage/config.json" || return 3
+        sing-box check -c "$stage/config.json" >/dev/null 2>&1 || return 4
     fi
     cp "$here/controller.sh" "$stage/controller"
     cp "$here/install.sh" "$stage/manage"
@@ -116,7 +123,7 @@ activate() {
     rollback=yes
     trap '[ "$rollback" = no ] || remove' EXIT
     cp "$stage"/controller "$state/controller"
-    cp "$stage"/manage "$stage"/subscription "$stage"/config.json "$stage"/source "$stage"/mode "$stage"/token "$state/"
+    cp "$stage"/manage "$stage"/subscription "$stage"/config.json "$stage"/source "$stage"/mode "$stage"/token "$stage"/engine "$state/"
     chmod 700 "$state/controller" "$state/manage" "$state/subscription"
     cp "$here/engine.init" "$engine"
     cp "$here/monitor.init" "$monitor"
@@ -150,9 +157,9 @@ activate() {
 }
 
 case "${1:-}" in
-    download) download "$2" ;;
-    helper) download_helper "$2" ;;
-    prepare) prepare "$2" "$3" ;;
+    download) download "$2" "${3:-}" ;;
+    helper) download_helper "$2" "${3:-}" ;;
+    prepare) prepare "$2" "$3" "${4:-}" ;;
     activate) activate "$2" ;;
     remove) remove ;;
     *) exit 2 ;;

@@ -18,8 +18,12 @@ reason invalid-profile
 case "$profile" in ''|*[!a-zA-Z0-9_]*) fail 'Invalid profile ID.' ;; esac
 [ "$(uci -q get "routewolf_ui.$profile")" = profile ] || fail 'Profile not found.'
 [ -x /etc/init.d/routewolf ] || fail 'Install RouteWolf first.'
+protocol=$(uci -q get "routewolf_ui.$profile.protocol")
 mode=$(uci -q get "routewolf_ui.$profile.routing")
 case "$mode" in full|routewolf|json) ;; *) fail 'Invalid routing mode.' ;; esac
+if [ "$protocol" = vless ]; then
+    [ "$reserve" = no ] && [ "$mode" != json ] || fail 'Unsupported VLESS profile mode.'
+fi
 launch=$(uci -q get "routewolf_ui.$profile.launch" || echo boot)
 case "$launch" in boot|manual) ;; *) fail 'Invalid launch mode.' ;; esac
 for package in firewall network; do
@@ -34,12 +38,18 @@ native_changed=no
 completed=no
 was_active=no
 was_enabled=no
+managed_files='config.json source token mode controller subscription engine'
 cleanup() {
     if [ "$completed" != yes ]; then
         if [ "$created" = yes ]; then
             "$managed/manage" remove >/dev/null 2>&1 || :
         elif [ "$changed" = yes ]; then
-            for file in config.json source token mode controller; do cp "$backup/$file" "$managed/$file"; done
+            "$monitor" stop || :
+            "$engine" stop || :
+            for file in $managed_files previous.json candidate.json; do
+                if [ -e "$backup/$file" ]; then cp -p "$backup/$file" "$managed/$file"; else rm -f "$managed/$file"; fi
+            done
+            cp -p "$backup/engine.init" "$engine"
             if [ "$was_active" = yes ]; then
                 "$engine" start || :
                 "$monitor" start || :
@@ -69,17 +79,25 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 uci -q get "routewolf_ui.$profile.source" > "$stage/source"
 [ "$(wc -c < "$stage/source")" -le 8192 ] || fail 'Subscription URL or access key is too long.'
+if [ "$protocol" = vless ]; then
+    case "$(cat "$stage/source")" in https://*|vless://*) ;; *) fail 'Expected a VLESS link or HTTPS subscription.' ;; esac
+fi
 set -- --luci-profile
 . "$lib/installer-functions.sh"
-prepare_package_index singbox
+prepare_package_index "$protocol"
 reason package-install
-install_singbox_packages subscription
-[ -z "$(missing_components singbox)" ] || exit 1
+if [ "$protocol" = vless ]; then
+    missing=$(missing_components vless)
+    if [ -n "$missing" ]; then pkg_install $missing; fi
+else
+    install_singbox_packages subscription
+fi
+[ -z "$(missing_components "$protocol")" ] || exit 1
 phase download
 reason source-download
 case "$(cat "$stage/source")" in
     https://*)
-        sh "$lib/subscription/install.sh" download "$stage"
+        sh "$lib/subscription/install.sh" download "$stage" "$protocol"
         ;;
     ss://*)
         outline_parse_key "$(cat "$stage/source")" || fail 'Invalid Outline access key.'
@@ -96,23 +114,25 @@ case "$(cat "$stage/source")" in
         json_close_object
         json_close_array
         json_dump > "$stage/input"
-        sh "$lib/subscription/install.sh" helper "$stage"
+        sh "$lib/subscription/install.sh" helper "$stage" "$protocol"
         ;;
     vless://*|trojan://*|hysteria2://*|hy2://*)
         cp "$stage/source" "$stage/input"
-        sh "$lib/subscription/install.sh" helper "$stage"
+        sh "$lib/subscription/install.sh" helper "$stage" "$protocol"
         ;;
     *) fail 'Invalid access key or HTTPS subscription.' ;;
 esac
 phase config
 reason config-invalid
-if sh "$lib/subscription/install.sh" prepare "$stage" "$mode"; then
+if sh "$lib/subscription/install.sh" prepare "$stage" "$mode" "$protocol"; then
     :
 else
     result=$?
     case "$result" in
         3) reason subscription-format ;;
-        4) reason engine-config ;;
+        4)
+            if [ "$protocol" = vless ]; then reason xray-config; else reason engine-config; fi
+            ;;
     esac
     exit "$result"
 fi
@@ -126,19 +146,23 @@ fi
 if [ -e "$route" ]; then cp "$route" "$backup/route.conf"; fi
 if [ -e "$watchdog" ]; then cp "$watchdog" "$backup/watchdog.conf"; fi
 if [ -f "$managed/mode" ]; then
-    for file in config.json source token mode controller; do cp -p "$managed/$file" "$backup/$file"; done
     [ -e "$state/native-active" ] || was_active=yes
     "$monitor" enabled >/dev/null 2>&1 && was_enabled=yes
+    for file in $managed_files previous.json candidate.json; do
+        [ ! -e "$managed/$file" ] || cp -p "$managed/$file" "$backup/$file"
+    done
+    cp -p "$engine" "$backup/engine.init"
     changed=yes
     "$monitor" stop || :
     "$engine" stop || :
-    for file in config.json source token mode; do
-        cp "$stage/$file" "$managed/$file.new"
+    rm -f "$managed/previous.json" "$managed/candidate.json"
+    for file in $managed_files; do
+        cp -p "$stage/$file" "$managed/$file.new"
         mv "$managed/$file.new" "$managed/$file"
     done
-    cp "$stage/controller" "$managed/controller.new"
-    chmod 700 "$managed/controller.new"
-    mv "$managed/controller.new" "$managed/controller"
+    cp -p "$lib/subscription/engine.init" "$engine.new"
+    chmod 755 "$engine.new"
+    mv "$engine.new" "$engine"
     "$engine" start
     "$monitor" start
 else

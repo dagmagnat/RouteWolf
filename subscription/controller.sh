@@ -88,11 +88,26 @@ add element inet $table active_lans { "$lan" timeout 18s }
 EOF
 }
 
+proxy_health() {
+    if [ "$backend" != xray ]; then
+        "$helper" health "$state/config.json" "$state/token" "$1"
+        return "$?"
+    fi
+    local token code
+    token=$(cat "$state/token") || return 11
+    printf '%s\n' "$token" | grep -Eq '^[0-9a-f]{48}$' || return 11
+    code=$(printf 'proxy-user = "routewolf:%s"\n' "$token" |
+        curl --config - --proxy socks5h://127.0.0.1:18683 --noproxy '' \
+            --silent --max-time 5 --output /dev/null --write-out '%{http_code}' \
+            https://cp.cloudflare.com/generate_204) || return 10
+    [ "$code" = 204 ] || return 10
+}
+
 wait_ready() {
     attempts=0
     while [ "$attempts" -lt 6 ]; do
         if ip link show dev "$device" >/dev/null 2>&1 &&
-            "$helper" health "$state/config.json" "$state/token" ready; then
+            proxy_health ready; then
             return 0
         fi
         sleep 1
@@ -107,13 +122,19 @@ refresh() (
     trap 'rm -rf "$stage"' EXIT
     trap 'exit 1' HUP INT TERM
     "$helper" fetch "$state/source" > "$stage/input" || { log "Subscription download failed; keeping the previous configuration"; exit 1; }
-    "$helper" render "$stage/input" "$state/token" "$mode" "$stage/config.json" ||
+    render=render
+    [ "$backend" != xray ] || render=render-xray
+    "$helper" "$render" "$stage/input" "$state/token" "$mode" "$stage/config.json" ||
         { log "Subscription could not be imported; keeping the previous configuration"; exit 1; }
     cmp -s "$stage/config.json" "$state/config.json" && exit 0
-    if ! sing-box check -c "$stage/config.json" > /dev/null 2>&1; then
-        log "Updated configuration was rejected by sing-box; keeping the previous configuration"
+    if [ "$backend" = xray ]; then
+        xray run -test -c "$stage/config.json" >/dev/null 2>&1
+    else
+        sing-box check -c "$stage/config.json" >/dev/null 2>&1
+    fi || {
+        log "Updated configuration was rejected by the active engine; keeping the previous configuration"
         exit 1
-    fi
+    }
 
     mv "$stage/config.json" "$state/candidate.json"
 )
@@ -141,6 +162,8 @@ monotonic_seconds() { cut -d. -f1 /proc/uptime; }
 
 monitor() {
     mode=$(cat "$state/mode") || exit 1
+    backend=sing-box
+    if grep -qx xray "$state/engine" 2>/dev/null; then backend=xray; fi
     mkdir -p "$runtime"
     remove_routing
     if [ -f "$state/previous.json" ]; then
@@ -175,7 +198,7 @@ monitor() {
         fi
         status=11
         if ip link show dev "$device" >/dev/null 2>&1; then
-            "$helper" health "$state/config.json" "$state/token" select
+            proxy_health select
             status=$?
         fi
         if [ "$status" -eq 0 ] && renew_lease; then
@@ -185,7 +208,7 @@ monitor() {
             case "$status" in
                 10) result "WAN fallback: no reachable proxy" ;;
                 11)
-                    result "WAN fallback: sing-box unavailable"
+                    result "WAN fallback: $backend unavailable"
                     now=$(monotonic_seconds)
                     if [ "$now" -ge "$next_restart" ]; then
                         "$engine" restart >/dev/null 2>&1 || true

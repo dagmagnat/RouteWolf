@@ -11,6 +11,7 @@ const protocols = {
     wireguard: 'WireGuard',
     openvpn: 'OpenVPN',
     singbox: 'sing-box',
+    vless: 'vless',
     outline: 'Outline'
 };
 
@@ -45,6 +46,7 @@ const jobErrors = {
     'config-invalid': _('Профиль не прошёл проверку формата или содержит неподдерживаемые параметры.'),
     'subscription-format': _('Подписка загружена. В ней не удалось найти совместимые серверы или прочитать её правила. Проверьте формат подписки и выбранную маршрутизацию.'),
     'engine-config': _('Установленный sing-box отклонил конфигурацию. Проверьте поддержку протокола и транспорта в этой версии.'),
+    'xray-config': _('Xray отклонил конфигурацию VLESS. Проверьте параметры ссылки и поддержку TUN в установленной версии xray-core.'),
     'tunnel-start': _('Интерфейс туннеля не удалось запустить.'),
     'tunnel-unreachable': _('Туннель запустился, но проверка связи не прошла.'),
     'route-unavailable': _('Туннель поднят, но маршрут через него недоступен.'),
@@ -579,7 +581,7 @@ function listPanel(result, save, action) {
 function profileForm() {
     const map = new form.Map('routewolf_ui');
     const section = map.section(form.GridSection, 'profile', _('Профили туннелей'),
-        _('Из панели можно активировать AmneziaWG, WireGuard, OpenVPN, sing-box и Outline.'));
+        _('Из панели можно активировать AmneziaWG, WireGuard, OpenVPN, sing-box, vless и Outline.'));
     section.anonymous = true;
     section.addremove = true;
     section.addbtntitle = _('Добавить профиль');
@@ -626,6 +628,7 @@ function profileForm() {
 
     option = section.option(form.Value, 'source', _('Ссылка на подписку или узел'));
     option.depends('protocol', 'singbox');
+    option.depends('protocol', 'vless');
     option.depends('protocol', 'outline');
     option.password = true;
     option.rmempty = false;
@@ -634,6 +637,9 @@ function profileForm() {
         const protocol = this.section.getOption('protocol').formvalue(sectionId);
         if (protocol === 'outline')
             return (/^ss:\/\/\S+$/.test(value) && value.length <= 8192) || _('Введите ссылку ss://.');
+        if (protocol === 'vless')
+            return (/^(vless|https):\/\/\S+$/.test(value) && value.length <= 8192) ||
+                _('Введите ссылку vless:// или HTTPS-подписку со ссылками VLESS.');
         return (/^(https|vless|trojan|hysteria2|hy2):\/\/\S+$/.test(value) && value.length <= 8192) ||
             _('Введите HTTPS-ссылку подписки или ссылку на узел.');
     };
@@ -820,13 +826,13 @@ return view.extend({
         backupSelect.addEventListener('change', updateBackupButton);
         function updateProfiles() {
             const profiles = uci.sections(settings, 'profile').filter(section =>
-                ['wireguard', 'amneziawg', 'openvpn', 'singbox', 'outline'].includes(section.protocol));
+                Object.hasOwn(protocols, section.protocol));
             profileSelect.replaceChildren(...profiles.map(section => E('option', {
                 value: section['.name'], selected: section['.name'] === result.active_profile || null
             }, [section.name])));
             connect.disabled = !profiles.length || result.paused || !result.project_auth;
-            const eligible = profiles.filter(section =>
-                section['.name'] !== result.active_profile || section['.name'] === result.backup_profile);
+            const eligible = profiles.filter(section => section.protocol !== 'vless' &&
+                (section['.name'] !== result.active_profile || section['.name'] === result.backup_profile));
             backupSelect.replaceChildren(E('option', { value: '' }, [_('Без резерва')]), ...eligible.map(section =>
                 E('option', { value: section['.name'], selected: section['.name'] === result.backup_profile || null },
                     [section.name])));

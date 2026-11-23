@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test subscription formats and priority failover
-        run: go test -race subscription/main.go subscription/compile.go subscription/compile_test.go
+        run: go test -race subscription/main.go subscription/compile.go subscription/vless.go subscription/compile_test.go subscription/vless_test.go
       - name: Verify subscription routing and WAN fallback with real packets
         run: |
           sudo apt-get update -qq

@@ -38,6 +38,11 @@ missing_components() {
             present sing-box || printf '%s\n' sing-box-tiny
             [ -c /dev/net/tun ] || printf '%s\n' kmod-tun
             ;;
+        vless)
+            present xray || printf '%s\n' xray-core
+            present curl || printf '%s\n' curl ca-bundle
+            [ -c /dev/net/tun ] || printf '%s\n' kmod-tun
+            ;;
         *) return 2 ;;
     esac
 }

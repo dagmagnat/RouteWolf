@@ -346,7 +346,7 @@ case "${1:-}" in
     activate)
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
         case "$(uci -q get "routewolf_ui.$2.protocol" || :)" in
-            singbox|outline) exec "$lib/singbox.sh" "$2" ;;
+            singbox|vless|outline) exec "$lib/singbox.sh" "$2" ;;
         esac
         native_profile "$2"
         ;;

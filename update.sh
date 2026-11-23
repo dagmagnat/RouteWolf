@@ -73,8 +73,8 @@ case "$version" in ''|0*|*[!0-9]*) exit 1 ;; esac
 release="$base/download/v$version"
 current=$(cat "$state/runtime_version" 2>/dev/null || :)
 if [ "$requested" = 60 ] && { [ "$panel" = 1 ] || [ "$current" != "$version" ]; }; then
-    archive="routewolf-luci-v$version-r3.tar.gz"
-    fetch "$mirrors/luci-v$version-r3.manifest" "$work/luci.manifest" 4096 &&
+    archive="routewolf-luci-v$version-r4.tar.gz"
+    fetch "$mirrors/luci-v$version-r4.manifest" "$work/luci.manifest" 4096 &&
         [ "$(field format "$work/luci.manifest")" = 1 ] &&
         [ "$(field version "$work/luci.manifest")" = "$version" ] &&
         [ "$(field luci_archive "$work/luci.manifest")" = "$archive" ] ||

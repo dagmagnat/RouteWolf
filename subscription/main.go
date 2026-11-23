@@ -281,7 +281,7 @@ func run(args []string) (int, error) {
 		}
 		_, err = fmt.Fprintln(os.Stdout, format)
 		return 1, err
-	case len(args) == 5 && args[0] == "render":
+	case len(args) == 5 && (args[0] == "render" || args[0] == "render-xray"):
 		data, err := readFile(args[1], maxSubscription)
 		if err != nil {
 			return 1, err
@@ -290,11 +290,18 @@ func run(args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		result, err := compile(data, args[3], strings.TrimSpace(string(key)))
+		token := strings.TrimSpace(string(key))
+		var rendered object
+		if args[0] == "render-xray" {
+			rendered, err = compileXray(data, args[3], token)
+		} else {
+			result, compileErr := compile(data, args[3], token)
+			rendered, err = result.Config, compileErr
+		}
 		if err != nil {
 			return 1, err
 		}
-		config, err := json.MarshalIndent(result.Config, "", "  ")
+		config, err := json.MarshalIndent(rendered, "", "  ")
 		if err != nil {
 			return 1, err
 		}

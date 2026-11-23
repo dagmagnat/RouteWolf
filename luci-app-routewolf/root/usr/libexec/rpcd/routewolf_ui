@@ -72,7 +72,10 @@ status() {
         awg*) proto=amneziawg ;;
         wg*) proto=wireguard ;;
         tun*|tap*) proto=openvpn ;;
-        rwsub0|sbtun0) proto=singbox ;;
+        rwsub0)
+            if grep -qx xray /etc/routewolf-subscription/engine 2>/dev/null; then proto=vless; else proto=singbox; fi
+            ;;
+        sbtun0) proto=singbox ;;
         outline0) proto=outline ;;
         '') mode=none ;;
     esac
