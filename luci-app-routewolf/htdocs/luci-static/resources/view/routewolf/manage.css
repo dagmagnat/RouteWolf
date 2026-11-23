@@ -132,9 +132,14 @@
     width:100%; min-width:0; min-height:39px; margin:0; box-sizing:border-box;
 }
 .rw-geo-modal .rw-geo-actions > button { text-align:center; white-space:normal; }
+.rw-geo-modal .rw-geo-fields > select {
+    padding-inline-end:2.25rem; background-position:right .9rem center;
+}
+.rw-geo-modal .rw-geo-fields > select:dir(rtl) { background-position:left .9rem center; }
+.rw-geo-modal .rw-geo-fields > input[type="search"] { padding-inline-end:.9rem; }
 .rw-geo-modal .rw-geo-results { max-height:min(32dvh,240px); overflow:auto; }
-.rw-geo-modal .rw-geo-results label { display:flex; align-items:center; gap:8px; padding:6px 2px; cursor:pointer; }
-.rw-geo-modal .rw-geo-results input { flex:none; margin:0; }
+.rw-geo-modal .rw-geo-results label { display:flex; align-items:center; gap:10px; padding:6px 10px; cursor:pointer; }
+.rw-geo-modal .rw-geo-results input[type="checkbox"] { position:static; flex:none; margin:0; }
 .rw-geo-modal .rw-geo-results span { overflow-wrap:anywhere; }
 .rw-geo-modal .rw-geo-results small { margin-inline-start:auto; opacity:.7; }
 .rw-geo-modal .rw-install-error { white-space:pre-line; overflow-wrap:anywhere; }
@@ -190,15 +195,18 @@
 #modal_overlay #cbi-routewolf_ui [data-name="source"] .control-group > input { flex:1 1 0; min-width:0; }
 #modal_overlay #cbi-routewolf_ui [data-name="source"] .control-group > button { flex:none; margin:0; }
 @media (min-width:721px) {
-    /* Keep the DNS help on its own row and align the title with the add field. */
-    #modal_overlay #cbi-routewolf_ui .cbi-value[data-name="dns"] {
-        --rw-dns-input-height:2.75rem;
+    /* Keep help on its own row so a wrapping hint does not shift the title. */
+    #modal_overlay #cbi-routewolf_ui .cbi-value:is([data-name="dns"],[data-name="routing"]) {
         grid-template-rows:auto auto; row-gap:0;
     }
-    #modal_overlay #cbi-routewolf_ui [data-name="dns"] > .cbi-value-field {
+    #modal_overlay #cbi-routewolf_ui :is([data-name="dns"],[data-name="routing"]) > .cbi-value-field {
         grid-area:1 / 2 / span 2;
         display:grid; grid-template-rows:subgrid;
     }
+    #modal_overlay #cbi-routewolf_ui [data-name="routing"] > .cbi-value-title {
+        grid-area:1 / 1; align-self:center;
+    }
+    #modal_overlay #cbi-routewolf_ui [data-name="dns"] { --rw-dns-input-height:2.75rem; }
     #modal_overlay #cbi-routewolf_ui [data-name="dns"] > .cbi-value-title {
         grid-area:1 / 1; align-self:end;
         display:flex; align-items:center; min-height:var(--rw-dns-input-height); line-height:1.25;
