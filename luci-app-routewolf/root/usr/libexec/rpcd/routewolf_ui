@@ -76,6 +76,16 @@ status() {
         outline0) proto=outline ;;
         '') mode=none ;;
     esac
+    case "$proto" in
+        amneziawg|wireguard)
+            if [ ! -d "/sys/class/net/$tunnel" ] && [ "$(uci -q get "network.$tunnel.proto" || :)" != "$proto" ]; then
+                iface=$(sed -n "s/^WATCHDOG_UCI_IFACE='\([a-zA-Z0-9_-]*\)'$/\1/p" "$state/watchdog.conf" 2>/dev/null | head -n 1)
+                if [ -z "$iface" ] || [ "$(uci -q get "network.$iface.proto" || :)" != "$proto" ]; then
+                    tunnel= proto= mode=none paused=0
+                fi
+            fi
+            ;;
+    esac
 
     now=$(date +%s)
     handshake=$(latest_handshake "$tunnel" "$proto")

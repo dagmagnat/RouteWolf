@@ -31,7 +31,9 @@ for config in network firewall dhcp openvpn; do
     [ -z "$(uci -q changes "$config")" ] || { echo "Unsaved UCI changes in $config; save or revert them first" >&2; exit 1; }
 done
 locks=''
+set_batch=
 cleanup() {
+    [ -z "$set_batch" ] || rm -f "$set_batch"
     for lock in $locks; do rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || true; done
 }
 trap cleanup EXIT
@@ -116,6 +118,20 @@ fi
 # Shared dnsmasq confdir, DNS servers, AAAA policy and VPN zones are preserved.
 rm -f /tmp/dnsmasq.d/domains.lst /tmp/lst/ipv4.lst /tmp/lst/ipv6.lst
 fw4 reload || { echo 'Firewall reload failed; backup retained' >&2; exit 1; }
+# fw4 reload flushes rules but can retain unreferenced sets. A later install
+# cannot change the type of an orphan left over from an older RouteWolf.
+set_batch=$(mktemp /tmp/routewolf-uninstall-sets.XXXXXX) || exit 1
+for name in vpn_domains vpn_domains6 vpn_domains_internal vpn_subnets vpn_subnets6; do
+    nft -t list set inet fw4 "$name" >/dev/null 2>&1 || continue
+    printf 'delete set inet fw4 %s\n' "$name" >> "$set_batch" || exit 1
+done
+if [ -s "$set_batch" ]; then
+    # A remaining rule referencing any of these sets makes the whole dry run fail.
+    nft -c -f "$set_batch" && nft -f "$set_batch" || {
+        echo 'Could not remove the remaining RouteWolf nftables sets; backup retained' >&2
+        exit 1
+    }
+fi
 /etc/init.d/dnsmasq restart || { echo 'DNS restart failed; backup retained' >&2; exit 1; }
 for service in routewolf getdomains routewolf-route routewolf-watchdog routewolf-awg-watchdog vpnroute; do
     rm -f "/etc/init.d/$service"

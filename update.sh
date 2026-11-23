@@ -3,6 +3,7 @@
 set -eu
 umask 077
 base=https://github.com/dagmagnat/RouteWolf/releases
+mirrors=https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/releases
 agent=/usr/sbin/routewolf-stable-update.sh
 state=/etc/routewolf
 mode=check
@@ -62,6 +63,7 @@ trap 'exit 1' HUP INT TERM
 
 manifest="$base/latest/download/stable.manifest"
 [ -z "$requested" ] || manifest="$base/download/v$requested/stable.manifest"
+[ "$requested" != 60 ] || manifest="$mirrors/v60.manifest"
 fetch "$manifest" "$work/manifest" 4096 ||
     { echo 'Release unavailable; existing project retained.' >&2; exit 1; }
 [ "$(field format)" = 1 ] || exit 1
@@ -70,7 +72,23 @@ case "$version" in ''|0*|*[!0-9]*) exit 1 ;; esac
 [ "${#version}" -le 6 ] && [ "${requested:-$version}" = "$version" ] || exit 1
 release="$base/download/v$version"
 current=$(cat "$state/runtime_version" 2>/dev/null || :)
-if [ -z "$requested" ] || [ "$current" != "$version" ]; then
+if [ "$requested" = 60 ] && { [ "$panel" = 1 ] || [ "$current" != "$version" ]; }; then
+    archive="routewolf-luci-v$version-r3.tar.gz"
+    fetch "$mirrors/luci-v$version-r3.manifest" "$work/luci.manifest" 4096 &&
+        [ "$(field format "$work/luci.manifest")" = 1 ] &&
+        [ "$(field version "$work/luci.manifest")" = "$version" ] &&
+        [ "$(field luci_archive "$work/luci.manifest")" = "$archive" ] ||
+        { echo 'LuCI release manifest unavailable or invalid.' >&2; exit 1; }
+fi
+if [ "$requested" = 60 ] && [ "$current" != "$version" ]; then
+    runtime="routewolf-v$version.tar.gz"
+    [ "$(field archive)" = "$runtime" ] &&
+        fetch "$mirrors/routewolf-migrate-v$version-r3.sh" "$work/agent" 131072 &&
+        verify upgrade_agent_sha256 "$work/agent" "$work/luci.manifest" && sh -n "$work/agent" &&
+        fetch "$mirrors/$runtime" "$work/runtime.tgz" 1048576 &&
+        verify archive_sha256 "$work/runtime.tgz" ||
+        { echo 'Could not download or verify the v60 runtime; existing project retained.' >&2; exit 1; }
+elif [ -z "$requested" ] || [ "$current" != "$version" ]; then
     fetch "$release/routewolf-stable-update.sh" "$work/agent" 131072 &&
         verify agent_sha256 "$work/agent" && sh -n "$work/agent" || exit 1
 fi
@@ -81,19 +99,19 @@ if [ -z "$requested" ]; then
 fi
 
 if [ "$panel" = 1 ]; then
-    archive="routewolf-luci-v$version-r2.tar.gz"
-    fetch "$release/luci-v$version-r2.manifest" "$work/luci.manifest" 4096 &&
-        [ "$(field format "$work/luci.manifest")" = 1 ] &&
-        [ "$(field version "$work/luci.manifest")" = "$version" ] &&
-        [ "$(field luci_archive "$work/luci.manifest")" = "$archive" ] &&
-        fetch "$release/$archive" "$work/luci.tar.gz" 1048576 &&
-        verify luci_sha256 "$work/luci.tar.gz" "$work/luci.manifest" || exit 1
+    fetch "$mirrors/$archive" "$work/luci.tar.gz" 1048576 &&
+        verify luci_sha256 "$work/luci.tar.gz" "$work/luci.manifest" ||
+        { echo 'Could not download or verify the LuCI panel; existing project retained.' >&2; exit 1; }
     mkdir "$work/luci"
     tar -xzf "$work/luci.tar.gz" -C "$work/luci"
     sh -n "$work/luci/routewolf-install.sh"
 fi
 if [ "$current" != "$version" ]; then
-    sh "$work/agent" --release "$version"
+    if [ "$requested" = 60 ]; then
+        sh "$work/agent" --release-local "$version" "$work/runtime.tgz" "$work/manifest"
+    else
+        sh "$work/agent" --release "$version"
+    fi
 fi
 [ "$(cat "$state/runtime_version" 2>/dev/null)" = "$version" ] ||
     { echo 'Runtime has not reached the requested release; retry the update.' >&2; exit 1; }

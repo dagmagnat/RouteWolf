@@ -14,8 +14,10 @@ NAME = re.search(r'^PROJECT_VERSION="([a-zA-Z0-9._-]+)"$', (ROOT / 'routewolf-in
 RELEASES = ROOT / 'releases'
 MANIFEST = RELEASES / (f'v{VERSION}.manifest' if VERSION >= 60 else 'stable.manifest')
 PANEL = RELEASES / f'routewolf-luci-v{VERSION}.tar.gz'
-PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r2.tar.gz' if VERSION == 60 else None
-PANEL_MANIFEST = RELEASES / 'luci-v60-r2.manifest' if VERSION == 60 else None
+PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r3.tar.gz' if VERSION == 60 else None
+PANEL_MANIFEST = RELEASES / 'luci-v60-r3.manifest' if VERSION == 60 else None
+MIGRATION_AGENT = RELEASES / 'routewolf-migrate-v60-r3.sh' if VERSION == 60 else None
+AGENT_PATH = 'usr/sbin/routewolf-stable-update.sh'
 FILES = (
     'etc/init.d/routewolf', 'etc/init.d/routewolf-watchdog', 'etc/init.d/routewolf-route',
     'etc/init.d/getdomains', 'etc/init.d/vpnroute',
@@ -54,7 +56,7 @@ def runtime_files():
 
 def panel_files():
     app = ROOT / 'luci-app-routewolf'
-    paths = [ROOT / 'routewolf-install.sh', app / 'install.sh', app / 'uninstall.sh']
+    paths = [ROOT / 'routewolf-install.sh', ROOT / 'routewolf-uninstall.sh', app / 'install.sh', app / 'uninstall.sh']
     paths.extend(p for directory in ('root', 'htdocs') for p in (app / directory).rglob('*') if p.is_file())
     paths.extend(ROOT / 'subscription' / p for p in ('install.sh', 'controller.sh', 'engine.init', 'monitor.init', 'assets.txt'))
     return {p.relative_to(ROOT).as_posix(): p.read_bytes().replace(b'\r\n', b'\n') for p in paths}
@@ -69,14 +71,24 @@ def verify_archive(path, expected):
             assert archive.extractfile(member).read() == expected[member.name]
 
 
+def published_runtime_files(archive_path):
+    expected = runtime_files()
+    if MIGRATION_AGENT is not None:
+        # These v60 files were published before the separately revisioned LuCI update.
+        with tarfile.open(archive_path, 'r:gz') as archive:
+            for path in (AGENT_PATH, 'usr/sbin/routewolf-uninstall.sh'):
+                expected[path] = archive.extractfile('payload/' + path).read()
+    return expected
+
+
 def verify_existing():
     archive_path = RELEASES / f'routewolf-v{VERSION}.tar.gz'
     fields = dict(line.split('=', 1) for line in MANIFEST.read_text(encoding='utf-8').splitlines())
     assert fields['format'] == '1' and fields['version'] == str(VERSION)
     assert fields['name'] == NAME and fields['archive'] == archive_path.name
     assert hashlib.sha256(archive_path.read_bytes()).hexdigest() == fields['archive_sha256']
-    assert hashlib.sha256((ROOT / 'runtime/routewolf-stable-update.sh').read_bytes()).hexdigest() == fields['agent_sha256']
-    expected = {'payload/' + path: data for path, data in runtime_files().items()}
+    expected = {'payload/' + path: data for path, data in published_runtime_files(archive_path).items()}
+    assert hashlib.sha256(expected['payload/' + AGENT_PATH]).hexdigest() == fields['agent_sha256']
     verify_archive(archive_path, expected)
     if VERSION >= 60:
         assert fields['luci_archive'] == PANEL.name
@@ -88,6 +100,9 @@ def verify_existing():
             assert ui['format'] == '1' and ui['version'] == str(VERSION)
             assert ui['luci_archive'] == PANEL_UPDATE.name
             assert ui['luci_sha256'] == hashlib.sha256(PANEL_UPDATE.read_bytes()).hexdigest()
+            bridge = MIGRATION_AGENT.read_bytes()
+            assert ui['upgrade_agent_sha256'] == hashlib.sha256(bridge).hexdigest()
+            assert bridge == (ROOT / 'runtime/routewolf-stable-update.sh').read_bytes()
             verify_archive(PANEL_UPDATE, panel_files())
     print(f'Verified immutable v{VERSION}: manifest, archive and {len(expected)} source files agree')
 
@@ -137,9 +152,12 @@ def build_panel_update():
         raise SystemExit('This source has no separate LuCI update.')
     content = archive_content(panel_files())
     PANEL_UPDATE.write_bytes(content)
+    bridge = (ROOT / 'runtime/routewolf-stable-update.sh').read_bytes()
+    MIGRATION_AGENT.write_bytes(bridge)
     PANEL_MANIFEST.write_text(
         f'format=1\nversion={VERSION}\nluci_archive={PANEL_UPDATE.name}\n'
-        f'luci_sha256={hashlib.sha256(content).hexdigest()}\n',
+        f'luci_sha256={hashlib.sha256(content).hexdigest()}\n'
+        f'upgrade_agent_sha256={hashlib.sha256(bridge).hexdigest()}\n',
         encoding='utf-8', newline='\n',
     )
     print(f'Built {PANEL_UPDATE.name}: {len(content)} bytes')

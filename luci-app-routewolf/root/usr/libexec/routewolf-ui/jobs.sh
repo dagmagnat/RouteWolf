@@ -8,6 +8,14 @@ route=/etc/routewolf/route.conf
 watchdog=/etc/routewolf/watchdog.conf
 . "$lib/dependencies.sh"
 
+run_runtime() {
+    if [ ! -x "$1" ]; then
+        reason runtime-missing
+        return 127
+    fi
+    "$@"
+}
+
 route_device() {
     sed -n "s/^VPN_ROUTE_DEV='\([a-zA-Z0-9_.-]*\)'$/\1/p" "$1" 2>/dev/null | head -n1
 }
@@ -184,9 +192,17 @@ if [ "${1:-}" = worker ]; then
             fi
             ;;
         local_lists) "$lib/lists.sh" apply ;;
-        lists) /usr/sbin/routewolf-stable-update.sh --lists-auto ;;
-        update) /usr/sbin/routewolf-stable-update.sh check && "$lib/schedule.sh" keep ;;
-        reload_project) /usr/sbin/routewolf-apply.sh /tmp/routewolf-ui-apply.log ;;
+        lists) run_runtime /usr/sbin/routewolf-stable-update.sh --lists-auto ;;
+        update)
+            reason update-failed
+            if run_runtime /usr/sbin/routewolf-stable-update.sh check; then
+                reason update-schedule
+                "$lib/schedule.sh" keep
+            else
+                (exit "$?")
+            fi
+            ;;
+        reload_project) run_runtime /usr/sbin/routewolf-apply.sh /tmp/routewolf-ui-apply.log ;;
         repair)
             if [ -e "$state/paused-route.conf" ] || [ -e "$state/paused-singbox" ]; then
                 reason paused
@@ -197,19 +213,19 @@ if [ "${1:-}" = worker ]; then
                 start_routing_device "$route" "$watchdog" && install_current_route
             fi
             ;;
-        check) /usr/sbin/routewolf-reliability.sh check ;;
+        check) run_runtime /usr/sbin/routewolf-reliability.sh check ;;
         pause|resume) control_routing "$1" ;;
-        dns_on) /usr/sbin/rw dns on && fw4 reload ;;
-        dns_off) /usr/sbin/rw dns off && fw4 reload ;;
+        dns_on) run_runtime /usr/sbin/rw dns on && fw4 reload ;;
+        dns_off) run_runtime /usr/sbin/rw dns off && fw4 reload ;;
         restart)
             if [ -f /etc/routewolf-subscription/mode ] && [ ! -e "$state/native-active" ]; then
                 [ ! -e "$state/paused-singbox" ] && /etc/init.d/routewolf-subscription-engine restart
             else
-                /usr/sbin/routewolf-watchdog.sh restart
+                run_runtime /usr/sbin/routewolf-watchdog.sh restart
             fi
             ;;
-        dco_on) /usr/sbin/rw dco on ;;
-        dco_off) /usr/sbin/rw dco off ;;
+        dco_on) run_runtime /usr/sbin/rw dco on ;;
+        dco_off) run_runtime /usr/sbin/rw dco off ;;
         *) exit 2 ;;
     esac
     result=$?

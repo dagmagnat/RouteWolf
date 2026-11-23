@@ -17,7 +17,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from build_release import FILES, MANIFEST, VERSION, NAME, runtime_files
+from build_release import AGENT_PATH, FILES, MANIFEST, VERSION, NAME, published_runtime_files, runtime_files
 
 def call(*args, check=False):
     return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=check, timeout=35)
@@ -374,7 +374,8 @@ class StabilityTests(unittest.TestCase):
 
     def test_opt_in_release_keeps_awg_dns_and_existing_schedules(self):
         self.seed_release()
-        shutil.copyfile(ROOT/'runtime/routewolf-stable-update.sh', '/tmp/rw-downloads/routewolf-stable-update.sh')
+        for name in (f'v{VERSION}.manifest', 'luci-v60-r3.manifest', 'routewolf-migrate-v60-r3.sh'):
+            shutil.copyfile(ROOT/'releases'/name, '/tmp/rw-downloads/'+name)
         self.seed_lists()
         write('/etc/config/network', "config interface 'awg0'\n\toption proto 'amneziawg'\n")
         write('/etc/config/dhcp', "config dnsmasq\n\toption noresolv '0'\n")
@@ -385,9 +386,12 @@ class StabilityTests(unittest.TestCase):
             '/etc/routewolf/watchdog.conf', '/etc/routewolf/user.conf',
             '/etc/crontabs/root', '/etc/routewolf/lists/domains.lst', '/etc/routewolf/lists/ipv4.lst',
         )]
-        for old in (58, 59):
+        for old in (54, 58, 59):
             with self.subTest(old=old):
-                write('/etc/routewolf/runtime_version', f'{old}\n')
+                if old == 54:
+                    Path('/etc/routewolf/runtime_version').unlink(missing_ok=True)
+                else:
+                    write('/etc/routewolf/runtime_version', f'{old}\n')
                 jobs = '0 2 * * * /usr/sbin/routewolf-update.sh --lists-auto\n'
                 if old == 59:
                     jobs += '0 3 * * 6 /usr/sbin/routewolf-update.sh --code-auto\n'
@@ -397,8 +401,9 @@ class StabilityTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout)
                 self.assertEqual(Path('/etc/routewolf/runtime_version').read_text(), f'{VERSION}\n')
                 self.assertEqual([path.read_bytes() for path in protected], before)
-        self.assertIn(f'/download/v{VERSION}/stable.manifest', self.actions())
-        self.assertNotIn('routewolf-luci', self.actions())
+        self.assertIn(f'raw.githubusercontent.com/dagmagnat/RouteWolf/main/releases/v{VERSION}.manifest', self.actions())
+        self.assertNotIn('routewolf-luci-v60-r3.tar.gz', self.actions())
+        self.assertNotIn('github.com/dagmagnat/RouteWolf/releases/', self.actions())
         self.assertNotIn('https://lists.example/', self.actions())
         self.assertNotIn('ifdown awg0', self.actions())
 
@@ -508,6 +513,8 @@ class RoutingTests(unittest.TestCase):
     actions=StabilityTests.actions
     def setUp(self):
         StabilityTests.setUp(self)
+        call('nft', 'flush', 'chain', 'inet', 'fw4', 'mangle_prerouting', check=True)
+        call('nft', 'add', 'set', 'inet', 'fw4', 'unrelated', '{ type ipv4_addr; }', check=True)
         Path('/mockbin/ip').unlink()
         for dev in ['rw_wan','wg0']:call('ip','link','del',dev)
         call('ip','rule','del','priority','100')
@@ -641,6 +648,8 @@ else:sys.exit(2)
         self.assertNotIn('routewolf_mark',network)
         firewall=json.loads(Path('/etc/config/firewall').read_text())
         self.assertEqual(set(firewall),{'neighbour','other_rule','zone'})
+        self.assertNotEqual(call('nft', 'list', 'set', 'inet', 'fw4', 'vpn_domains').returncode, 0)
+        self.assertEqual(call('nft', 'list', 'set', 'inet', 'fw4', 'unrelated').returncode, 0)
         self.assertTrue(Path('/etc/openvpn/routewolf.ovpn').exists())
         self.assertTrue(Path('/tmp/dnsmasq.d/other.conf').exists())
         self.assertNotIn('network restart',StabilityTests.actions(self))
@@ -740,10 +749,12 @@ printf '#!/bin/sh\\necho VERIFIED_REMOTE\\n' >"$out"
 class SourceChecks(unittest.TestCase):
     def test_release_bytes_match_manifest_and_source(self):
         manifest=dict(line.split('=',1) for line in MANIFEST.read_text().splitlines())
-        data=(ROOT/f'releases/routewolf-v{VERSION}.tar.gz').read_bytes();self.assertEqual(hashlib.sha256(data).hexdigest(),manifest['archive_sha256'])
-        self.assertEqual(hashlib.sha256((ROOT/'runtime/routewolf-stable-update.sh').read_bytes()).hexdigest(),manifest['agent_sha256'])
+        archive = ROOT / f'releases/routewolf-v{VERSION}.tar.gz'
+        data=archive.read_bytes();self.assertEqual(hashlib.sha256(data).hexdigest(),manifest['archive_sha256'])
+        expected = published_runtime_files(archive)
+        self.assertEqual(hashlib.sha256(expected[AGENT_PATH]).hexdigest(),manifest['agent_sha256'])
         with tarfile.open(fileobj=io.BytesIO(data),mode='r:gz') as t:
-            for name,content in runtime_files().items():self.assertEqual(t.extractfile('payload/'+name).read(),content)
+            for name,content in expected.items():self.assertEqual(t.extractfile('payload/'+name).read(),content)
 
     def test_all_shell_and_extracted_runtime_has_valid_syntax(self):
         for p in list(ROOT.glob('*.sh'))+list((ROOT/'runtime').glob('*.sh')):

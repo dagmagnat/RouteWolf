@@ -49,6 +49,9 @@ const jobErrors = {
     'tunnel-unreachable': _('Туннель запустился, но проверка связи не прошла.'),
     'route-unavailable': _('Туннель поднят, но маршрут через него недоступен.'),
     'profile-dns': _('Не удалось подключить DNS профиля. Проверьте IP-адреса и конфигурацию dnsmasq.'),
+    'runtime-missing': _('Компонент RouteWolf не найден. Для старой установки выполните обновление до v60 с параметром --luci по SSH.'),
+    'update-failed': _('Не удалось проверить стабильный выпуск. Подробности доступны по SSH через rw updates status.'),
+    'update-schedule': _('Обновление завершилось, но восстановить расписание списков не удалось.'),
     paused: _('Сначала возобновите маршрутизацию на вкладке «Обзор».')
 };
 
@@ -99,7 +102,7 @@ function button(label, callback, accent) {
     }, [label]);
 }
 
-function activateTabs(tabs, title, progress) {
+function activateTabs(tabs, title, progress, feedback) {
     const buttons = [];
     const panels = [];
     const names = tabs.map(([id]) => id);
@@ -135,7 +138,7 @@ function activateTabs(tabs, title, progress) {
             E('nav', { class: 'rw-tabs', role: 'tablist', 'aria-label': 'RouteWolf' }, buttons),
             progress
         ]),
-        ...panels
+        feedback, ...panels
     ]);
 }
 
@@ -145,7 +148,7 @@ function formatHandshake(timestamp) {
     return new Date(timestamp * 1000).toLocaleString();
 }
 
-function actionRow(title, description, change, state) {
+function actionRow(title, description, change, state, showError) {
     const button = E('button', {
         class: 'cbi-button rw-control-toggle', type: 'button', 'data-action': state ? 'disable' : 'enable'
     },
@@ -156,13 +159,13 @@ function actionRow(title, description, change, state) {
         button.disabled = true;
         try {
             if (!await change(next ? 'enable' : 'disable'))
-                throw new Error(_('RouteWolf не подтвердил изменение.'));
+                return;
             state = next;
             button.dataset.action = state ? 'disable' : 'enable';
             button.textContent = state ? _('Выключить') : _('Включить');
         }
         catch (error) {
-            ui.addNotification(null, E('p', {}, [error.message]));
+            showError(error.message);
         }
         finally {
             button.disabled = false;
@@ -222,26 +225,31 @@ function statusPanel(result) {
     ]);
 }
 
-function servicePanel(result, action) {
+function servicePanel(result, action, showError) {
+    const setting = change => async value => {
+        if (!await change(value))
+            throw new Error(_('RouteWolf не подтвердил изменение. Для старой установки проверьте обновление с параметром --luci по SSH.'));
+        return true;
+    };
     const items = [
-        actionRow(_('Списки при загрузке'), _('Запускает загрузку списков после включения роутера.'), startup, result.lists_boot),
-        actionRow(_('Автообновление кода'), _('Проверка стабильного выпуска по расписанию.'), codeUpdates, result.code_auto),
+        actionRow(_('Списки при загрузке'), _('Запускает загрузку списков после включения роутера.'), setting(startup), result.lists_boot, showError),
+        actionRow(_('Автообновление кода'), _('Проверка стабильного выпуска по расписанию.'), setting(codeUpdates), result.code_auto, showError),
         actionRow(_('Перехват DNS'), _('Перенаправляет обычный DNS устройств LAN через dnsmasq роутера.'),
-            value => action(value === 'enable' ? 'dns_on' : 'dns_off'), result.dns_force)
+            value => action(value === 'enable' ? 'dns_on' : 'dns_off'), result.dns_force, showError)
     ];
     const commands = [
         [_('Обновить проект'), 'update'],
         [_('Перезапустить RouteWolf'), 'reload_project'],
-        [_('Проверить правила'), 'check'],
-        [_('Восстановить маршруты'), 'repair']
+        [_('Проверить правила'), 'check']
     ];
-    if (result.tunnel && !result.paused)
-        commands.push([_('Перезапустить туннель'), 'restart']);
+    if (result.tunnel && !result.paused) {
+        commands.push([_('Восстановить маршруты'), 'repair'], [_('Перезапустить туннель'), 'restart']);
+    }
     if (result.protocol === 'openvpn')
         commands.push([_('Включить DCO'), 'dco_on'], [_('Выключить DCO'), 'dco_off']);
-    return E('div', {}, [
+    return E('div', { class: 'rw-service-panel' }, [
         ...items,
-        E('div', { class: 'rw-actions' }, commands.map(([label, cmd]) => button(label, ui.createHandlerFn(null, () => {
+        E('div', { class: 'rw-actions rw-service-actions' }, commands.map(([label, cmd]) => button(label, ui.createHandlerFn(null, () => {
             if ((cmd === 'restart' || cmd === 'reload_project') &&
                 !window.confirm(cmd === 'restart' ? _('Перезапустить действующий туннель?') : _('Перезапустить маршрутизацию RouteWolf?')))
                 return;
@@ -743,6 +751,12 @@ return view.extend({
         const result = data[0];
         const project = this;
         const progress = E('span', { role: 'status' }, []);
+        const errorText = E('span', { role: 'alert' });
+        const dismissError = () => { feedback.hidden = true; errorText.textContent = ''; };
+        const feedback = E('div', { class: 'rw-feedback', hidden: true }, [
+            errorText, button(_('Закрыть'), dismissError)
+        ]);
+        const showError = message => { feedback.hidden = false; errorText.textContent = message; };
         const commit = async () => {
             await commitProfiles(settings);
             await ui.changes.init();
@@ -751,7 +765,15 @@ return view.extend({
             await uci.save();
             await commit();
         };
+        let actionRunning = false;
         const action = async (cmd, profile = '', refresh = false, observer = null) => {
+            const reportError = observer ? message => observer.fail(message) : showError;
+            if (actionRunning) {
+                reportError(_('Дождитесь завершения текущей операции.'));
+                return false;
+            }
+            dismissError();
+            actionRunning = true;
             progress.textContent = _('Запуск…');
             try {
                 if (!await jobStart(cmd, profile))
@@ -763,8 +785,10 @@ return view.extend({
                         observer.update(state);
                     if (state.running)
                         continue;
-                    if (state.result !== '0')
-                        throw new Error(jobErrors[state.reason] || _('Операция завершилась ошибкой. Проверьте настройки и повторите.'));
+                    if (state.action && state.action !== cmd)
+                        throw new Error(_('Роутер уже обрабатывает другую операцию. Проверьте состояние и повторите попытку.'));
+                    if (String(state.result) !== '0')
+                        throw new Error(jobErrors[state.reason] || _('Операция завершилась ошибкой. Для диагностики запустите rw diag по SSH.'));
                     progress.textContent = _('Готово');
                     if (refresh)
                         location.reload();
@@ -776,10 +800,10 @@ return view.extend({
             }
             catch (error) {
                 progress.textContent = '';
-                if (observer)
-                    observer.fail(error.message);
-                else
-                    ui.addNotification(null, E('p', {}, [error.message]));
+                reportError(error.message);
+            }
+            finally {
+                actionRunning = false;
             }
             return false;
         };
@@ -839,7 +863,7 @@ return view.extend({
                     _('Выберите другой сохранённый профиль для резерва.')
                 ])
             ]);
-            const controls = servicePanel(result, action);
+            const controls = servicePanel(result, action, showError);
             const liveStatus = E('div', {}, [statusPanel(result)]);
             const badge = statusBadge(result.link_state);
             poll.add(async () => {
@@ -865,7 +889,9 @@ return view.extend({
                         ui.createHandlerFn(null, () => action(result.paused ? 'resume' : stopped ? 'repair' : 'pause', '', true)))
                 ]) : ''
             ]);
-            return E('div', { class: 'rw-luci' }, [
+            return E('div', { class: 'rw-luci', keydown: event => {
+                if (event.key === 'Escape' && !feedback.hidden) dismissError();
+            } }, [
                 E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') }),
                 activateTabs([
                     ['overview', _('Обзор'), overview],
@@ -875,7 +901,7 @@ return view.extend({
                 ], E('div', { class: 'rw-title-row' }, [
                     E('h2', {}, ['RouteWolf']),
                     badge
-                ]), progress)
+                ]), progress, feedback)
             ]);
         });
     },

@@ -1,17 +1,45 @@
 .rw-luci { --rw-accent: #7766cf; --rw-line: color-mix(in srgb, currentColor 13%, transparent); --rw-surface: color-mix(in srgb, currentColor 4%, transparent); }
-.rw-luci .rw-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 24px; padding:0 0 13px; margin-bottom:16px; border-bottom:1px solid var(--rw-line); }
+/* Argon extends its header background into the page by 2rem. */
+.main-right > header.bg-primary:has(~ #maincontent .rw-luci)::after { display:none; }
+.rw-luci .rw-toolbar {
+    display:grid; grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:"title status" "tabs tabs"; align-items:center;
+    gap:10px 16px; padding:0 0 12px; margin-bottom:16px; border-bottom:1px solid var(--rw-line);
+}
 .rw-luci .rw-toolbar h2 { margin:0; padding:0; background:none; border:0; box-shadow:none; font-size:1.45rem; line-height:1.2; }
-.rw-luci .rw-title-row { display:flex; align-items:center; gap:10px; flex:0 0 auto; min-width:0; }
-.rw-luci .rw-toolbar [role="status"] { margin-inline-start:auto; }
+.rw-luci .rw-title-row { grid-area:title; display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; min-width:0; }
+.rw-luci .rw-toolbar > [role="status"] { grid-area:status; justify-self:end; }
+.rw-luci .rw-toolbar > [role="status"]:empty { display:none; }
 .rw-luci .rw-badge { padding:3px 9px; border-radius:20px; font-size:.78rem; font-weight:650; background:var(--rw-surface); border:1px solid var(--rw-line); white-space:nowrap; }
 .rw-luci .rw-badge[data-state="on"] { background:color-mix(in srgb,#2ea66d 17%,transparent); border-color:color-mix(in srgb,#2ea66d 40%,transparent); }
 .rw-luci .rw-badge[data-state="waiting"] { background:color-mix(in srgb,#c68c24 17%,transparent); border-color:color-mix(in srgb,#c68c24 40%,transparent); }
 .rw-luci .rw-badge[data-state="off"] { background:color-mix(in srgb,#d54c55 17%,transparent); border-color:color-mix(in srgb,#d54c55 40%,transparent); }
-.rw-luci .rw-tabs { display:flex; align-items:center; gap:4px; max-width:100%; overflow-x:auto; }
-.rw-luci .rw-tabs button { margin:0; border:1px solid transparent; border-radius:6px; color:inherit; background:none; box-shadow:none; font:inherit; font-weight:600; padding:6px 11px; white-space:nowrap; cursor:pointer; }
-.rw-luci .rw-tabs button:hover { background:var(--rw-surface); }
-.rw-luci .rw-tabs button[aria-selected="true"] { border-color:color-mix(in srgb,var(--rw-accent) 55%,transparent); background:color-mix(in srgb,var(--rw-accent) 22%,transparent); }
+.rw-luci .rw-tabs {
+    grid-area:tabs; justify-self:start; display:grid; grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:4px; max-width:100%; padding:4px; box-sizing:border-box;
+    border:1px solid var(--rw-line); border-radius:9px; background:var(--rw-surface);
+}
+.rw-luci .rw-tabs button {
+    min-width:0; min-height:40px; margin:0; padding:6px 12px;
+    border:1px solid transparent !important; border-radius:6px; color:inherit;
+    background:transparent; box-shadow:none; font:inherit; font-weight:600;
+    white-space:normal; overflow-wrap:anywhere; line-height:1.2; cursor:pointer;
+}
+.rw-luci .rw-tabs button:hover { background:color-mix(in srgb,currentColor 8%,transparent); }
+.rw-luci .rw-tabs button[aria-selected="true"] {
+    border-color:color-mix(in srgb,var(--rw-accent) 62%,transparent) !important;
+    background:color-mix(in srgb,var(--rw-accent) 23%,transparent);
+}
 .rw-luci .rw-tabs button:focus-visible { outline:2px solid var(--rw-accent); outline-offset:-3px; }
+.rw-luci .rw-feedback {
+    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap;
+    gap:8px 16px; margin-bottom:14px; padding:8px 12px; border-radius:8px;
+    border:1px solid color-mix(in srgb,#d54c55 42%,transparent);
+    background:color-mix(in srgb,#d54c55 10%,transparent);
+}
+.rw-luci .rw-feedback[hidden] { display:none; }
+.rw-luci .rw-feedback [role="alert"] { flex:1 1 220px; overflow-wrap:anywhere; }
+.rw-luci .rw-feedback button { min-height:36px; margin:0 0 0 auto; }
 .rw-luci .rw-panel[hidden] { display:none !important; }
 .rw-luci .rw-panel h3 { margin:0 0 11px; padding:0; background:none; border:0; box-shadow:none; font-size:1.08rem; }
 .rw-luci .rw-cards { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:14px; }
@@ -26,6 +54,7 @@
 .rw-luci .rw-facts dd { margin:0; font-weight:600; }
 .rw-luci .rw-interfaces { display:flex; flex-wrap:wrap; gap:8px; }
 .rw-luci .rw-interface { display:flex; align-items:center; gap:10px; padding:6px 9px; border:1px solid var(--rw-line); border-radius:6px; font-size:.88rem; }
+.rw-luci .rw-service-panel { max-width:70rem; }
 .rw-luci .rw-control { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--rw-line); padding:10px 0; }
 .rw-luci .rw-control-description { display:block; opacity:.75; font-size:.83rem; margin-top:3px; }
 .rw-luci .rw-control-toggle {
@@ -36,6 +65,8 @@
 .rw-luci .rw-control-toggle[data-action="disable"] { background:#a72f3b !important; }
 .rw-luci .rw-control-toggle:hover:not(:disabled) { filter:brightness(1.12); }
 .rw-luci .rw-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.rw-luci .rw-service-actions { align-items:stretch; }
+.rw-luci .rw-service-actions button { min-width:0; min-height:40px; margin:0; white-space:normal; overflow-wrap:anywhere; }
 .rw-luci .rw-equal-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); max-width:460px; }
 .rw-luci .rw-equal-actions button { width:100%; min-height:39px; margin:0; }
 .rw-luci .rw-profile-actions { justify-content:space-between; gap:10px; }
@@ -124,8 +155,6 @@
 #modal_overlay .modal:has([id^="cbi-routewolf_ui-"]) textarea { height:clamp(76px,24vh,172px); min-height:76px; resize:vertical; }
 #modal_overlay .modal:has([id^="cbi-routewolf_ui-"]) .button-row { flex:none; margin:8px 0 0; padding:0; }
 @media (max-width:720px) {
-    .rw-luci .rw-toolbar { gap:8px 12px; }
-    .rw-luci .rw-tabs { flex-basis:100%; }
     .rw-luci .rw-tabs button { padding-inline:8px; }
     .rw-luci .rw-cards, .rw-luci .rw-facts, .rw-luci .rw-list-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .rw-library-filter { grid-template-columns:repeat(2,minmax(0,1fr)); }
@@ -133,5 +162,10 @@
     #modal_overlay .modal:has([id^="cbi-routewolf_ui-"]) .cbi-value { grid-template-columns:minmax(0,1fr); gap:3px; padding:3px 0; }
 }
 @media (max-width:420px) {
+    .rw-luci .rw-toolbar { grid-template-areas:"title title" "status status" "tabs tabs"; row-gap:8px; }
+    .rw-luci .rw-toolbar:has(> [role="status"]:empty) { grid-template-areas:"title title" "tabs tabs"; }
+    .rw-luci .rw-toolbar > [role="status"] { justify-self:start; }
+    .rw-luci .rw-tabs { justify-self:stretch; grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .rw-luci .rw-service-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
     .rw-luci .rw-cards, .rw-luci .rw-list-grid { grid-template-columns:minmax(0,1fr); }
 }

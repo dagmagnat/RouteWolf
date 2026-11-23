@@ -227,13 +227,14 @@ finish() {
 case "$MODE" in
     status) status; exit 0 ;;
     on|off) mkdir -p "$STATE"; value=1; [ "$MODE" = off ] && value=0; printf 'AUTO_CODE_UPDATES=%s\n' "$value" >"$STATE/update.conf"; status; exit 0 ;;
-    --release)
+    --release|--release-local)
         requested=${2:-}
         case "$requested" in ''|0*|*[!0-9]*) exit 2 ;; esac
         [ "${#requested}" -le 6 ] && [ "$requested" -ge 60 ] || exit 2
+        [ "$MODE" != --release-local ] || [ "$#" -eq 4 ] || exit 2
         ;;
     --auto|--lists-auto|--code-auto|check|--local|rollback|recover) ;;
-    *) echo 'Usage: routewolf-stable-update.sh --lists-auto|--code-auto|--auto|check|status|on|off|rollback|recover|--release VERSION|--local ARCHIVE MANIFEST' >&2; exit 2 ;;
+    *) echo 'Usage: routewolf-stable-update.sh --lists-auto|--code-auto|--auto|check|status|on|off|rollback|recover|--release VERSION|--local ARCHIVE MANIFEST|--release-local VERSION ARCHIVE MANIFEST' >&2; exit 2 ;;
 esac
 command -v sha256sum >/dev/null 2>&1 || { log 'sha256sum unavailable; update skipped'; exit 1; }
 for required in uci nft fw4 tar; do
@@ -274,9 +275,15 @@ if [ "$MODE" = --lists-auto ]; then
 fi
 if { [ "$MODE" != --auto ] && [ "$MODE" != --code-auto ]; } || [ "$(sed -n 's/^AUTO_CODE_UPDATES=//p' "$STATE/update.conf" 2>/dev/null)" != 0 ]; then
     resources_ok || exit 1
-    if [ "$MODE" = --local ]; then
+    case "$MODE" in
+    --local)
         cp "$2" "$WORK/runtime.tgz" && cp "$3" "$WORK/release.manifest" || exit 1
-    else
+        ;;
+    --release-local)
+        cp "$3" "$WORK/runtime.tgz" && cp "$4" "$WORK/release.manifest" || exit 1
+        [ "$(field version)" = "$requested" ] || { log 'release manifest version mismatch'; exit 1; }
+        ;;
+    *)
         manifest_url="$BASE/latest/download/stable.manifest"
         [ "$MODE" != --release ] || manifest_url="$BASE/download/v$requested/stable.manifest"
         if ! fetch "$manifest_url" "$WORK/release.manifest" 4096; then
@@ -298,13 +305,14 @@ if { [ "$MODE" != --auto ] && [ "$MODE" != --code-auto ]; } || [ "$(sed -n 's/^A
         if [ "$version" -gt "$current" ] && { [ "$version" != "$blocked" ] || [ "$MODE" = check ] || [ "$MODE" = --release ]; }; then
             fetch "$BASE/download/v$version/routewolf-v$version.tar.gz" "$WORK/runtime.tgz" || { record 'runtime download failed; existing code retained'; exit 1; }
         fi
-    fi
+        ;;
+    esac
     if [ -f "$WORK/runtime.tgz" ]; then
         validate_bundle || { record 'release verification failed; existing code retained'; exit 1; }
         apply_release || exit 1
     fi
 fi
-case "$MODE" in --code-auto|--release) record 'release check complete'; exit 0 ;; esac
+case "$MODE" in --code-auto|--release|--release-local) record 'release check complete'; exit 0 ;; esac
 # Lists remain independent of code version and use their own transaction/cache.
 if [ -x /usr/sbin/routewolf-reliability.sh ]; then /usr/sbin/routewolf-reliability.sh check || exit 1; fi
 refresh_lists || { record 'list refresh failed; previous lists retained where possible'; exit 1; }
