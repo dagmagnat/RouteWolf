@@ -40,7 +40,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     source_dir = Path(__file__).resolve().parent
-    sources = [source_dir / 'main.go', source_dir / 'compile.go']
+    sources = [source_dir / name for name in ('main.go', 'compile.go', 'vless.go')]
     with ThreadPoolExecutor(len(TARGETS)) as pool:
         checksums = list(pool.map(lambda entry: build_item(entry, args.go, sources, args.output), TARGETS.items()))
     (args.output / 'SHA256SUMS').write_text('\n'.join(checksums) + '\n', encoding='ascii', newline='\n')

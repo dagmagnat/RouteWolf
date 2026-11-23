@@ -42,6 +42,32 @@ func TestXrayBase64SubscriptionKeepsMultipleVlessNodes(t *testing.T) {
 	}
 }
 
+func TestXrayJSONImportsOnlyUsableOutbounds(t *testing.T) {
+	data := []byte(`[{
+		"inbounds":[{"protocol":"http","listen":"0.0.0.0","port":8888}],
+		"outbounds":[{"protocol":"vless","tag":"provider",
+			"settings":{"vnext":[{"address":"vpn.example.net","port":443,
+				"users":[{"id":"a3e1e0f1-2c9b-4fef-abe6-ed637842d853","encryption":"none"}]}]},
+			"streamSettings":{"network":"xhttp","security":"tls","tlsSettings":{"serverName":"vpn.example.net"},
+				"xhttpSettings":{"path":"/route","mode":"packet-up","scMaxEachPostBytes":900000}}}],
+		"dns":{"servers":["203.0.113.2"]},"routing":{"rules":[]}
+	}]`)
+	for _, source := range [][]byte{data, []byte(base64.RawURLEncoding.EncodeToString(data))} {
+		config, err := compileXray(source, "full", strings.Repeat("b", 48))
+		if err != nil {
+			t.Fatal(err)
+		}
+		nodes := config["outbounds"].([]object)
+		stream := obj(nodes[0]["streamSettings"])
+		settings := obj(stream["xhttpSettings"])
+		if len(nodes) != 1 || nodes[0]["tag"] != "rw-vless-1" || stream["network"] != "xhttp" ||
+			settings["path"] != "/route" || integer(obj(settings["extra"])["scMaxEachPostBytes"]) != 900000 ||
+			config["dns"] != nil || config["routing"] != nil || len(config["inbounds"].([]object)) != 2 {
+			t.Fatal("lost XHTTP settings or imported provider runtime directives")
+		}
+	}
+}
+
 func TestXrayRejectsUnusableOrUnsafeLinks(t *testing.T) {
 	for _, invalid := range []string{
 		xrayExample + "?type=quic",

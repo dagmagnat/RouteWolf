@@ -93,14 +93,17 @@ proxy_health() {
         "$helper" health "$state/config.json" "$state/token" "$1"
         return "$?"
     fi
-    local token code
+    local token code url
     token=$(cat "$state/token") || return 11
     printf '%s\n' "$token" | grep -Eq '^[0-9a-f]{48}$' || return 11
-    code=$(printf 'proxy-user = "routewolf:%s"\n' "$token" |
-        curl --config - --proxy socks5h://127.0.0.1:18683 --noproxy '' \
-            --silent --max-time 5 --output /dev/null --write-out '%{http_code}' \
-            https://cp.cloudflare.com/generate_204) || return 10
-    [ "$code" = 204 ] || return 10
+    for url in https://cp.cloudflare.com/generate_204 https://connectivitycheck.gstatic.com/generate_204; do
+        code=$(printf 'proxy-user = "routewolf:%s"\n' "$token" |
+            curl --config - --proxy socks5h://127.0.0.1:18683 --noproxy '' \
+                --silent --max-time 4 --output /dev/null --write-out '%{http_code}' "$url") ||
+            { [ "$?" -ne 7 ] || return 11; continue; }
+        [ "$code" != 204 ] || return 0
+    done
+    return 10
 }
 
 wait_ready() {
@@ -174,6 +177,7 @@ monitor() {
     now=$(monotonic_seconds)
     next_refresh=$((now+3600))
     next_restart=$now
+    failures=0
     while :; do
         if [ ! -x /etc/init.d/routewolf ]; then
             remove_routing
@@ -202,11 +206,23 @@ monitor() {
             status=$?
         fi
         if [ "$status" -eq 0 ] && renew_lease; then
+            failures=0
             result "Proxy available"
         else
             clear_lease
             case "$status" in
-                10) result "WAN fallback: no reachable proxy" ;;
+                10)
+                    result "WAN fallback: no reachable proxy"
+                    if [ "$backend" = xray ]; then
+                        failures=$((failures+1))
+                        now=$(monotonic_seconds)
+                        if [ "$failures" -ge 4 ] && [ "$now" -ge "$next_restart" ]; then
+                            "$engine" restart >/dev/null 2>&1 || true
+                            next_restart=$((now+45))
+                            failures=0
+                        fi
+                    fi
+                    ;;
                 11)
                     result "WAN fallback: $backend unavailable"
                     now=$(monotonic_seconds)

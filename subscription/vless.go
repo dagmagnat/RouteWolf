@@ -16,7 +16,8 @@ func xhttpExtraSafe(value any) bool {
 	case map[string]any:
 		for key, field := range nested {
 			switch strings.ToLower(key) {
-			case "sockopt", "sockoptions", "dialerproxy":
+			case "sockopt", "sockoptions", "dialerproxy", "certificatefile", "keyfile",
+				"masterkeylog", "keylog", "interface", "pathfile":
 				return false
 			case "address":
 				if !publicServer(str(field)) {
@@ -143,6 +144,185 @@ func xrayNode(link string) object {
 	}
 }
 
+// Keep only client transport fields that we can safely validate. A subscription
+// may also contain listeners, routing, DNS, filesystem paths and API settings.
+func xrayJSONStream(stream object) object {
+	if !allowedKeys(stream, "network", "method", "security", "xhttpSettings", "splithttpSettings", "wsSettings",
+		"grpcSettings", "httpupgradeSettings", "realitySettings", "tlsSettings") {
+		return nil
+	}
+	query := url.Values{}
+	network := str(stream["network"])
+	if network == "" {
+		network = str(stream["method"])
+	}
+	security := str(stream["security"])
+	query.Set("type", network)
+	query.Set("security", security)
+	settings := obj(stream[network+"Settings"])
+	if network == "websocket" {
+		settings = obj(stream["wsSettings"])
+	}
+	switch network {
+	case "xhttp", "splithttp":
+		if settings == nil {
+			settings = obj(stream["xhttpSettings"])
+		}
+		if !allowedKeys(settings, "path", "host", "mode", "extra", "headers", "xPaddingBytes",
+			"noGRPCHeader", "noSSEHeader", "scMaxEachPostBytes", "scMaxBufferedPosts",
+			"scMinPostsIntervalMs", "scStreamUpServerSecs", "xmux", "downloadSettings") {
+			return nil
+		}
+		query.Set("mode", str(settings["mode"]))
+		extras := object{}
+		for key, value := range settings {
+			switch key {
+			case "path", "host", "mode", "extra":
+			default:
+				extras[key] = value
+			}
+		}
+		if extra, present := settings["extra"]; present {
+			if obj(extra) == nil {
+				return nil
+			}
+			for key, value := range obj(extra) {
+				extras[key] = value
+			}
+		}
+		if len(extras) > 0 {
+			encoded, err := json.Marshal(extras)
+			if err != nil {
+				return nil
+			}
+			query.Set("extra", string(encoded))
+		}
+	case "grpc":
+		if !allowedKeys(settings, "serviceName", "authority", "multiMode") {
+			return nil
+		}
+		query.Set("serviceName", str(settings["serviceName"]))
+		query.Set("authority", str(settings["authority"]))
+		if flag(settings["multiMode"]) {
+			query.Set("mode", "multi")
+		}
+	case "ws", "websocket", "httpupgrade":
+		if !allowedKeys(settings, "path", "host", "headers") {
+			return nil
+		}
+		headers := obj(settings["headers"])
+		if !allowedKeys(headers, "Host", "host") {
+			return nil
+		}
+		if str(settings["host"]) == "" {
+			query.Set("host", str(headers["Host"]))
+			if query.Get("host") == "" {
+				query.Set("host", str(headers["host"]))
+			}
+		}
+	}
+	query.Set("path", str(settings["path"]))
+	if host := str(settings["host"]); host != "" {
+		query.Set("host", host)
+	}
+	switch security {
+	case "tls":
+		tls := obj(stream["tlsSettings"])
+		if !allowedKeys(tls, "serverName", "fingerprint", "alpn", "allowInsecure") {
+			return nil
+		}
+		query.Set("sni", str(tls["serverName"]))
+		query.Set("fp", str(tls["fingerprint"]))
+		if raw := tls["alpn"]; raw != nil {
+			alpn, ok := stringsOf(raw)
+			if !ok {
+				return nil
+			}
+			query.Set("alpn", strings.Join(alpn, ","))
+		}
+	case "reality":
+		reality := obj(stream["realitySettings"])
+		if !allowedKeys(reality, "serverName", "fingerprint", "publicKey", "password", "shortId", "spiderX", "show") {
+			return nil
+		}
+		key := str(reality["publicKey"])
+		if key == "" {
+			key = str(reality["password"])
+		}
+		query.Set("sni", str(reality["serverName"]))
+		query.Set("fp", str(reality["fingerprint"]))
+		query.Set("pbk", key)
+		query.Set("sid", str(reality["shortId"]))
+		query.Set("spx", str(reality["spiderX"]))
+	}
+	return xrayTransport(query)
+}
+
+func xrayJSONNodes(data []byte) []object {
+	var root any
+	if json.Unmarshal(data, &root) != nil {
+		return nil
+	}
+	profiles := array(root)
+	if obj(root) != nil {
+		profiles = []any{root}
+	}
+	var nodes []object
+	for _, profile := range profiles {
+		outbounds := array(obj(profile)["outbounds"])
+		if outbounds == nil {
+			outbounds = []any{profile} // One standalone outbound.
+		}
+		for _, raw := range outbounds {
+			out := obj(raw)
+			if str(out["protocol"]) != "vless" {
+				continue
+			}
+			stream := xrayJSONStream(obj(out["streamSettings"]))
+			if stream == nil {
+				continue
+			}
+			settings := obj(out["settings"])
+			servers := array(settings["vnext"])
+			if servers == nil {
+				servers = []any{settings}
+			}
+			for _, endpoint := range servers {
+				server := obj(endpoint)
+				address, port := str(server["address"]), integer(server["port"])
+				if !publicServer(address) || port < 1 || port > 65535 {
+					continue
+				}
+				users := array(server["users"])
+				if users == nil {
+					users = []any{server}
+				}
+				for _, rawUser := range users {
+					user := obj(rawUser)
+					id, encryption := str(user["id"]), str(user["encryption"])
+					if !uuidPattern.MatchString(id) {
+						continue
+					}
+					if encryption == "" {
+						encryption = "none"
+					}
+					nodes = append(nodes, object{
+						"protocol": "vless", "streamSettings": stream,
+						"settings": object{"vnext": []object{{
+							"address": address, "port": port,
+							"users": []object{{"id": id, "encryption": encryption, "flow": str(user["flow"])}},
+						}}},
+					})
+					if len(nodes) == maxNodes {
+						return nodes
+					}
+				}
+			}
+		}
+	}
+	return nodes
+}
+
 func compileXray(data []byte, mode, token string) (object, error) {
 	if (mode != "routewolf" && mode != "full") || !tokenPattern.MatchString(token) || len(data) > maxSubscription {
 		return nil, errors.New("invalid VLESS mode, state or subscription size")
@@ -153,18 +333,23 @@ func compileXray(data []byte, mode, token string) (object, error) {
 			text = string(decoded)
 		}
 	}
-	nodes := make([]object, 0, maxNodes)
-	for line := range strings.SplitSeq(strings.TrimPrefix(text, "\ufeff"), "\n") {
-		if node := xrayNode(strings.TrimSpace(line)); node != nil {
-			node["tag"] = fmt.Sprintf("rw-vless-%d", len(nodes)+1)
-			nodes = append(nodes, node)
-			if len(nodes) == maxNodes {
-				break
+	text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "\ufeff"))
+	nodes := xrayJSONNodes([]byte(text))
+	if len(nodes) == 0 {
+		for line := range strings.SplitSeq(text, "\n") {
+			if node := xrayNode(strings.TrimSpace(line)); node != nil {
+				nodes = append(nodes, node)
+				if len(nodes) == maxNodes {
+					break
+				}
 			}
 		}
 	}
 	if len(nodes) == 0 {
-		return nil, errors.New("no compatible VLESS links")
+		return nil, errors.New("no compatible VLESS outbounds or share links")
+	}
+	for i, node := range nodes {
+		node["tag"] = fmt.Sprintf("rw-vless-%d", i+1)
 	}
 	config := object{
 		"log": object{"loglevel": "none"},

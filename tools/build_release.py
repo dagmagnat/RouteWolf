@@ -14,8 +14,8 @@ NAME = re.search(r'^PROJECT_VERSION="([a-zA-Z0-9._-]+)"$', (ROOT / 'routewolf-in
 RELEASES = ROOT / 'releases'
 MANIFEST = RELEASES / (f'v{VERSION}.manifest' if VERSION >= 60 else 'stable.manifest')
 PANEL = RELEASES / f'routewolf-luci-v{VERSION}.tar.gz'
-PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r5.tar.gz' if VERSION == 60 else None
-PANEL_MANIFEST = RELEASES / 'luci-v60-r5.manifest' if VERSION == 60 else None
+PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r6.tar.gz' if VERSION == 60 else None
+PANEL_MANIFEST = RELEASES / 'luci-v60-r6.manifest' if VERSION == 60 else None
 MIGRATION_AGENT = RELEASES / 'routewolf-migrate-v60-r3.sh' if VERSION == 60 else None
 AGENT_PATH = 'usr/sbin/routewolf-stable-update.sh'
 FILES = (

@@ -11,7 +11,7 @@ const protocols = {
     wireguard: 'WireGuard',
     openvpn: 'OpenVPN',
     singbox: 'sing-box',
-    vless: 'vless',
+    vless: 'VLESS · Xray',
     outline: 'Outline'
 };
 
@@ -725,7 +725,7 @@ function listPanel(result, save, action) {
 function profileForm() {
     const map = new form.Map('routewolf_ui');
     const section = map.section(form.GridSection, 'profile', _('Профили туннелей'),
-        _('Из панели можно активировать AmneziaWG, WireGuard, OpenVPN, sing-box, vless и Outline.'));
+        _('Из панели можно активировать AmneziaWG, WireGuard, OpenVPN, sing-box, VLESS · Xray и Outline.'));
     section.anonymous = true;
     section.addremove = true;
     section.addbtntitle = _('Добавить профиль');
@@ -783,7 +783,7 @@ function profileForm() {
             return (/^ss:\/\/\S+$/.test(value) && value.length <= 8192) || _('Введите ссылку ss://.');
         if (protocol === 'vless')
             return (/^(vless|https):\/\/\S+$/.test(value) && value.length <= 8192) ||
-                _('Введите ссылку vless:// или HTTPS-подписку со ссылками VLESS.');
+                _('Введите ссылку vless:// или HTTPS-подписку VLESS в формате списка ссылок или JSON Xray.');
         return (/^(https|vless|trojan|hysteria2|hy2):\/\/\S+$/.test(value) && value.length <= 8192) ||
             _('Введите HTTPS-ссылку подписки или ссылку на узел.');
     };

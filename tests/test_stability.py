@@ -17,7 +17,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from build_release import AGENT_PATH, FILES, MANIFEST, VERSION, NAME, published_runtime_files, runtime_files
+from build_release import (AGENT_PATH, FILES, MANIFEST, NAME, PANEL_MANIFEST, PANEL_UPDATE,
+                           VERSION, published_runtime_files, runtime_files)
 
 def call(*args, check=False):
     return subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=check, timeout=35)
@@ -375,7 +376,7 @@ class StabilityTests(unittest.TestCase):
 
     def test_opt_in_release_keeps_awg_dns_and_existing_schedules(self):
         self.seed_release()
-        for name in (f'v{VERSION}.manifest', 'luci-v60-r5.manifest', 'routewolf-migrate-v60-r3.sh'):
+        for name in (f'v{VERSION}.manifest', PANEL_MANIFEST.name, 'routewolf-migrate-v60-r3.sh'):
             shutil.copyfile(ROOT/'releases'/name, '/tmp/rw-downloads/'+name)
         self.seed_lists()
         write('/etc/config/network', "config interface 'awg0'\n\toption proto 'amneziawg'\n")
@@ -403,7 +404,7 @@ class StabilityTests(unittest.TestCase):
                 self.assertEqual(Path('/etc/routewolf/runtime_version').read_text(), f'{VERSION}\n')
                 self.assertEqual([path.read_bytes() for path in protected], before)
         self.assertIn(f'raw.githubusercontent.com/dagmagnat/RouteWolf/main/releases/v{VERSION}.manifest', self.actions())
-        self.assertNotIn('routewolf-luci-v60-r5.tar.gz', self.actions())
+        self.assertNotIn(PANEL_UPDATE.name, self.actions())
         self.assertNotIn('github.com/dagmagnat/RouteWolf/releases/', self.actions())
         self.assertNotIn('https://lists.example/', self.actions())
         self.assertNotIn('ifdown awg0', self.actions())
