@@ -15,7 +15,8 @@ rm -f /usr/libexec/rpcd/routewolf_ui \
     /usr/share/rpcd/acl.d/luci-app-routewolf.json \
     /usr/share/luci/menu.d/luci-app-routewolf.json \
     /www/luci-static/resources/view/routewolf/manage.js \
-    /www/luci-static/resources/view/routewolf/manage.css
+    /www/luci-static/resources/view/routewolf/manage.css \
+    /www/luci-static/resources/view/routewolf/geo-catalog.js
 rmdir /www/luci-static/resources/view/routewolf 2>/dev/null || true
 rm -f /tmp/luci-indexcache*
 /etc/init.d/rpcd reload

@@ -29,6 +29,7 @@ put_file /usr/share/rpcd/acl.d/luci-app-routewolf.json 644 "$here/root/usr/share
 put_file /usr/share/luci/menu.d/luci-app-routewolf.json 644 "$here/root/usr/share/luci/menu.d/luci-app-routewolf.json"
 put_file /www/luci-static/resources/view/routewolf/manage.js 644 "$here/htdocs/luci-static/resources/view/routewolf/manage.js"
 put_file /www/luci-static/resources/view/routewolf/manage.css 644 "$here/htdocs/luci-static/resources/view/routewolf/manage.css"
+put_file /www/luci-static/resources/view/routewolf/geo-catalog.js 644 "$here/htdocs/luci-static/resources/view/routewolf/geo-catalog.js"
 if [ -f "$here/../routewolf-uninstall.sh" ]; then
     put_file /usr/sbin/routewolf-uninstall.sh 755 "$here/../routewolf-uninstall.sh"
 fi

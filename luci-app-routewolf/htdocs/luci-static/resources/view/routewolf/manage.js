@@ -5,6 +5,7 @@
 'require ui';
 'require uci';
 'require poll';
+'require view.routewolf.geo-catalog as geoCatalog';
 
 const protocols = {
     amneziawg: 'AmneziaWG',
@@ -460,66 +461,115 @@ function libraryDialog(addEntries) {
 }
 
 function geoDialog(addEntries, ipv6Enabled) {
+    const types = { geosite: 'GeoSite', geoip: 'GeoIP' };
+    const limit = 8;
+    const selected = new Map();
     const kind = E('select', { 'aria-label': _('Тип геоданных') }, [
+        E('option', { value: 'all' }, [_('Домены и IP')]),
         E('option', { value: 'geosite' }, ['GeoSite · ', _('домены')]),
         E('option', { value: 'geoip' }, ['GeoIP · ', _('адреса')])
     ]);
-    const category = E('input', {
-        maxlength: 72, placeholder: 'youtube, geoip:telegram', 'aria-label': _('Категория')
+    const search = E('input', {
+        type: 'search', maxlength: 72, placeholder: _('Поиск, например YouTube или Telegram'),
+        'aria-label': _('Поиск категорий')
     });
-    const notice = E('p', { class: 'rw-list-hint', role: 'status' }, []);
-    const error = E('p', { class: 'rw-install-error', role: 'alert' }, []);
-    let entries = [];
-    function reset() {
-        entries = [];
-        notice.textContent = '';
-        error.textContent = '';
-        copy.disabled = true;
+    const results = E('div', { class: 'rw-geo-results', 'aria-label': _('Категории') });
+    const notice = E('p', { class: 'rw-list-hint', role: 'status' });
+    const error = E('p', { class: 'rw-install-error', role: 'alert' });
+    const close = button(_('Закрыть'), () => ui.hideModal());
+    let running = false;
+
+    function updateSelection() {
+        copy.disabled = running || !selected.size;
+        notice.textContent = selected.size ?
+            _('Выбрано категорий: %s').format([...selected.keys()].join(', ')) : '';
+        results.querySelectorAll('input').forEach(box => {
+            box.disabled = running || (!box.checked && selected.size >= limit);
+        });
     }
-    const fetch = button(_('Загрузить'), ui.createHandlerFn(null, async () => {
-        reset();
-        const input = /^(?:(geosite|geoip):)?([a-z0-9_][a-z0-9_@.-]{0,63})$/.exec(category.value.trim().toLowerCase());
-        if (!input) {
-            error.textContent = _('Введите имя категории, например geosite:youtube или geoip:telegram.');
-            return;
-        }
-        kind.disabled = category.disabled = true;
+    function renderResults() {
+        const query = search.value.trim().toLowerCase();
+        const filter = /^(geosite|geoip):(.*)$/.exec(query);
+        const term = filter ? filter[2].trim() : query;
+        const matches = Object.keys(types)
+            .filter(type => filter ? filter[1] === type : kind.value === 'all' || kind.value === type)
+            .flatMap(type => geoCatalog[type].filter(name => name.includes(term))
+                .map(name => ({ type, name, key: type + ':' + name })));
+        matches.sort((a, b) => Number(b.name === term) - Number(a.name === term) ||
+            Number(b.name.startsWith(term)) - Number(a.name.startsWith(term)) ||
+            a.name.localeCompare(b.name));
+        results.replaceChildren(...matches.slice(0, 40).map(match => {
+            const box = E('input', { type: 'checkbox', checked: selected.has(match.key) || null });
+            box.addEventListener('change', () => {
+                if (box.checked) selected.set(match.key, match);
+                else selected.delete(match.key);
+                error.textContent = '';
+                updateSelection();
+            });
+            return E('label', {}, [box, E('span', {}, [match.name]), E('small', {}, [types[match.type]])]);
+        }));
+        if (!matches.length)
+            results.appendChild(E('p', {}, [_('Категории не найдены.')]));
+        if (matches.length > 40)
+            results.appendChild(E('p', {}, [_('Показаны первые 40 категорий. Уточните поиск.')]));
+        results.scrollTop = 0;
+        updateSelection();
+    }
+    const copy = button(_('Добавить в список'), async () => {
+        if (running || !selected.size) return;
+        running = kind.disabled = search.disabled = close.disabled = true;
+        error.textContent = '';
+        updateSelection();
+        const requested = [...selected.values()];
+        const entries = [];
+        const failures = [];
+        const imported = [];
+        let skipped = false;
         try {
-            const imported = await geoData(input[1] || kind.value, input[2]);
-            if (imported.too_large)
-                throw new Error(_('Эта категория превышает лимит списка 24 КБ.'));
-            entries = imported.entries.filter(item => ipv6Enabled || item.kind !== 'ipv6');
-            if (!entries.length)
-                throw new Error(_('В категории нет записей, которые можно добавить.'));
-            notice.textContent = _('Готово к добавлению: %d записей.').format(entries.length);
-            if (imported.entries.length !== entries.length)
-                notice.textContent += ' ' + _('IPv6 пропущен, потому что маршрутизация IPv6 отключена.');
-            if (imported.skipped)
-                notice.textContent += ' ' + _('Сложные правила пропущены.');
-            copy.disabled = false;
-        } catch (failure) {
-            error.textContent = failure.message || _('Не удалось загрузить категорию.');
-        } finally {
-            kind.disabled = category.disabled = false;
-        }
-    }));
-    const copy = button(_('Добавить в свои списки'), () => {
-        try {
-            addEntries(entries, false);
-            ui.hideModal();
+            for (const match of requested) {
+                if (!search.isConnected) return;
+                notice.textContent = _('Загрузка %s…').format(match.key);
+                try {
+                    const reply = await geoData(match.type, match.name);
+                    if (reply.too_large)
+                        throw new Error(_('категория превышает лимит 24 КБ'));
+                    const usable = reply.entries.filter(item => ipv6Enabled || item.kind !== 'ipv6');
+                    if (!usable.length)
+                        throw new Error(_('нет подходящих записей'));
+                    entries.push(...usable);
+                    imported.push(match.key);
+                    skipped ||= reply.skipped > 0 || usable.length !== reply.entries.length;
+                } catch (failure) {
+                    failures.push(match.key + ' — ' + (failure.message || _('не удалось загрузить')));
+                }
+            }
+            if (!search.isConnected) return;
+            if (entries.length)
+                addEntries(entries, false);
+            imported.forEach(key => selected.delete(key));
+            if (!failures.length && !skipped) {
+                ui.hideModal();
+                return;
+            }
+            if (skipped)
+                failures.push(_('Поддерживаемые записи добавлены. Сложные правила и отключённый IPv6 пропущены.'));
+            error.textContent = failures.join('\n');
         } catch (failure) {
             error.textContent = failure.message;
+        } finally {
+            running = kind.disabled = search.disabled = close.disabled = false;
+            renderResults();
         }
     }, true);
-    copy.disabled = true;
-    category.addEventListener('input', reset);
-    kind.addEventListener('change', reset);
+    search.addEventListener('input', renderResults);
+    kind.addEventListener('change', renderResults);
     ui.showModal(_('Импорт GeoIP и GeoSite'), [
-        E('p', {}, [_('Загрузите категорию и проверьте записи в своих списках перед применением. Точные домены также включают поддомены.')]),
-        E('div', { class: 'rw-actions rw-geo-fields' }, [kind, category, fetch]),
+        E('div', { class: 'rw-geo-fields' }, [kind, search]), results,
+        E('p', { class: 'rw-list-hint' }, [_('До восьми категорий за раз. Записи появятся в своих списках. Затем нажмите «Применить списки».')]),
         notice, error,
-        E('div', { class: 'rw-actions rw-activate-actions' }, [copy, button(_('Закрыть'), () => ui.hideModal())])
-    ], 'rw-activate-modal');
+        E('div', { class: 'rw-geo-actions' }, [copy, close])
+    ], 'rw-geo-modal');
+    renderResults();
 }
 
 function listAddress(kind, address) {
