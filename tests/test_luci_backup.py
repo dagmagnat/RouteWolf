@@ -17,6 +17,7 @@ class LuCIBackupTests(unittest.TestCase):
             work = shlex.quote(Path(directory).as_posix())
             worker, _, _ = WORKER.read_text(encoding='utf-8').rpartition('\ncase ')
             worker = (worker.replace('/var/run/routewolf-ui-backup', '$fixture/run')
+                      .replace('/usr/libexec/routewolf-ui/subscription-refresh.sh', '"$fixture/subscription-refresh.sh"')
                       .replace('/tmp/routewolf-watchdog.lock', '$fixture/watchdog')
                       .replace('/tmp/routewolf-ui-job', '$fixture/job')
                       .replace('/usr/libexec/routewolf-ui/backup-proxy.sh', '"$fixture/backup-proxy.sh"')
@@ -61,6 +62,8 @@ sleep() {
 }
 monitor
 '''
+            Path(directory, 'subscription-refresh.sh').write_bytes(
+                WORKER.with_name('subscription-refresh.sh').read_bytes())
             for primary, backup in [('rwsub0', 'awgrwb'), ('awgui0', 'awgrwb'),
                                     ('awgui0', 'tunrwb'), ('awgui0', 'rwsubb0')]:
                 with self.subTest(primary=primary, backup=backup):

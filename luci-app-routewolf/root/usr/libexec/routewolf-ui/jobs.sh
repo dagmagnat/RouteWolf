@@ -175,6 +175,23 @@ wait_for_backup_monitor() {
     return 1
 }
 
+request_subscription_refresh() {
+    local target
+    if [ "$(cat /var/run/routewolf-ui-backup/device 2>/dev/null || :)" = rwsubb0 ] &&
+        /etc/init.d/routewolf-ui-backup running &&
+        grep -q '^https://' "$state/backup-proxy/source"; then
+        target=/var/run/routewolf-ui-backup
+    elif [ ! -e "$state/paused-singbox" ] && [ ! -e "$state/native-active" ] &&
+        /etc/init.d/routewolf-subscription running &&
+        grep -q '^https://' /etc/routewolf-subscription/source; then
+        target=/var/run/routewolf-subscription
+    else
+        reason subscription-unavailable
+        return 1
+    fi
+    mkdir -p "$target" && touch "$target/refresh-request"
+}
+
 if [ "${1:-}" = worker ]; then
     shift
     export RW_JOB_STATE="$work"
@@ -230,6 +247,7 @@ if [ "${1:-}" = worker ]; then
             ;;
         local_lists) "$lib/lists.sh" apply ;;
         lists) run_runtime /usr/sbin/routewolf-stable-update.sh --lists-auto ;;
+        subscription_refresh) request_subscription_refresh ;;
         update)
             reason update-failed
             if run_runtime /usr/sbin/routewolf-stable-update.sh check; then
@@ -279,7 +297,7 @@ case "${1:-}" in
     backup)
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
         ;;
-    local_lists|lists|update|reload_project|repair|check|pause|resume|dns_on|dns_off|restart|dco_on|dco_off) ;;
+    local_lists|lists|subscription_refresh|update|reload_project|repair|check|pause|resume|dns_on|dns_off|restart|dco_on|dco_off) ;;
     *) exit 2 ;;
 esac
 

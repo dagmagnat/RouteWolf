@@ -11,6 +11,7 @@ primary_mark=0x02000000
 watchdog_lock=/tmp/routewolf-watchdog.lock
 held_file=$watchdog_lock/routewolf-ui-primary
 retry_primary_seconds=120
+subscription_schedule=/usr/libexec/routewolf-ui/subscription-refresh.sh
 
 setting() { uci -q get "routewolf_ui.ui.$1" || :; }
 owned() {
@@ -326,14 +327,20 @@ read_settings() {
 }
 
 monitor() {
+    . "$subscription_schedule"
     mkdir -p "$run"
     last_policy=
     trap 'teardown; rm -f "$run/busy"; exit' HUP INT TERM
     misses=0
     next_start=0
-    next_refresh=0
+    last_refresh=-1
+    refresh_pid=
     next_recovery=0
     while :; do
+        if [ -n "$refresh_pid" ] && ! kill -0 "$refresh_pid" 2>/dev/null; then
+            wait "$refresh_pid" || logger -t routewolf-ui-backup 'Subscription check failed'
+            refresh_pid=
+        fi
         printf '%s\n' "$$" > "$run/busy"
         case "$(cat /tmp/routewolf-ui-job/action 2>/dev/null || :)" in
             backup|activate|pause|resume|restart|repair)
@@ -401,9 +408,13 @@ monitor() {
                         continue
                     fi
                 fi
-                if [ "$dev" = rwsubb0 ] && [ "$now" -ge "$next_refresh" ]; then
+                if [ "$dev" = rwsubb0 ] && [ -z "$refresh_pid" ] &&
+                    [ ! -d /tmp/routewolf-ui-job/lock ] && grep -q '^https://' "$state/backup-proxy/source" &&
+                    subscription_refresh_due "$now" "$last_refresh" "$run/refresh-request"; then
+                    rm -f "$run/refresh-request"
                     /usr/libexec/routewolf-ui/backup-proxy.sh refresh >/dev/null 2>&1 &
-                    next_refresh=$((now+3600))
+                    refresh_pid=$!
+                    last_refresh=$now
                 fi
                 if link_active "$dev"; then
                     printf '%s\n' "$dev" > "$run/device"

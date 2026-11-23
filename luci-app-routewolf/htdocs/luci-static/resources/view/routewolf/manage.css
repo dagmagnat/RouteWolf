@@ -56,6 +56,11 @@
 .rw-luci .rw-interfaces { display:flex; flex-wrap:wrap; gap:8px; }
 .rw-luci .rw-interface { display:flex; align-items:center; gap:10px; padding:6px 9px; border:1px solid var(--rw-line); border-radius:6px; font-size:.88rem; }
 .rw-luci .rw-service-panel { max-width:70rem; }
+.rw-luci .rw-subscription-schedule { padding:12px 0; border-bottom:1px solid var(--rw-line); }
+.rw-luci .rw-subscription-schedule button { margin:0; }
+.rw-luci .rw-subscription-custom:not([hidden]) { display:inline-flex; gap:6px; align-items:center; }
+.rw-luci .rw-subscription-custom input { width:6rem; }
+.rw-luci .rw-subscription-schedule [role="status"]:not(:empty) { display:block; margin-top:8px; }
 .rw-luci .rw-control { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--rw-line); padding:10px 0; }
 .rw-luci .rw-control-description { display:block; opacity:.75; font-size:.83rem; margin-top:3px; }
 .rw-luci .rw-control-toggle {

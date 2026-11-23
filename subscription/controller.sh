@@ -14,6 +14,13 @@ priority=92
 mark=0x02000000
 device=rwsub0
 
+subscription_schedule=/usr/libexec/routewolf-ui/subscription-refresh.sh
+if [ -r "$subscription_schedule" ]; then
+    . "$subscription_schedule"
+else
+    subscription_refresh_due() { [ "$(($1-$2))" -ge 3600 ]; }
+fi
+
 log() { logger -t routewolf-subscription "$*"; }
 result() {
     if [ "$(cat "$runtime/status" 2>/dev/null)" != "$1" ]; then
@@ -187,7 +194,7 @@ monitor() {
     refresh_pid=
     trap 'clear_lease; [ -z "$refresh_pid" ] || kill "$refresh_pid" 2>/dev/null || true; exit' HUP INT TERM
     now=$(monotonic_seconds)
-    next_refresh=$((now+3600))
+    last_refresh=$now
     next_restart=$now
     failures=0
     while :; do
@@ -200,17 +207,19 @@ monitor() {
             exit 0
         fi
         now=$(monotonic_seconds)
-        if [ -z "$refresh_pid" ] && [ "$now" -ge "$next_refresh" ] && grep -q '^https://' "$state/source"; then
-            refresh &
-            refresh_pid=$!
-            next_refresh=$((now+3600))
-        fi
         if [ -n "$refresh_pid" ] && ! kill -0 "$refresh_pid" 2>/dev/null; then
-            wait "$refresh_pid" || true
+            wait "$refresh_pid" || log "Subscription check failed; keeping the previous configuration"
             refresh_pid=
         fi
         if [ -f "$state/candidate.json" ]; then
             apply_candidate || true
+        fi
+        if [ -z "$refresh_pid" ] && grep -q '^https://' "$state/source" &&
+            subscription_refresh_due "$now" "$last_refresh" "$runtime/refresh-request"; then
+            rm -f "$runtime/refresh-request"
+            refresh &
+            refresh_pid=$!
+            last_refresh=$now
         fi
         status=11
         if ip link show dev "$device" >/dev/null 2>&1; then

@@ -42,6 +42,7 @@ const jobPhases = {
     done: [100, _('Готово')]
 };
 const jobErrors = {
+    'subscription-unavailable': _('Нет запущенной HTTPS-подписки для проверки.'),
     'invalid-profile': _('Проверьте адрес, ключи и режим запуска сохранённого профиля.'),
     'package-install': _('Не удалось установить компоненты. Проверьте DNS, доступ к репозиторию OpenWrt и свободное место.'),
     'source-download': _('Не удалось загрузить подписку или её компоненты. Проверьте ссылку и доступ в интернет.'),
@@ -238,7 +239,54 @@ function statusPanel(result) {
     ]);
 }
 
-function servicePanel(result, action, showError) {
+function subscriptionSchedule(action, save, showError) {
+    const label = _('Обновление подписок');
+    const presets = [
+        ['60', _('Раз в час')], ['120', _('Раз в два часа')],
+        ['30', _('Раз в 30 минут')], ['15', _('Раз в 15 минут')],
+        ['10', _('Раз в 10 минут')], ['5', _('Раз в 5 минут')],
+        ['custom', _('Свой интервал')], ['0', _('Выключено')]
+    ];
+    const valid = value => /^[1-9][0-9]{0,3}$/.test(value) && Number(value) >= 5 && Number(value) <= 1440;
+    const current = uci.get(settings, 'ui', 'subscription_refresh_minutes') || '60';
+    const interval = current === '0' || valid(current) ? current : '60';
+    const choice = E('select', { 'aria-label': label }, presets.map(([value, name]) => E('option', { value }, [name])));
+    choice.value = presets.some(([value]) => value === interval) ? interval : 'custom';
+    const minutes = E('input', {
+        type: 'number', min: 5, max: 1440, step: 1, value: interval === '0' ? '60' : interval,
+        'aria-label': _('Интервал обновления в минутах')
+    });
+    const custom = E('label', { class: 'rw-subscription-custom', hidden: choice.value !== 'custom' }, [minutes, _('мин')]);
+    const message = E('span', { role: 'status' });
+    choice.addEventListener('change', () => { custom.hidden = choice.value !== 'custom'; });
+    const saveSchedule = button(_('Сохранить интервал'), ui.createHandlerFn(null, async () => {
+        const value = choice.value === 'custom' ? minutes.value : choice.value;
+        message.textContent = '';
+        if (value !== '0' && !valid(value)) {
+            showError(_('Введите целое число минут от 5 до 1440.'));
+            return;
+        }
+        try {
+            uci.set(settings, 'ui', 'subscription_refresh_minutes', value);
+            await save();
+            message.textContent = _('Интервал сохранён.');
+        }
+        catch (error) { showError(error.message); }
+    }), true);
+    const checkNow = button(_('Проверить сейчас'), ui.createHandlerFn(null, async () => {
+        message.textContent = '';
+        if (await action('subscription_refresh'))
+            message.textContent = _('Проверка подписки поставлена в очередь.');
+    }));
+    return E('section', { class: 'rw-subscription-schedule' }, [
+        E('strong', {}, [label]),
+        E('div', { class: 'rw-control-description' }, [_('Для текущей HTTPS-подписки sing-box или Xray. По умолчанию — раз в час.')]),
+        E('div', { class: 'rw-actions' }, [choice, custom, saveSchedule, checkNow]),
+        message
+    ]);
+}
+
+function servicePanel(result, action, showError, save) {
     const setting = change => async value => {
         if (!await change(value))
             throw new Error(_('RouteWolf не подтвердил изменение. Для старой установки проверьте обновление с параметром --luci по SSH.'));
@@ -262,6 +310,7 @@ function servicePanel(result, action, showError) {
         commands.push([_('Включить DCO'), 'dco_on'], [_('Выключить DCO'), 'dco_off']);
     return E('div', { class: 'rw-service-panel' }, [
         ...items,
+        subscriptionSchedule(action, save, showError),
         E('div', { class: 'rw-actions rw-service-actions' }, commands.map(([label, cmd]) => button(label, ui.createHandlerFn(null, () => {
             if ((cmd === 'restart' || cmd === 'reload_project') &&
                 !window.confirm(cmd === 'restart' ? _('Перезапустить действующий туннель?') : _('Перезапустить маршрутизацию RouteWolf?')))
@@ -1219,7 +1268,7 @@ return view.extend({
                     _('Выберите другой сохранённый профиль для резерва.')
                 ])
             ]);
-            const controls = servicePanel(result, action, showError);
+            const controls = servicePanel(result, action, showError, save);
             const liveStatus = E('div', {}, [statusPanel(result)]);
             const badge = statusBadge(result.link_state);
             badge.setAttribute('aria-live', 'polite');

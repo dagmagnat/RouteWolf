@@ -36,7 +36,7 @@ fi
 if [ -f "$here/../runtime/routewolf-stable-update.sh" ]; then
     put_file /usr/sbin/routewolf-stable-update.sh 755 "$here/../runtime/routewolf-stable-update.sh"
 fi
-for script in dependencies jobs lists profiles singbox schedule backup backup-proxy dns geodata; do
+for script in dependencies jobs lists profiles singbox schedule backup backup-proxy dns geodata subscription-refresh; do
     put_file "/usr/libexec/routewolf-ui/$script.sh" 755 "$here/root/usr/libexec/routewolf-ui/$script.sh"
 done
 put_file /usr/libexec/routewolf-ui/library.awk 644 "$here/root/usr/libexec/routewolf-ui/library.awk"
@@ -58,6 +58,14 @@ if [ -f "$subscription/install.sh" ]; then
     for file in install.sh controller.sh engine.init monitor.init assets.txt assets-vless.txt; do
         put_file "/usr/libexec/routewolf-ui/subscription/$file" 644 "$subscription/$file"
     done
+    controller=/etc/routewolf-subscription/controller
+    if [ -x "$controller" ] && ! cmp -s "$subscription/controller.sh" "$controller"; then
+        sh -n "$subscription/controller.sh"
+        put_file "$controller" 700 "$subscription/controller.sh"
+        if /etc/init.d/routewolf-subscription running; then
+            /etc/init.d/routewolf-subscription restart
+        fi
+    fi
 fi
 /etc/init.d/routewolf-ui-lists enable
 if /etc/init.d/routewolf-ui-backup running; then
