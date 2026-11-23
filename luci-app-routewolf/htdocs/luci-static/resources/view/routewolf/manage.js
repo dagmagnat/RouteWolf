@@ -475,6 +475,9 @@ function geoDialog(addEntries, ipv6Enabled) {
         'aria-label': _('Поиск категорий')
     });
     const results = E('div', { class: 'rw-geo-results', 'aria-label': _('Категории') });
+    const selectionCount = E('strong', { role: 'status' });
+    const selectionItems = E('ul', { 'aria-label': _('Выбранные категории') });
+    const summary = E('div', { class: 'rw-geo-selected', hidden: true }, [selectionCount, selectionItems]);
     const notice = E('p', { class: 'rw-list-hint', role: 'status' });
     const error = E('p', { class: 'rw-install-error', role: 'alert' });
     const close = button(_('Закрыть'), () => ui.hideModal());
@@ -482,8 +485,12 @@ function geoDialog(addEntries, ipv6Enabled) {
 
     function updateSelection() {
         copy.disabled = running || !selected.size;
-        notice.textContent = selected.size ?
-            _('Выбрано категорий: %s').format([...selected.keys()].join(', ')) : '';
+        summary.hidden = !selected.size;
+        const count = _('Выбрано категорий: %d').format(selected.size);
+        if (selectionCount.textContent !== count)
+            selectionCount.textContent = count;
+        selectionItems.replaceChildren(...Array.from(selected.values(), match =>
+            E('li', {}, [E('span', {}, [types[match.type]]), match.name])));
         results.querySelectorAll('input').forEach(box => {
             box.disabled = running || (!box.checked && selected.size >= limit);
         });
@@ -559,6 +566,7 @@ function geoDialog(addEntries, ipv6Enabled) {
             error.textContent = failure.message;
         } finally {
             running = kind.disabled = search.disabled = close.disabled = false;
+            notice.textContent = '';
             renderResults();
         }
     }, true);
@@ -567,7 +575,7 @@ function geoDialog(addEntries, ipv6Enabled) {
     ui.showModal(_('Импорт GeoIP и GeoSite'), [
         E('div', { class: 'rw-geo-fields' }, [kind, search]), results,
         E('p', { class: 'rw-list-hint' }, [_('До восьми категорий за раз. Записи появятся в своих списках. Затем нажмите «Применить списки».')]),
-        notice, error,
+        summary, notice, error,
         E('div', { class: 'rw-geo-actions' }, [copy, close])
     ], 'rw-geo-modal');
     renderResults();

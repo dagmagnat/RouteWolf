@@ -142,6 +142,20 @@
 .rw-geo-modal .rw-geo-results input[type="checkbox"] { position:static; flex:none; margin:0; }
 .rw-geo-modal .rw-geo-results span { overflow-wrap:anywhere; }
 .rw-geo-modal .rw-geo-results small { margin-inline-start:auto; opacity:.7; }
+.rw-geo-modal > .rw-geo-selected {
+    padding:9px 12px; border:1px solid color-mix(in srgb,#339963 52%,transparent);
+    border-inline-start-width:3px; border-radius:7px;
+    background:color-mix(in srgb,#339963 14%,transparent); box-sizing:border-box;
+}
+.rw-geo-modal > .rw-geo-selected[hidden] { display:none; }
+.rw-geo-modal .rw-geo-selected ul {
+    display:flex; flex-wrap:wrap; gap:5px 7px; padding:0; margin:6px 0 0;
+}
+.rw-geo-modal .rw-geo-selected li {
+    list-style:none; color:inherit; padding:3px 8px; border-radius:5px;
+    background:color-mix(in srgb,currentColor 10%,transparent); overflow-wrap:anywhere;
+}
+.rw-geo-modal .rw-geo-selected li span { margin-inline-end:5px; font-weight:600; }
 .rw-geo-modal .rw-install-error { white-space:pre-line; overflow-wrap:anywhere; }
 .rw-install-progress[hidden], .rw-install-spinner[hidden] { display:none; }
 .rw-install-progress { margin-block:12px; }
