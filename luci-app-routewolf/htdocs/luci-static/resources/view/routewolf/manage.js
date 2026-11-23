@@ -206,11 +206,21 @@ function statusPanel(result) {
         [_('Маршрутизация'), result.paused ? _('Через WAN') : routeNames[result.backup_mode || result.mode] || '—'],
         [_('Интернет по умолчанию'), result.wan_device || '—']
     ];
+    const ram = result.ram;
+    const memory = Number.isInteger(ram) && ram >= 0 && ram <= 100
+        ? '%s %d%% · %s %d%%'.format(_('Занято'), ram, _('Свободно'), 100 - ram) : '—';
+    const wireGuard = result.protocol === 'wireguard' || result.protocol === 'amneziawg';
+    const subscription = result.tunnel === 'rwsub0';
+    const tunnelFact = wireGuard
+        ? [_('Последнее рукопожатие'), formatHandshake(result.handshake)]
+        : [subscription ? _('Проверка туннеля') : _('Состояние туннеля'),
+            subscription && result.link_state === 'active'
+                ? _('Связь подтверждена') : (linkStates[result.link_state] || linkStates.none)[0]];
     const facts = [
         [_('Версия'), result.version || '—'],
         [_('Нагрузка за минуту'), result.load || '—'],
-        [_('Занято ОЗУ'), result.ram >= 0 ? result.ram + '%' : '—'],
-        [_('Последнее рукопожатие'), formatHandshake(result.handshake)]
+        [_('Оперативная память'), memory],
+        tunnelFact
     ];
     const interfaces = (result.interfaces || []).map(item => E('div', { class: 'rw-interface' }, [
         E('span', {}, [protocols[item.protocol] || _('Туннель'), ' · ', item.name, item.selected ? ' • ' + _('RouteWolf') : '']),

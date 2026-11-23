@@ -121,8 +121,12 @@ status() {
         case "$backup_state" in checking|wan|conflict) selected_state=fallback ;; esac
     fi
     read -r load _ </proc/loadavg
-    mem_used=$(awk '/^MemTotal:/ {total=$2} /^MemAvailable:/ {free=$2}
-                    END {if(total>0 && free>0) printf "%d", 100*(total-free)/total; else print -1}' /proc/meminfo)
+    mem_used=$(awk '/^MemTotal:/ {total=$2} /^MemAvailable:/ {available=$2; found=1}
+                    END {
+                        if (total>0 && found && available>=0 && available<=total)
+                            printf "%d", 100*(total-available)/total;
+                        else print -1
+                    }' /proc/meminfo)
 
     json_add_string link_state "$selected_state"
     json_add_string load "$load"
