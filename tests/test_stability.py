@@ -524,8 +524,6 @@ class RoutingTests(unittest.TestCase):
     actions=StabilityTests.actions
     def setUp(self):
         StabilityTests.setUp(self)
-        call('nft', 'flush', 'chain', 'inet', 'fw4', 'mangle_prerouting', check=True)
-        call('nft', 'add', 'set', 'inet', 'fw4', 'unrelated', '{ type ipv4_addr; }', check=True)
         Path('/mockbin/ip').unlink()
         for dev in ['rw_wan','wg0']:call('ip','link','del',dev)
         call('ip','rule','del','priority','100')
@@ -588,6 +586,8 @@ class UninstallTests(unittest.TestCase):
 
     def setUp(self):
         StabilityTests.setUp(self)
+        call('nft', 'flush', 'chain', 'inet', 'fw4', 'mangle_prerouting', check=True)
+        call('nft', 'add', 'set', 'inet', 'fw4', 'unrelated', '{ type ipv4_addr; }', check=True)
         self.packages={
             'network':{'wan':{'type':'interface','proto':'dhcp'},'lan':{'type':'interface','ipaddr':'192.168.31.1'},'awg0':{'type':'interface','private_key':'private-fixture'},'routewolf_mark':{'type':'rule','mark':'1'}},
             'dhcp':{'dns':{'type':'dnsmasq','server':'192.0.2.53','confdir':'/tmp/dnsmasq.d','filter_aaaa':'1'}},
