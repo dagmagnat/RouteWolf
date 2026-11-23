@@ -493,7 +493,7 @@ function geoDialog(addEntries, ipv6Enabled) {
         const term = filter ? filter[2].trim() : query;
         const matches = Object.keys(types)
             .filter(type => filter ? filter[1] === type : kind.value === 'all' || kind.value === type)
-            .flatMap(type => geoCatalog[type].filter(name => name.includes(term))
+            .flatMap(type => geoCatalog.categories[type].filter(name => name.includes(term))
                 .map(name => ({ type, name, key: type + ':' + name })));
         matches.sort((a, b) => Number(b.name === term) - Number(a.name === term) ||
             Number(b.name.startsWith(term)) - Number(a.name.startsWith(term)) ||

@@ -31,6 +31,7 @@ if __name__ == "__main__":
             raise RuntimeError(f"No categories found for {kind}")
     path = Path(__file__).resolve().parents[1] / "luci-app-routewolf/htdocs/luci-static/resources/view/routewolf/geo-catalog.js"
     data = json.dumps(catalog, separators=(",", ":"))
-    path.write_text(f"'use strict';\n// MetaCubeX/meta-rules-dat sing: {upstream['sha']}\nreturn {data};\n",
+    path.write_text(f"'use strict';\n'require baseclass';\n// MetaCubeX/meta-rules-dat sing: {upstream['sha']}\n"
+                    f"return baseclass.extend({{categories:{data}}});\n",
                     encoding="utf-8", newline="\n")
     print(", ".join(f"{kind}: {len(names)}" for kind, names in catalog.items()), path.stat().st_size, "bytes")
