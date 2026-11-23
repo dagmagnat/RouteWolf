@@ -49,8 +49,10 @@ const jobErrors = {
     'xray-config': _('Xray отклонил конфигурацию VLESS. Проверьте параметры ссылки и поддержку TUN в установленной версии xray-core.'),
     'tunnel-start': _('Интерфейс туннеля не удалось запустить.'),
     'tunnel-unreachable': _('Туннель запустился, но проверка связи не прошла.'),
+    'network-restart-required': _('Компоненты установлены. Перезапустите сеть или перезагрузите роутер через «Система → Перезагрузка», затем снова активируйте профиль.'),
     'route-unavailable': _('Туннель поднят, но маршрут через него недоступен.'),
     'profile-dns': _('Не удалось подключить DNS профиля. Проверьте IP-адреса и конфигурацию dnsmasq.'),
+    'backup-transition': _('Резервный профиль работает или переключается. Дождитесь завершения проверки либо отключите резерв в «Профилях».'),
     'runtime-missing': _('Компонент RouteWolf не найден. Для старой установки выполните обновление до v60 с параметром --luci по SSH.'),
     'update-failed': _('Не удалось проверить стабильный выпуск. Подробности доступны по SSH через rw updates status.'),
     'update-schedule': _('Обновление завершилось, но восстановить расписание списков не удалось.'),
@@ -60,6 +62,7 @@ const jobErrors = {
 const listSchedule = rpc.declare({ object: 'routewolf_ui', method: 'list_schedule', params: ['action'], reject: true, expect: { ok: false } });
 const libraryPage = rpc.declare({ object: 'routewolf_ui', method: 'library', params: ['kind', 'query', 'offset', 'group', 'limit'], reject: true });
 const geoData = rpc.declare({ object: 'routewolf_ui', method: 'geodata', params: ['kind', 'category'], reject: true });
+const listReport = rpc.declare({ object: 'routewolf_ui', method: 'list_report', reject: true, expect: { report: '' } });
 const settings = 'routewolf_ui';
 const localLists = [
     ['domains', _('Домены'), 'example.org'],
@@ -513,6 +516,102 @@ function geoDialog(addEntries, ipv6Enabled) {
     ], 'rw-activate-modal');
 }
 
+function listAddress(kind, address) {
+    if (kind === 'ipv4') {
+        const octets = address.split('.');
+        if (octets.length !== 4 || octets.some(octet => !/^(0|[1-9][0-9]{0,2})$/.test(octet) || Number(octet) > 255))
+            return null;
+        return { address, value: octets.reduce((value, octet) => (value << 8n) | BigInt(octet), 0n) };
+    }
+    if (!/^[\da-f:.]+$/i.test(address))
+        return null;
+    try {
+        const canonical = new URL('http://[' + address + ']/').hostname.slice(1, -1);
+        const pieces = canonical.split('::');
+        const left = pieces[0] ? pieces[0].split(':') : [];
+        const right = pieces[1] ? pieces[1].split(':') : [];
+        const words = pieces.length === 1 ? left : [...left, ...Array(8 - left.length - right.length).fill('0'), ...right];
+        return { address: canonical, value: BigInt('0x' + words.map(word => word.padStart(4, '0')).join('')) };
+    } catch (error) {
+        return null;
+    }
+}
+
+function cleanList(kind, draft) {
+    const retained = [];
+    const removed = [];
+    const records = [];
+    const bits = kind === 'ipv4' ? 32 : 128;
+    const minimum = kind === 'ipv4' ? 16 : 32;
+    const seen = new Set();
+    for (const line of draft.split(/\r?\n/)) {
+        const [entry, comment] = line.split(/#(.*)/);
+        if (!entry.trim()) {
+            if (comment != null)
+                retained.push({ text: line });
+            continue;
+        }
+        // Keep the same line-oriented format as the setting and validator.
+        const original = entry.trim();
+        if (kind === 'domains') {
+            const name = original.toLowerCase().replace(/\.$/, '');
+            const labels = name.split('.');
+            if (name.length > 253 || labels.length < 2 || !/[a-z]/.test(labels[labels.length - 1]) ||
+                labels.some(label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))) {
+                removed.push([original, _('недопустимое доменное имя')]);
+                continue;
+            }
+            if (seen.has(name)) {
+                removed.push([original, _('дубликат')]);
+                continue;
+            }
+            seen.add(name);
+            retained.push({ text: line });
+            continue;
+        }
+        const parts = original.split('/');
+        const parsed = listAddress(kind, parts[0]);
+        const prefix = parts.length === 1 ? bits : Number(parts[1]);
+        if (!parsed || parts.length > 2 || (parts.length === 2 && !/^(0|[1-9][0-9]{0,2})$/.test(parts[1])) || prefix > bits) {
+            removed.push([original, _('неверный IP-адрес или префикс')]);
+            continue;
+        }
+        if (prefix < minimum) {
+            removed.push([original, _('слишком широкая сеть, минимальный префикс /%d').format(minimum)]);
+            continue;
+        }
+        const width = 1n << BigInt(bits - prefix);
+        if (parsed.value % width !== 0n) {
+            removed.push([original, _('адрес содержит биты узла для указанного префикса')]);
+            continue;
+        }
+        const top = parsed.value >> BigInt(bits - (kind === 'ipv4' ? 8 : 16));
+        const reserved = kind === 'ipv4'
+            ? top === 0n || top === 127n || top >= 224n || (parsed.value >> 16n) === 0xa9fen
+            : top >= 0xff00n || (top >= 0xfe80n && top <= 0xfebfn) || parsed.value <= 1n;
+        if (reserved) {
+            removed.push([original, _('служебный или локальный диапазон')]);
+            continue;
+        }
+        const record = { original, text: line, first: parsed.value, last: parsed.value + width - 1n };
+        records.push(record);
+        retained.push(record);
+    }
+    records.sort((a, b) => a.first !== b.first ? (a.first < b.first ? -1 : 1) : (a.last > b.last ? -1 : a.last < b.last ? 1 : 0));
+    let covering = null;
+    for (const record of records) {
+        if (covering && record.last <= covering.last) {
+            record.omit = true;
+            const reason = record.first === covering.first && record.last === covering.last
+                ? _('дубликат записи %s') : _('уже входит в подсеть %s');
+            removed.push([record.original, reason.format(covering.original)]);
+        } else {
+            covering = record;
+        }
+    }
+    return { value: retained.filter(record => !record.omit).map(record => record.text).join('\n'), removed };
+}
+
 function listPanel(result, save, action) {
     const useProject = E('input', { type: 'checkbox', checked: uci.get(settings, 'ui', 'project_lists') !== '0' || null });
     const drafts = {};
@@ -526,6 +625,8 @@ function listPanel(result, save, action) {
         E('option', { value: 'exclude' }, [_('Исключения из библиотеки')])
     ]);
     let editing = 'local';
+    const changes = {};
+    const checkStatus = E('p', { class: 'rw-list-hint', 'aria-live': 'polite' });
     function readFields() {
         localLists.forEach(([key]) => { drafts[(editing === 'exclude' ? 'exclude_' : '') + key] = fields[key].value; });
     }
@@ -534,19 +635,54 @@ function listPanel(result, save, action) {
         editing = sourceMode.value = mode;
         localLists.forEach(([key]) => { fields[key].value = drafts[(editing === 'exclude' ? 'exclude_' : '') + key]; });
     }
+    function cleanDraft(key, field, value) {
+        const cleaned = cleanList(key, value);
+        if (new TextEncoder().encode(cleaned.value).length > maxListBytes)
+            throw new Error(_('Список превышает 24 КБ. Добавьте меньше записей.'));
+        changes[field] = [...(changes[field] || []), ...cleaned.removed].slice(-200);
+        return cleaned.value;
+    }
+    function refreshListStatus() {
+        const count = Object.values(changes).reduce((total, records) => total + records.length, 0);
+        checkStatus.textContent = count ? _('Исключено записей в текущем редакторе: %d.').format(count) : '';
+    }
+    async function showListReport() {
+        const details = E('p', {}, [_('Загрузка отчёта библиотеки…')]);
+        const rows = Object.entries(changes).flatMap(([field, records]) =>
+            records.map(([entry, reason]) => [field, entry, reason]));
+        ui.showModal(_('Проверка списков'), [
+            E('h4', {}, [_('Свои записи и исключения')]),
+            rows.length ? E('div', { class: 'rw-list-report' }, [E('ul', {}, rows.map(([field, entry, reason]) =>
+                E('li', {}, [
+                    field.startsWith('exclude_') ? _('Исключения') : _('Свои записи'),
+                    ' · ', E('code', {}, [entry]), ' · ', reason
+                ])))]) : E('p', {}, [_('В текущем редакторе пока нет отклонённых записей.')]),
+            E('h4', {}, [_('Последняя проверка библиотеки RouteWolf')]),
+            details,
+            E('div', { class: 'rw-actions rw-activate-actions' }, [button(_('Закрыть'), () => ui.hideModal())])
+        ], 'rw-activate-modal');
+        try {
+            const report = await listReport();
+            if (report)
+                details.replaceWith(E('pre', { class: 'rw-list-report' }, [report]));
+            else
+                details.textContent = _('Отчёт появится после обновления библиотеки.');
+        } catch (error) {
+            details.textContent = _('Не удалось открыть отчёт библиотеки.');
+        }
+    }
     function addEntries(entries, excluded) {
         readFields();
         const next = { ...drafts };
         for (const [key] of localLists) {
             const field = (excluded ? 'exclude_' : '') + key;
             const values = entries.filter(entry => entry.kind === key).map(entry => entry.value);
-            next[field] = [...new Set([...drafts[field].split(/\r?\n/), ...values].map(item => item.trim()).filter(Boolean))].join('\n');
-            if (new TextEncoder().encode(next[field]).length > maxListBytes)
-                throw new Error(_('Список превышает 24 КБ. Добавьте меньше записей.'));
+            next[field] = cleanDraft(key, field, [drafts[field], ...values].join('\n'));
         }
         Object.assign(drafts, next);
         editing = sourceMode.value = excluded ? 'exclude' : 'local';
         localLists.forEach(([name]) => { fields[name].value = drafts[(excluded ? 'exclude_' : '') + name]; });
+        refreshListStatus();
     }
     sourceMode.addEventListener('change', () => showFields(sourceMode.value));
     const cards = localLists.map(([key, label, placeholder]) => {
@@ -565,15 +701,23 @@ function listPanel(result, save, action) {
         E('p', { class: 'rw-list-hint' }, [_('В выборочном режиме исключения отправляются через WAN. Если запись есть и в своих списках, она идёт через туннель. Обновление библиотеки сохраняет свои записи и исключения.')]),
         sourceMode,
         E('div', { class: 'rw-list-grid' }, cards),
+        checkStatus,
         E('div', { class: 'rw-actions rw-equal-actions' }, [
             button(_('Применить списки'), ui.createHandlerFn(null, async () => {
                 readFields();
+                for (const [key] of localLists) {
+                    drafts[key] = cleanDraft(key, key, drafts[key]);
+                    drafts['exclude_' + key] = cleanDraft(key, 'exclude_' + key, drafts['exclude_' + key]);
+                }
+                localLists.forEach(([key]) => { fields[key].value = drafts[(editing === 'exclude' ? 'exclude_' : '') + key]; });
+                refreshListStatus();
                 uci.set(settings, 'ui', 'project_lists', useProject.checked ? '1' : '0');
                 Object.entries(drafts).forEach(([key, value]) => uci.set(settings, 'ui', key, value));
                 await save();
                 return action('local_lists');
             }), true),
-            button(_('Обновить библиотеку'), ui.createHandlerFn(null, () => action('lists')))
+            button(_('Обновить библиотеку'), ui.createHandlerFn(null, () => action('lists'))),
+            button(_('Почему записи пропущены'), ui.createHandlerFn(null, showListReport))
         ])
     ]);
 }
@@ -685,7 +829,8 @@ async function confirmActivation(profile, action, backup = false) {
             E('div', { class: 'rw-install-status', role: 'status' }, [spinner, status, reading]),
             meter
         ]);
-        const error = E('p', { class: 'rw-install-error', role: 'alert' }, []);
+        const error = E('p', { class: 'rw-install-error', role: 'alert' },
+            check.restart_required ? [jobErrors['network-restart-required']] : []);
         let reloadOnClose = false;
         const close = button(_('Отмена'), () => {
             ui.hideModal();
@@ -726,8 +871,13 @@ async function confirmActivation(profile, action, backup = false) {
                 } else {
                     progress.hidden = true;
                     try {
-                        const remaining = (await preflight(profile, role)).missing || [];
+                        const current = await preflight(profile, role);
+                        const remaining = current.missing || [];
                         updatePackages(remaining);
+                        if (current.restart_required) {
+                            error.textContent = jobErrors['network-restart-required'];
+                            confirm.hidden = true;
+                        }
                         if (!remaining.length)
                             confirm.textContent = readyLabel;
                     } catch (error) {
@@ -735,6 +885,8 @@ async function confirmActivation(profile, action, backup = false) {
                     }
                 }
             }), true);
+        if (check.restart_required)
+            confirm.disabled = true;
         ui.showModal(backup ? _('Резервный профиль') : _('Активация профиля'), [
             E('p', {}, [backup ? _('Резерв включится при отказе основного профиля. Для подписки сначала проверяются все серверы.') :
                 _('Маршрут переключится после проверки нового туннеля.')]),

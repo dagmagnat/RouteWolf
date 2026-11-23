@@ -18,6 +18,15 @@ present() {
     command -v "$1" >/dev/null 2>&1
 }
 
+network_protocol_loaded() {
+    case "$1" in
+        amneziawg|wireguard)
+            [ -n "$(ubus call network get_proto_handlers 2>/dev/null | jsonfilter -e "@.$1" 2>/dev/null)" ]
+            ;;
+        *) return 0 ;;
+    esac
+}
+
 missing_components() {
     case "$1" in
         wireguard)

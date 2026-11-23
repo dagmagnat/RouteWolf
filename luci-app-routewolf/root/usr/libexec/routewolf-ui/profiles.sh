@@ -10,6 +10,30 @@ watchdog=/etc/routewolf/watchdog.conf
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 key_ok() { printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9+/]{43}=$'; }
 
+device_up() {
+    local flags
+    flags=$(cat "/sys/class/net/$1/flags" 2>/dev/null) || return 1
+    [ "$((flags & 1))" -ne 0 ]
+}
+
+stop_old_wireguard_slots() {
+    local previous attempt
+    for previous in awgui0 awgui1 wgui0 wgui1; do
+        [ "$previous" != "$dev" ] || continue
+        [ "$(uci -q get "network.$previous.routewolf_ui" || :)" = 1 ] || continue
+        uci set "network.$previous.auto=0" || return 1
+        if [ "$previous" = "$active" ] && device_up "$previous"; then
+            resume_previous=yes
+        fi
+        ifdown "$previous" >/dev/null 2>&1 || :
+        for attempt in 1 2 3 4 5; do
+            device_up "$previous" || break
+            sleep 1
+        done
+        if device_up "$previous"; then return 1; fi
+    done
+}
+
 native_profile() (
     profile=$1
     backup=${2:-no}
@@ -36,6 +60,7 @@ native_profile() (
     changed=no
     ovpn_changed=no
     stopped_singbox=no
+    resume_previous=no
     done_ok=no
     cleanup() {
         if [ "$changed" = yes ] && [ "$done_ok" != yes ]; then
@@ -61,6 +86,7 @@ native_profile() (
                 done
             fi
             ubus call network reload >/dev/null 2>&1 || :
+            if [ "$resume_previous" = yes ]; then ifup "$active" >/dev/null 2>&1 || :; fi
             fw4 reload >/dev/null 2>&1 || :
             [ "$backup" = yes ] || /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || :
             if [ "$stopped_singbox" = yes ]; then
@@ -135,6 +161,10 @@ native_profile() (
         fi
         [ -z "$(missing_components "$protocol")" ] || return 1
     fi
+    if ! network_protocol_loaded "$protocol"; then
+        reason network-restart-required
+        fail 'OpenWrt has not loaded the installed tunnel protocol. Reboot the router and retry.'
+    fi
     phase start
     reason tunnel-start
 
@@ -164,6 +194,9 @@ native_profile() (
         if [ -e "$file" ]; then cp "$file" "$token_dir/${file##*/}"; fi
     done
     changed=yes
+    if [ "$backup" != yes ]; then
+        stop_old_wireguard_slots || fail 'The previous WireGuard interface is still up.'
+    fi
     ifdown "$dev" >/dev/null 2>&1 || :
     uci -q delete "network.$dev" || :
     uci -q delete "network.$peer" || :
@@ -249,7 +282,10 @@ native_profile() (
             fi
             sleep 1
         done
-        [ "$healthy" = yes ] || fail 'The candidate did not complete a handshake. Previous routing restored.'
+        if [ "$healthy" != yes ]; then
+            if [ "$tool" != openvpn ] && ! device_up "$dev"; then reason tunnel-start; fi
+            fail 'The candidate did not complete a handshake. Previous routing restored.'
+        fi
         [ "$(ip -4 route show table main default)" = "$main" ] || fail 'WAN default route changed unexpectedly.'
         if [ "$tool" = openvpn ]; then
             uci set "openvpn.$peer.enabled=$auto"

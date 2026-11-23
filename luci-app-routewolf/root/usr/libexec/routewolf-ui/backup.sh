@@ -8,6 +8,9 @@ table=routewolf_ui_backup
 lookup=197
 mark=0x04000000
 primary_mark=0x02000000
+watchdog_lock=/tmp/routewolf-watchdog.lock
+held_file=$watchdog_lock/routewolf-ui-primary
+retry_primary_seconds=120
 
 setting() { uci -q get "routewolf_ui.ui.$1" || :; }
 owned() {
@@ -20,41 +23,117 @@ owned() {
 status() { printf '%s\n' "$1" > "$run/status"; }
 clear_lease() { nft flush set inet "$table" "$1" >/dev/null 2>&1 || :; }
 
-stop_openvpn() {
-    ubus call service delete '{"name":"openvpn","instance":"routewolf_ui_tunrwb"}' >/dev/null 2>&1 || :
+link_active() {
+    local flags
+    flags=$(cat "/sys/class/net/$1/flags" 2>/dev/null) || return 1
+    [ "$((flags & 1))" -ne 0 ]
 }
 
-start_device() {
-    if [ "$1" = rwsubb0 ]; then /etc/init.d/routewolf-ui-backup-engine start; return; fi
-    if [ "$1" != tunrwb ]; then ifup "$1"; return; fi
-    [ "$(uci -q get openvpn.routewolf_ui_tunrwb.routewolf_ui || :)" = 1 ] || return 1
+openvpn_device() {
+    local device=$1 action=$2 instance="routewolf_ui_$1" result=0
+    [ "$(uci -q get "openvpn.$instance.routewolf_ui" || :)" = 1 ] || return 1
+    if [ "$action" = stop ]; then
+        ubus call service delete "$(printf '{"name":"openvpn","instance":"%s"}' "$instance")" >/dev/null
+        return
+    fi
+    if [ "$(uci -q get "openvpn.$instance.enabled" || :)" = 1 ]; then
+        /etc/init.d/openvpn start "$instance"
+        return
+    fi
     [ -z "$(uci changes openvpn)" ] || return 1
-    uci set openvpn.routewolf_ui_tunrwb.enabled=1 || return 1
-    local result=0
-    /etc/init.d/openvpn start routewolf_ui_tunrwb || result=$?
-    uci -q revert openvpn.routewolf_ui_tunrwb.enabled || return 1
+    uci set "openvpn.$instance.enabled=1" || return 1
+    /etc/init.d/openvpn start "$instance" || result=$?
+    uci -q revert "openvpn.$instance.enabled" || return 1
     return "$result"
+}
+
+control_device() {
+    local device=$1 action=$2 proto
+    case "$device" in
+        rwsub0)
+            if [ "$action" = start ]; then
+                /etc/init.d/routewolf-subscription-engine start && /etc/init.d/routewolf-subscription start
+            else
+                /etc/init.d/routewolf-subscription stop || :
+                /etc/init.d/routewolf-subscription-engine stop
+            fi
+            ;;
+        rwsubb0) /etc/init.d/routewolf-ui-backup-engine "$action" ;;
+        tunrw0|tunrw1|tunrwb) openvpn_device "$device" "$action" ;;
+        awg*|wg*)
+            proto=$(uci -q get "network.$device.proto" || :)
+            case "$proto" in amneziawg|wireguard) ;; *) return 1 ;; esac
+            if [ "$action" = start ]; then ifup "$device"; else ifdown "$device"; fi
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+stop_device() {
+    local device=$1 attempt
+    # Stop a pending procd or netifd start as well as a live interface.
+    control_device "$device" stop >/dev/null 2>&1 || {
+        # A registered device with a pending start must be stopped explicitly.
+        link_active "$device" && return 1
+        return 0
+    }
+    for attempt in 1 2 3 4 5; do
+        link_active "$device" || return 0
+        sleep 1
+    done
+    ! link_active "$device"
 }
 
 release() {
     local old
     clear_lease active_lans
     old=$(cat "$run/device" 2>/dev/null || :)
+    [ -n "$old" ] || old=$(setting backup_device)
     case "$old" in
         awgrwb|wgrwb|tunrwb|rwsubb0)
+            [ -e "$run/device" ] || link_active "$old" || return 0
+            if owned "$old"; then stop_device "$old" || return 1; fi
+            if link_active "$old"; then return 1; fi
             ip -4 rule del priority 94 fwmark "$mark/$mark" table "$lookup" >/dev/null 2>&1 || :
             ip -4 route del default dev "$old" table "$lookup" >/dev/null 2>&1 || :
             ip -4 rule del priority 93 oif "$old" table "$lookup" >/dev/null 2>&1 || :
-            if owned "$old"; then
-                case "$old" in
-                    tunrwb) stop_openvpn ;;
-                    rwsubb0) /etc/init.d/routewolf-ui-backup-engine stop >/dev/null 2>&1 || : ;;
-                    *) ifdown "$old" >/dev/null 2>&1 || : ;;
-                esac
-            fi
             rm -f "$run/device"
             ;;
     esac
+}
+
+recover_primary() {
+    local attempt
+    release || return 1
+    status checking
+    control_device "$primary" start >/dev/null 2>&1 || return 1
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        if link_active "$primary"; then
+            if primary_healthy; then return 0; fi
+            [ "$primary" = rwsub0 ] || return 1
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+held_primary() { cat "$held_file" 2>/dev/null || :; }
+
+unlock_primary() {
+    [ -f "$held_file" ] || return 0
+    rm -f "$held_file"
+    rmdir "$watchdog_lock" 2>/dev/null || :
+}
+
+suspend_primary() {
+    if [ "$(held_primary)" != "$primary" ]; then
+        mkdir "$watchdog_lock" 2>/dev/null || return 1
+        if ! printf '%s\n' "$primary" > "$held_file"; then
+            rmdir "$watchdog_lock" 2>/dev/null || :
+            return 1
+        fi
+    fi
+    stop_device "$primary" && clear_primary_probe
 }
 
 clear_primary_probe() {
@@ -69,7 +148,17 @@ clear_primary_probe() {
 }
 
 teardown() {
-    release
+    local previous
+    release || return 1
+    previous=$(held_primary)
+    if [ -n "$previous" ]; then
+        selected_primary
+        if [ "$previous" = "$primary" ] && [ ! -e "$state/paused-route.conf" ] &&
+            [ ! -e "$state/paused-singbox" ] && [ "${1:-}" != pause ]; then
+            control_device "$previous" start >/dev/null 2>&1 || :
+        fi
+        unlock_primary
+    fi
     clear_primary_probe
     nft delete table inet "$table" >/dev/null 2>&1 || :
     last_policy=
@@ -198,6 +287,13 @@ duplicate_interface() {
         awk -v dev="$dev" -v key="$key" '$1!=dev && $2==key {duplicate=1} END {exit !duplicate}'
 }
 
+selected_primary() {
+    primary=$(sed -n "s/^VPN_ROUTE_DEV='\([A-Za-z0-9_]*\)'$/\1/p" /etc/routewolf/route.conf 2>/dev/null | head -n 1)
+    if [ -z "$primary" ] && [ -f /etc/routewolf-subscription/mode ] && [ ! -e "$state/native-active" ]; then
+        primary=rwsub0
+    fi
+}
+
 read_settings() {
     profile=$(setting backup_profile)
     dev=$(setting backup_device)
@@ -215,12 +311,9 @@ read_settings() {
     [ "$(setting active_profile)" != "$profile" ] || return 1
     lan=$(ubus call network.interface.lan status | jsonfilter -e '@.l3_device')
     case "$lan" in ''|*[!a-zA-Z0-9_.-]*) return 1 ;; esac
-    primary=$(sed -n "s/^VPN_ROUTE_DEV='\([A-Za-z0-9_]*\)'$/\1/p" /etc/routewolf/route.conf 2>/dev/null | head -n 1)
-    if [ -z "$primary" ] && [ -f /etc/routewolf-subscription/mode ] && [ ! -e "$state/native-active" ]; then
-        primary=rwsub0
-    fi
+    selected_primary
     case "$primary" in
-        rwsub0|awg*|wg*|tun*|sbtun*|outline*) [ "$primary" != "$dev" ] ;;
+        rwsub0|awg*|wg*|tunrw0|tunrw1) [ "$primary" != "$dev" ] ;;
         *) return 1 ;;
     esac
 }
@@ -228,17 +321,17 @@ read_settings() {
 monitor() {
     mkdir -p "$run"
     last_policy=
-    release
-    trap 'release; clear_primary_probe; exit' HUP INT TERM
+    trap 'teardown; rm -f "$run/busy"; exit' HUP INT TERM
     misses=0
     next_start=0
     next_refresh=0
+    next_recovery=0
     while :; do
+        printf '%s\n' "$$" > "$run/busy"
         case "$(cat /tmp/routewolf-ui-job/action 2>/dev/null || :)" in
-            backup|activate|pause)
+            backup|activate|pause|resume|restart|repair)
                 if [ -d /tmp/routewolf-ui-job/lock ]; then
-                    release
-                    misses=0
+                    rm -f "$run/busy"
                     sleep 4
                     continue
                 fi
@@ -248,38 +341,71 @@ monitor() {
             teardown
             status idle
             misses=0
+            next_recovery=0
         elif ! ensure_policy; then
-            release
+            teardown
             status wan
             misses=0
-        elif primary_healthy; then
-            release
-            if [ "$primary" != rwsub0 ]; then renew primary_lans || :; fi
-            status waiting
-            misses=0
+            next_recovery=0
         else
-            clear_lease primary_lans
-            if [ "$misses" -lt 3 ]; then
+            now=$(cut -d. -f1 /proc/uptime)
+            held=$(held_primary)
+            if [ -n "$held" ] && [ "$held" != "$primary" ]; then
+                teardown
+                status checking
+            elif [ -z "$held" ] && ! release; then
+                status conflict
+            elif [ -z "$held" ] && primary_healthy; then
+                if [ "$primary" != rwsub0 ]; then renew primary_lans || :; fi
+                status waiting
+                misses=0
+                next_start=0
+            elif [ -z "$held" ] && [ "$misses" -lt 2 ]; then
                 misses=$((misses+1))
                 status checking
+            elif [ -z "$held" ] && ! suspend_primary; then
+                status conflict
+            elif [ -n "$held" ] && link_active "$primary" && ! suspend_primary; then
+                release || :
+                status conflict
+            elif [ "$next_recovery" -gt 0 ] && [ "$now" -ge "$next_recovery" ] && recover_primary; then
+                if [ "$primary" != rwsub0 ]; then renew primary_lans || :; fi
+                unlock_primary
+                status waiting
+                misses=0
+                next_start=0
+                next_recovery=0
+            elif link_active "$primary" && ! suspend_primary; then
+                release || :
+                status conflict
             elif duplicate_interface; then
-                release
+                release || :
                 status conflict
             else
-                now=$(cut -d. -f1 /proc/uptime)
+                clear_lease primary_lans
+                if [ "$next_recovery" -eq 0 ] || [ "$now" -ge "$next_recovery" ]; then
+                    next_recovery=$(($(cut -d. -f1 /proc/uptime)+retry_primary_seconds))
+                    next_start=0
+                    # Cancel an incomplete netifd/procd start before bringing up the reserve.
+                    if ! suspend_primary; then
+                        status conflict
+                        rm -f "$run/busy"
+                        sleep 4
+                        continue
+                    fi
+                fi
                 if [ "$dev" = rwsubb0 ] && [ "$now" -ge "$next_refresh" ]; then
                     /usr/libexec/routewolf-ui/backup-proxy.sh refresh >/dev/null 2>&1 &
                     next_refresh=$((now+3600))
                 fi
-                if [ -d "/sys/class/net/$dev" ]; then
+                if link_active "$dev"; then
                     printf '%s\n' "$dev" > "$run/device"
                 elif [ "$now" -ge "$next_start" ]; then
                     printf '%s\n' "$dev" > "$run/device"
-                    start_device "$dev" >/dev/null 2>&1 || :
+                    control_device "$dev" start >/dev/null 2>&1 || :
                     next_start=$((now+30))
                 fi
-                if [ -d "/sys/class/net/$dev" ] && probe "$dev" 93 "$lookup" &&
-                    { [ "$primary" != rwsub0 ] || ! primary_healthy; } && renew active_lans; then
+                if link_active "$dev" && probe "$dev" 93 "$lookup" && renew active_lans; then
                     status active
                 else
                     clear_lease active_lans
@@ -287,14 +413,14 @@ monitor() {
                 fi
             fi
         fi
-        [ "$misses" -ne 0 ] || next_start=0
         if [ -f "$state/profile-dns" ]; then /usr/libexec/routewolf-ui/dns.sh sync || :; fi
+        rm -f "$run/busy"
         sleep 4
     done
 }
 
 case "${1:-}" in
     monitor) monitor ;;
-    stop) teardown; [ ! -d "$run" ] || status idle ;;
+    stop) teardown "${2:-}" && { [ ! -d "$run" ] || status idle; } ;;
     *) exit 2 ;;
 esac

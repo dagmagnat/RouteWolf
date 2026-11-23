@@ -152,7 +152,7 @@ prepare_dns() {
 }
 
 clear_backup() {
-    /etc/init.d/routewolf-ui-backup stop &&
+    "$lib/backup.sh" stop && /etc/init.d/routewolf-ui-backup stop &&
         { uci -q delete routewolf_ui.ui.backup_profile || :; } &&
         { uci -q delete routewolf_ui.ui.backup_device || :; } &&
         uci commit routewolf_ui || return 1
@@ -163,12 +163,49 @@ clear_backup() {
     fi
 }
 
+wait_for_backup_monitor() {
+    local pid attempt=0
+    while [ "$attempt" -lt 45 ]; do
+        pid=$(cat /var/run/routewolf-ui-backup/busy 2>/dev/null || :)
+        case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 1
+        attempt=$((attempt+1))
+    done
+    return 1
+}
+
 if [ "${1:-}" = worker ]; then
     shift
     export RW_JOB_STATE="$work"
     trap 'rm -f "$work/pid"; rmdir "$work/lock" 2>/dev/null || :' EXIT
     trap 'exit 1' HUP INT TERM
     # Never return raw VPN diagnostics or provider responses through RPC.
+    case "$1" in
+        backup|activate|pause|resume|restart|repair)
+            if ! wait_for_backup_monitor; then
+                reason backup-transition
+                printf '1\n' > "$work/result"
+                exit 1
+            fi
+            ;;
+    esac
+    case "$1" in
+        activate|pause|backup)
+            if ! "$lib/backup.sh" stop "$1"; then
+                reason backup-transition
+                printf '1\n' > "$work/result"
+                exit 1
+            fi
+            ;;
+        restart|repair)
+            if [ -f /tmp/routewolf-watchdog.lock/routewolf-ui-primary ]; then
+                reason backup-transition
+                printf '1\n' > "$work/result"
+                exit 1
+            fi
+            ;;
+    esac
     case "$1" in
         activate)
             if prepare_dns "$2" && "$lib/profiles.sh" activate "$2"; then

@@ -98,6 +98,8 @@
 .rw-luci .rw-list-checkbox input, .rw-library-selection input { margin:0; flex:none; }
 .rw-luci .rw-list-checkbox input[type="checkbox"] { top:auto; }
 .rw-luci .rw-list-hint { margin:10px 0; font-size:.87rem; opacity:.78; }
+.rw-luci .rw-list-hint:empty { display:none; }
+.rw-activate-modal .rw-list-report { max-height:23vh; overflow:auto; overflow-wrap:anywhere; white-space:pre-wrap; }
 .rw-library-modal { width:min(900px, calc(100vw - 32px)); max-width:900px; }
 .rw-library-filter { display:grid; grid-template-columns:minmax(120px,1fr) minmax(107px,.75fr) minmax(130px,1.2fr) auto; align-items:center; gap:8px; margin-bottom:10px; }
 .rw-library-filter > * { min-width:0; min-height:38px; margin:0; box-sizing:border-box; }

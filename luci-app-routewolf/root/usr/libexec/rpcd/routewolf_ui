@@ -265,6 +265,12 @@ geodata() (
     /usr/libexec/routewolf-ui/geodata.sh "$kind" "$category" 2>/dev/null
 )
 
+list_report() {
+    json_init
+    json_add_string report "$(head -c 32768 /tmp/routewolf-list-validation.log 2>/dev/null)"
+    json_dump
+}
+
 preflight() (
     read -r request || [ -n "$request" ] || return 1
     json_load "$request" 2>/dev/null || return 1
@@ -280,6 +286,9 @@ preflight() (
     fi
     json_init
     json_add_string protocol "$protocol"
+    restart_required=0
+    if [ -z "$missing" ] && ! network_protocol_loaded "$protocol"; then restart_required=1; fi
+    json_add_boolean restart_required "$restart_required"
     json_add_array missing
     for component in $missing; do json_add_string '' "$component"; done
     json_close_array
@@ -295,12 +304,13 @@ job_start() {
 }
 
 case "${1:-}:${2:-}" in
-    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"geodata":{"kind":"string","category":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
+    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"geodata":{"kind":"string","category":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"list_report":{},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
     call:status) status ;;
     call:job_status) job_status ;;
     call:preflight) preflight ;;
     call:library) library ;;
     call:geodata) geodata ;;
+    call:list_report) list_report ;;
     call:job)
         if job_start; then printf '%s\n' '{"ok":true}'; else printf '%s\n' '{"ok":false}'; fi
         ;;
