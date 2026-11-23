@@ -3,6 +3,7 @@
 set -u
 umask 077
 BASE=https://github.com/dagmagnat/RouteWolf/releases
+MIRROR=https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/releases
 STATE=/etc/routewolf
 LOCK=/tmp/routewolf-code-update.lock
 WORK=/tmp/routewolf-code-update.$$
@@ -52,7 +53,7 @@ refresh_lists() {
 }
 fetch() {
     url=$1; dest=$2; limit=${3:-1048576}
-    case "$url" in https://github.com/dagmagnat/RouteWolf/releases/*) ;; *) return 1 ;; esac
+    case "$url" in "$BASE/"*|"$MIRROR/"*) ;; *) return 1 ;; esac
     rm -f "$dest"
     # Never execute code fetched with certificate verification disabled.
     if command -v curl >/dev/null 2>&1; then
@@ -287,9 +288,13 @@ if { [ "$MODE" != --auto ] && [ "$MODE" != --code-auto ]; } || [ "$(sed -n 's/^A
         manifest_url="$BASE/latest/download/stable.manifest"
         [ "$MODE" != --release ] || manifest_url="$BASE/download/v$requested/stable.manifest"
         if ! fetch "$manifest_url" "$WORK/release.manifest" 4096; then
-            record 'stable manifest unavailable or TLS verification failed; existing code retained'
-            case "$MODE" in --code-auto|--release) ;; *) refresh_lists || true ;; esac
-            exit 1
+            if [ "$MODE" = check ] && fetch "$MIRROR/stable.manifest" "$WORK/release.manifest" 4096; then
+                log 'Latest release endpoint unavailable; using the mirrored stable manifest'
+            else
+                record 'stable manifest unavailable or TLS verification failed; existing code retained'
+                case "$MODE" in --code-auto|--release) ;; *) refresh_lists || true ;; esac
+                exit 1
+            fi
         fi
         # No shell evaluation of downloaded manifest fields.
         version=$(field version)
@@ -303,7 +308,10 @@ if { [ "$MODE" != --auto ] && [ "$MODE" != --code-auto ]; } || [ "$(sed -n 's/^A
         fi
         blocked=$(cat "$STATE/failed-runtime" 2>/dev/null || true)
         if [ "$version" -gt "$current" ] && { [ "$version" != "$blocked" ] || [ "$MODE" = check ] || [ "$MODE" = --release ]; }; then
-            fetch "$BASE/download/v$version/routewolf-v$version.tar.gz" "$WORK/runtime.tgz" || { record 'runtime download failed; existing code retained'; exit 1; }
+            release_archive="routewolf-v$version.tar.gz"
+            fetch "$BASE/download/v$version/$release_archive" "$WORK/runtime.tgz" ||
+                { [ "$MODE" = check ] && fetch "$MIRROR/$release_archive" "$WORK/runtime.tgz"; } ||
+                { record 'runtime download failed; existing code retained'; exit 1; }
         fi
         ;;
     esac

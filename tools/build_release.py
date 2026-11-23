@@ -56,7 +56,8 @@ def runtime_files():
 
 def panel_files():
     app = ROOT / 'luci-app-routewolf'
-    paths = [ROOT / 'routewolf-install.sh', ROOT / 'routewolf-uninstall.sh', app / 'install.sh', app / 'uninstall.sh']
+    paths = [ROOT / 'routewolf-install.sh', ROOT / 'routewolf-uninstall.sh',
+             ROOT / 'runtime/routewolf-stable-update.sh', app / 'install.sh', app / 'uninstall.sh']
     paths.extend(p for directory in ('root', 'htdocs') for p in (app / directory).rglob('*') if p.is_file())
     paths.extend(ROOT / 'subscription' / p for p in ('install.sh', 'controller.sh', 'engine.init', 'monitor.init', 'assets.txt'))
     return {p.relative_to(ROOT).as_posix(): p.read_bytes().replace(b'\r\n', b'\n') for p in paths}

@@ -71,6 +71,7 @@ elif name=='curl':
   sys.exit(7 if Path('/tmp/rw-tunnel-bad').exists() else 0)
  out=args[args.index('-o')+1];url=next((a for a in args if a.startswith('https://')),'')
  if Path('/tmp/rw-fail-download').exists():sys.exit(60)
+ if Path('/tmp/rw-fail-release-host').exists() and url.startswith('https://github.com/dagmagnat/RouteWolf/releases/'):sys.exit(28)
  source=Path('/tmp/rw-downloads')/url.rsplit('/',1)[-1]
  if not source.exists():sys.exit(22)
  shutil.copyfile(source,out)
@@ -423,6 +424,16 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(schedule.read_bytes(), before)
         self.assertIn('/latest/download/stable.manifest', self.actions())
         self.assertNotIn('routewolf-luci', self.actions())
+
+    def test_manual_update_falls_back_to_mirrored_stable_release(self):
+        shutil.copyfile(ROOT/'releases/stable.manifest', '/tmp/rw-downloads/stable.manifest')
+        write('/tmp/rw-fail-release-host', 'yes')
+        write('/etc/routewolf/runtime_version', f'{VERSION}\n')
+        result = self.updater('check')
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('using the mirrored stable manifest', result.stdout)
+        self.assertIn('raw.githubusercontent.com/dagmagnat/RouteWolf/main/releases/stable.manifest', self.actions())
+        self.assertEqual(Path('/etc/routewolf/runtime_version').read_text(), f'{VERSION}\n')
 
     def test_failed_release_is_not_automatically_retried(self):
         self.seed_release();write('/etc/routewolf/failed-runtime',f'{VERSION}\n')

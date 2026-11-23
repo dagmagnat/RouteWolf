@@ -32,6 +32,9 @@ put_file /www/luci-static/resources/view/routewolf/manage.css 644 "$here/htdocs/
 if [ -f "$here/../routewolf-uninstall.sh" ]; then
     put_file /usr/sbin/routewolf-uninstall.sh 755 "$here/../routewolf-uninstall.sh"
 fi
+if [ -f "$here/../runtime/routewolf-stable-update.sh" ]; then
+    put_file /usr/sbin/routewolf-stable-update.sh 755 "$here/../runtime/routewolf-stable-update.sh"
+fi
 for script in dependencies jobs lists profiles singbox schedule backup backup-proxy dns geodata; do
     put_file "/usr/libexec/routewolf-ui/$script.sh" 755 "$here/root/usr/libexec/routewolf-ui/$script.sh"
 done
