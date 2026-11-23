@@ -206,5 +206,13 @@ case "${1:-}" in
     apply) apply_lists ;;
     boot) link_dns ;;
     validate) render_lists "$2" "$3" "$4" "${5:-1}" ;;
+    check)
+        case "$2" in
+            domains) domains "$3" ;;
+            ipv4) addresses 4 "$3" ;;
+            ipv6) addresses 6 "$3" ;;
+            *) exit 2 ;;
+        esac
+        ;;
     *) exit 2 ;;
 esac

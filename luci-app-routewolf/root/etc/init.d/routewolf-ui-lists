@@ -3,6 +3,7 @@ START=18
 
 start() {
     /usr/libexec/routewolf-ui/lists.sh boot
+    /usr/libexec/routewolf-ui/dns.sh boot
 }
 
 boot() {

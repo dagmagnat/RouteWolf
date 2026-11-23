@@ -48,11 +48,13 @@ const jobErrors = {
     'tunnel-start': _('Интерфейс туннеля не удалось запустить.'),
     'tunnel-unreachable': _('Туннель запустился, но проверка связи не прошла.'),
     'route-unavailable': _('Туннель поднят, но маршрут через него недоступен.'),
+    'profile-dns': _('Не удалось подключить DNS профиля. Проверьте IP-адреса и конфигурацию dnsmasq.'),
     paused: _('Сначала возобновите маршрутизацию на вкладке «Обзор».')
 };
 
 const listSchedule = rpc.declare({ object: 'routewolf_ui', method: 'list_schedule', params: ['action'], reject: true, expect: { ok: false } });
 const libraryPage = rpc.declare({ object: 'routewolf_ui', method: 'library', params: ['kind', 'query', 'offset', 'group', 'limit'], reject: true });
+const geoData = rpc.declare({ object: 'routewolf_ui', method: 'geodata', params: ['kind', 'category'], reject: true });
 const settings = 'routewolf_ui';
 const localLists = [
     ['domains', _('Домены'), 'example.org'],
@@ -144,7 +146,9 @@ function formatHandshake(timestamp) {
 }
 
 function actionRow(title, description, change, state) {
-    const button = E('button', { class: 'cbi-button cbi-button-action', type: 'button' },
+    const button = E('button', {
+        class: 'cbi-button rw-control-toggle', type: 'button', 'data-action': state ? 'disable' : 'enable'
+    },
         state ? _('Выключить') : _('Включить'));
 
     button.addEventListener('click', async () => {
@@ -154,6 +158,7 @@ function actionRow(title, description, change, state) {
             if (!await change(next ? 'enable' : 'disable'))
                 throw new Error(_('RouteWolf не подтвердил изменение.'));
             state = next;
+            button.dataset.action = state ? 'disable' : 'enable';
             button.textContent = state ? _('Выключить') : _('Включить');
         }
         catch (error) {
@@ -435,6 +440,69 @@ function libraryDialog(addEntries) {
     fetchPage();
 }
 
+function geoDialog(addEntries, ipv6Enabled) {
+    const kind = E('select', { 'aria-label': _('Тип геоданных') }, [
+        E('option', { value: 'geosite' }, ['GeoSite · ', _('домены')]),
+        E('option', { value: 'geoip' }, ['GeoIP · ', _('адреса')])
+    ]);
+    const category = E('input', {
+        maxlength: 72, placeholder: 'youtube, geoip:telegram', 'aria-label': _('Категория')
+    });
+    const notice = E('p', { class: 'rw-list-hint', role: 'status' }, []);
+    const error = E('p', { class: 'rw-install-error', role: 'alert' }, []);
+    let entries = [];
+    function reset() {
+        entries = [];
+        notice.textContent = '';
+        error.textContent = '';
+        copy.disabled = true;
+    }
+    const fetch = button(_('Загрузить'), ui.createHandlerFn(null, async () => {
+        reset();
+        const input = /^(?:(geosite|geoip):)?([a-z0-9_][a-z0-9_@.-]{0,63})$/.exec(category.value.trim().toLowerCase());
+        if (!input) {
+            error.textContent = _('Введите имя категории, например geosite:youtube или geoip:telegram.');
+            return;
+        }
+        kind.disabled = category.disabled = true;
+        try {
+            const imported = await geoData(input[1] || kind.value, input[2]);
+            if (imported.too_large)
+                throw new Error(_('Эта категория превышает лимит списка 24 КБ.'));
+            entries = imported.entries.filter(item => ipv6Enabled || item.kind !== 'ipv6');
+            if (!entries.length)
+                throw new Error(_('В категории нет записей, которые можно добавить.'));
+            notice.textContent = _('Готово к добавлению: %d записей.').format(entries.length);
+            if (imported.entries.length !== entries.length)
+                notice.textContent += ' ' + _('IPv6 пропущен, потому что маршрутизация IPv6 отключена.');
+            if (imported.skipped)
+                notice.textContent += ' ' + _('Сложные правила пропущены.');
+            copy.disabled = false;
+        } catch (failure) {
+            error.textContent = failure.message || _('Не удалось загрузить категорию.');
+        } finally {
+            kind.disabled = category.disabled = false;
+        }
+    }));
+    const copy = button(_('Добавить в свои списки'), () => {
+        try {
+            addEntries(entries, false);
+            ui.hideModal();
+        } catch (failure) {
+            error.textContent = failure.message;
+        }
+    }, true);
+    copy.disabled = true;
+    category.addEventListener('input', reset);
+    kind.addEventListener('change', reset);
+    ui.showModal(_('Импорт GeoIP и GeoSite'), [
+        E('p', {}, [_('Загрузите категорию и проверьте записи в своих списках перед применением. Точные домены также включают поддомены.')]),
+        E('div', { class: 'rw-actions rw-geo-fields' }, [kind, category, fetch]),
+        notice, error,
+        E('div', { class: 'rw-actions rw-activate-actions' }, [copy, button(_('Закрыть'), () => ui.hideModal())])
+    ], 'rw-activate-modal');
+}
+
 function listPanel(result, save, action) {
     const useProject = E('input', { type: 'checkbox', checked: uci.get(settings, 'ui', 'project_lists') !== '0' || null });
     const drafts = {};
@@ -479,7 +547,8 @@ function listPanel(result, save, action) {
     return E('div', {}, [
         E('div', { class: 'rw-list-sources' }, [
             E('label', { class: 'rw-list-checkbox' }, [useProject, _('Использовать списки проекта')]),
-            button(_('Загрузить из библиотеки'), () => libraryDialog(addEntries))
+            button(_('Загрузить из библиотеки'), () => libraryDialog(addEntries)),
+            button(_('Импорт GeoIP / GeoSite'), () => geoDialog(addEntries, result.ipv6_lists))
         ]),
         result.lists_schedule_available ? actionRow(_('Ночное обновление в 02:00'),
             _('Обновляет библиотеку по времени роутера.'), listSchedule, result.lists_scheduled) : '',
@@ -539,6 +608,12 @@ function profileForm() {
     option.value('manual', _('Вручную'));
     option.default = 'boot';
     option.rmempty = false;
+    option.modalonly = true;
+
+    option = section.option(form.DynamicList, 'dns', _('DNS профиля'),
+        _('До четырёх IP-адресов. DNS провайдера остаётся доступным.'));
+    option.datatype = 'ipaddr';
+    option.rmempty = true;
     option.modalonly = true;
 
     option = section.option(form.Value, 'source', _('Ссылка на подписку или узел'));

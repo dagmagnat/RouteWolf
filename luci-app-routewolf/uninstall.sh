@@ -8,6 +8,9 @@ fi
 if [ -x /etc/init.d/routewolf-ui-backup-engine ]; then
     /etc/init.d/routewolf-ui-backup-engine stop || :
 fi
+if [ -x /usr/libexec/routewolf-ui/dns.sh ]; then
+    /usr/libexec/routewolf-ui/dns.sh remove || :
+fi
 rm -f /usr/libexec/rpcd/routewolf_ui \
     /usr/share/rpcd/acl.d/luci-app-routewolf.json \
     /usr/share/luci/menu.d/luci-app-routewolf.json \

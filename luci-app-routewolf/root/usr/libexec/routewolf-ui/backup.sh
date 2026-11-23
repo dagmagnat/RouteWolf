@@ -288,6 +288,7 @@ monitor() {
             fi
         fi
         [ "$misses" -ne 0 ] || next_start=0
+        if [ -f "$state/profile-dns" ]; then /usr/libexec/routewolf-ui/dns.sh sync || :; fi
         sleep 4
     done
 }

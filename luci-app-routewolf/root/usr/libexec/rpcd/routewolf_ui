@@ -156,6 +156,9 @@ status() {
     schedule=$(/usr/libexec/routewolf-ui/schedule.sh status)
     json_add_boolean lists_scheduled "${schedule%% *}"
     json_add_boolean lists_schedule_available "${schedule#* }"
+    ipv6_lists=0
+    grep -Fxq "IPV6_SUPPORT='1'" "$state/user.conf" 2>/dev/null && ipv6_lists=1
+    json_add_boolean ipv6_lists "$ipv6_lists"
     json_dump
 }
 
@@ -241,6 +244,14 @@ job_status() {
     json_dump
 }
 
+geodata() (
+    read -r request || [ -n "$request" ] || return 1
+    json_load "$request" 2>/dev/null || return 1
+    json_get_var kind kind
+    json_get_var category category
+    /usr/libexec/routewolf-ui/geodata.sh "$kind" "$category" 2>/dev/null
+)
+
 preflight() (
     read -r request || [ -n "$request" ] || return 1
     json_load "$request" 2>/dev/null || return 1
@@ -271,11 +282,12 @@ job_start() {
 }
 
 case "${1:-}:${2:-}" in
-    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
+    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"geodata":{"kind":"string","category":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
     call:status) status ;;
     call:job_status) job_status ;;
     call:preflight) preflight ;;
     call:library) library ;;
+    call:geodata) geodata ;;
     call:job)
         if job_start; then printf '%s\n' '{"ok":true}'; else printf '%s\n' '{"ok":false}'; fi
         ;;

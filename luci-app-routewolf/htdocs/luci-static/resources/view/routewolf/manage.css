@@ -28,6 +28,13 @@
 .rw-luci .rw-interface { display:flex; align-items:center; gap:10px; padding:6px 9px; border:1px solid var(--rw-line); border-radius:6px; font-size:.88rem; }
 .rw-luci .rw-control { display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--rw-line); padding:10px 0; }
 .rw-luci .rw-control-description { display:block; opacity:.75; font-size:.83rem; margin-top:3px; }
+.rw-luci .rw-control-toggle {
+    flex:0 0 124px; min-height:40px; margin:0; padding:6px; text-align:center;
+    color:#fff !important; border:1px solid transparent !important;
+}
+.rw-luci .rw-control-toggle[data-action="enable"] { background:#267745 !important; }
+.rw-luci .rw-control-toggle[data-action="disable"] { background:#a72f3b !important; }
+.rw-luci .rw-control-toggle:hover:not(:disabled) { filter:brightness(1.12); }
 .rw-luci .rw-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .rw-luci .rw-equal-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); max-width:460px; }
 .rw-luci .rw-equal-actions button { width:100%; min-height:39px; margin:0; }
@@ -87,6 +94,8 @@
 .rw-activate-modal .rw-activate-actions button.spinning { background-image:none !important; }
 .rw-activate-modal .rw-activate-actions button.spinning::before { display:none; }
 .rw-activate-modal .rw-activate-actions button:last-child { grid-column:2; }
+.rw-activate-modal .rw-geo-fields { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.rw-activate-modal .rw-geo-fields > * { margin:0; }
 .rw-install-progress[hidden], .rw-install-spinner[hidden] { display:none; }
 .rw-install-progress { margin-block:12px; }
 .rw-install-progress progress { width:100%; height:10px; accent-color:#7766cf; }

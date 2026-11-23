@@ -4,7 +4,8 @@ STOP=08
 USE_PROCD=1
 
 start_service() {
-    [ -n "$(uci -q get routewolf_ui.ui.backup_profile)" ] || return 0
+    [ -n "$(uci -q get routewolf_ui.ui.backup_profile)" ] ||
+        [ -f /etc/routewolf-ui/profile-dns ] || return 0
     procd_open_instance
     procd_set_param command /usr/libexec/routewolf-ui/backup.sh monitor
     procd_set_param respawn 3600 5 0

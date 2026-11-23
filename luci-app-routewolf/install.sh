@@ -29,7 +29,7 @@ put_file /usr/share/rpcd/acl.d/luci-app-routewolf.json 644 "$here/root/usr/share
 put_file /usr/share/luci/menu.d/luci-app-routewolf.json 644 "$here/root/usr/share/luci/menu.d/luci-app-routewolf.json"
 put_file /www/luci-static/resources/view/routewolf/manage.js 644 "$here/htdocs/luci-static/resources/view/routewolf/manage.js"
 put_file /www/luci-static/resources/view/routewolf/manage.css 644 "$here/htdocs/luci-static/resources/view/routewolf/manage.css"
-for script in dependencies jobs lists profiles singbox schedule backup backup-proxy; do
+for script in dependencies jobs lists profiles singbox schedule backup backup-proxy dns geodata; do
     put_file "/usr/libexec/routewolf-ui/$script.sh" 755 "$here/root/usr/libexec/routewolf-ui/$script.sh"
 done
 put_file /usr/libexec/routewolf-ui/library.awk 644 "$here/root/usr/libexec/routewolf-ui/library.awk"
@@ -53,6 +53,9 @@ if [ -f "$subscription/install.sh" ]; then
     done
 fi
 /etc/init.d/routewolf-ui-lists enable
+if /etc/init.d/routewolf-ui-backup running; then
+    /etc/init.d/routewolf-ui-backup restart
+fi
 if [ -L /tmp/dnsmasq.d/routewolf-ui.conf ]; then
     /usr/libexec/routewolf-ui/lists.sh boot
     if ! /etc/init.d/dnsmasq running; then

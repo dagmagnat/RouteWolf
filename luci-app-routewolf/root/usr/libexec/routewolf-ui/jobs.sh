@@ -119,6 +119,7 @@ stage_backup() (
     reason invalid-profile
     [ "$(uci -q get "routewolf_ui.$profile" || :)" = profile ] &&
         [ "$(uci -q get routewolf_ui.ui.active_profile || :)" != "$profile" ] || return 1
+    prepare_dns "$profile" || return 1
     protocol=$(uci -q get "routewolf_ui.$profile.protocol") || return 1
     case "$protocol" in amneziawg|wireguard|openvpn|singbox|outline) ;; *) return 1 ;; esac
     set -- $(missing_backup_tools "$protocol")
@@ -136,12 +137,22 @@ stage_backup() (
     esac
 )
 
+prepare_dns() {
+    [ -n "$(uci -q get "routewolf_ui.$1.dns" || :)" ] || return 0
+    reason profile-dns
+    "$lib/dns.sh" prepare "$1"
+}
+
 clear_backup() {
     /etc/init.d/routewolf-ui-backup stop &&
-        /etc/init.d/routewolf-ui-backup disable &&
         { uci -q delete routewolf_ui.ui.backup_profile || :; } &&
         { uci -q delete routewolf_ui.ui.backup_device || :; } &&
-        uci commit routewolf_ui
+        uci commit routewolf_ui || return 1
+    if [ -e "$state/profile-dns" ]; then
+        /etc/init.d/routewolf-ui-backup start
+    else
+        /etc/init.d/routewolf-ui-backup disable
+    fi
 }
 
 if [ "${1:-}" = worker ]; then
@@ -152,8 +163,13 @@ if [ "${1:-}" = worker ]; then
     # Never return raw VPN diagnostics or provider responses through RPC.
     case "$1" in
         activate)
-            if "$lib/profiles.sh" activate "$2"; then
+            if prepare_dns "$2" && "$lib/profiles.sh" activate "$2"; then
                 if [ "$(uci -q get routewolf_ui.ui.backup_profile || :)" = "$2" ]; then clear_backup || :; fi
+                if [ -e "$state/profile-dns" ]; then
+                    "$lib/dns.sh" sync || :
+                    /etc/init.d/routewolf-ui-backup enable &&
+                        /etc/init.d/routewolf-ui-backup running || /etc/init.d/routewolf-ui-backup start
+                fi
             else
                 (exit "$?")
             fi
