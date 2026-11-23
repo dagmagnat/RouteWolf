@@ -681,24 +681,92 @@ function listPanel(result, save, action) {
     const useProject = E('input', { type: 'checkbox', checked: uci.get(settings, 'ui', 'project_lists') !== '0' || null });
     const drafts = {};
     const fields = {};
+    const previews = {};
     for (const [key] of localLists) {
         drafts[key] = uci.get(settings, 'ui', key) || '';
         drafts['exclude_' + key] = uci.get(settings, 'ui', 'exclude_' + key) || '';
     }
-    const sourceMode = E('select', { 'aria-label': _('Редактируемые списки') }, [
+    const sourceMode = E('select', { 'aria-label': _('Источник списков') }, [
         E('option', { value: 'local' }, [_('Свои записи')]),
-        E('option', { value: 'exclude' }, [_('Исключения из библиотеки')])
+        E('option', { value: 'default' }, [_('Списки по умолчанию')])
     ]);
     let editing = 'local';
+    let previewGeneration = 0;
     const changes = {};
     const checkStatus = E('p', { class: 'rw-list-hint', 'aria-live': 'polite' });
     function readFields() {
-        localLists.forEach(([key]) => { drafts[(editing === 'exclude' ? 'exclude_' : '') + key] = fields[key].value; });
+        if (editing === 'local')
+            localLists.forEach(([key]) => { drafts[key] = fields[key].value; });
+    }
+    async function loadPreview(key, offset) {
+        const generation = previewGeneration;
+        const preview = previews[key];
+        const { previous, next, status } = preview;
+        previous.disabled = next.disabled = true;
+        fields[key].value = '';
+        status.textContent = _('Загрузка…');
+        try {
+            const page = await libraryPage(key, '', String(offset), 'all', String(bulkPageSize));
+            if (generation !== previewGeneration)
+                return;
+            const entries = page.entries || [];
+            if (!entries.length && offset > 0)
+                return loadPreview(key, 0);
+            fields[key].value = entries.map(entry => entry.value).join('\n');
+            fields[key].scrollTop = 0;
+            status.textContent = page.total ? (offset + 1) + '–' + (offset + entries.length) + ' / ' + page.total :
+                _('В библиотеке нет записей');
+            preview.offset = offset;
+            preview.retry = null;
+            next.textContent = _('Дальше');
+            previous.disabled = offset === 0;
+            next.disabled = offset + bulkPageSize >= page.total;
+        } catch (error) {
+            if (generation !== previewGeneration)
+                return;
+            status.textContent = _('Не удалось прочитать библиотеку');
+            preview.retry = offset;
+            next.textContent = _('Повторить');
+            previous.disabled = offset === 0;
+            next.disabled = false;
+        }
     }
     function showFields(mode) {
-        readFields();
+        ++previewGeneration;
         editing = sourceMode.value = mode;
-        localLists.forEach(([key]) => { fields[key].value = drafts[(editing === 'exclude' ? 'exclude_' : '') + key]; });
+        const readOnly = mode === 'default';
+        exclusions.hidden = !readOnly;
+        for (const [key, , placeholder] of localLists) {
+            fields[key].readOnly = readOnly;
+            fields[key].placeholder = readOnly ? '' : placeholder;
+            previews[key].navigation.hidden = !readOnly;
+            if (readOnly) {
+                previews[key].offset = 0;
+                loadPreview(key, 0);
+            } else {
+                fields[key].value = drafts[key];
+            }
+        }
+    }
+    function editExclusions() {
+        const inputs = {};
+        const cards = localLists.map(([key, label]) => {
+            inputs[key] = E('textarea', { rows: 5, maxlength: maxListBytes, spellcheck: false });
+            inputs[key].value = drafts['exclude_' + key];
+            return E('label', {}, [label, inputs[key]]);
+        });
+        ui.showModal(_('Исключения из библиотеки'), [
+            E('p', {}, [_('Уберите из библиотечного набора домены и адреса. После редактирования нажмите «Применить списки».')]),
+            E('div', { class: 'rw-list-grid' }, cards),
+            E('div', { class: 'rw-actions rw-activate-actions' }, [
+                button(_('Сохранить'), () => {
+                    for (const [key] of localLists)
+                        drafts['exclude_' + key] = inputs[key].value;
+                    ui.hideModal();
+                }, true),
+                button(_('Закрыть'), () => ui.hideModal())
+            ])
+        ], 'rw-activate-modal', 'rw-exclusion-modal');
     }
     function cleanDraft(key, field, value) {
         const cleaned = cleanList(key, value);
@@ -745,15 +813,28 @@ function listPanel(result, save, action) {
             next[field] = cleanDraft(key, field, [drafts[field], ...values].join('\n'));
         }
         Object.assign(drafts, next);
-        editing = sourceMode.value = excluded ? 'exclude' : 'local';
-        localLists.forEach(([name]) => { fields[name].value = drafts[(excluded ? 'exclude_' : '') + name]; });
+        showFields(excluded ? 'default' : 'local');
         refreshListStatus();
     }
-    sourceMode.addEventListener('change', () => showFields(sourceMode.value));
+    sourceMode.addEventListener('change', () => {
+        readFields();
+        showFields(sourceMode.value);
+    });
+    const exclusions = button(_('Редактировать исключения'), editExclusions);
+    exclusions.hidden = true;
     const cards = localLists.map(([key, label, placeholder]) => {
-        const area = E('textarea', { rows: 6, maxlength: 24576, placeholder }, [drafts[key]]);
+        const area = E('textarea', { rows: 6, maxlength: maxListBytes, placeholder, spellcheck: false });
+        area.value = drafts[key];
         fields[key] = area;
-        return E('label', {}, [label, area]);
+        const previous = button(_('Назад'), () => loadPreview(key, Math.max(0, previews[key].offset - bulkPageSize)));
+        const next = button(_('Дальше'), () => {
+            const preview = previews[key];
+            loadPreview(key, preview.retry ?? (preview.offset + bulkPageSize));
+        });
+        const status = E('span', { role: 'status' });
+        const navigation = E('div', { class: 'rw-list-preview-nav', hidden: true }, [previous, status, next]);
+        previews[key] = { previous, next, status, navigation, offset: 0, retry: null };
+        return E('div', {}, [E('label', {}, [label, area]), navigation]);
     });
     return E('div', {}, [
         E('div', { class: 'rw-list-sources' }, [
@@ -766,7 +847,7 @@ function listPanel(result, save, action) {
         E('p', { class: 'rw-list-hint' }, [(result.backup_mode || result.mode) === 'inverse' ?
             _('Библиотека и свои списки задают прямой выход через WAN. Исключение убирает запись из библиотеки, а свои записи имеют приоритет.') :
             _('В выборочном режиме исключения отправляются через WAN. Если запись есть и в своих списках, она идёт через туннель. Обновление библиотеки сохраняет свои записи и исключения.')]),
-        sourceMode,
+        E('div', { class: 'rw-list-sources' }, [sourceMode, exclusions]),
         E('div', { class: 'rw-list-grid' }, cards),
         checkStatus,
         E('div', { class: 'rw-actions rw-equal-actions' }, [
@@ -776,14 +857,18 @@ function listPanel(result, save, action) {
                     drafts[key] = cleanDraft(key, key, drafts[key]);
                     drafts['exclude_' + key] = cleanDraft(key, 'exclude_' + key, drafts['exclude_' + key]);
                 }
-                localLists.forEach(([key]) => { fields[key].value = drafts[(editing === 'exclude' ? 'exclude_' : '') + key]; });
+                if (editing === 'local')
+                    localLists.forEach(([key]) => { fields[key].value = drafts[key]; });
                 refreshListStatus();
                 uci.set(settings, 'ui', 'project_lists', useProject.checked ? '1' : '0');
                 Object.entries(drafts).forEach(([key, value]) => uci.set(settings, 'ui', key, value));
                 await save();
                 return action('local_lists');
             }), true),
-            button(_('Обновить библиотеку'), ui.createHandlerFn(null, () => action('lists'))),
+            button(_('Обновить библиотеку'), ui.createHandlerFn(null, async () => {
+                if (await action('lists') && editing === 'default')
+                    showFields('default');
+            })),
             button(_('Почему записи пропущены'), ui.createHandlerFn(null, showListReport))
         ])
     ]);
