@@ -128,6 +128,7 @@ check_nodes() {
 
 refresh() (
     mode=$(cat "$dir/mode")
+    [ "$mode" != inverse ] || mode=full
     grep -q '^https://' "$dir/source" || return 0
     stage=$(mktemp -d "$dir/.refresh.XXXXXX")
     trap 'rm -rf "$stage"' EXIT

@@ -10,6 +10,26 @@ watchdog=/etc/routewolf/watchdog.conf
 fail() { printf '%s\n' "$*" >&2; exit 1; }
 key_ok() { printf '%s\n' "$1" | grep -Eq '^[A-Za-z0-9+/]{43}=$'; }
 
+render_inverse_rules() {
+    local lan=$1 ipv6_rule=
+    # Keep membership in bit 27 for the reserve policy after inverting bit 0.
+    if [ "$2" = 1 ]; then
+        ipv6_rule='ip6 daddr 2000::/3 meta mark set meta mark | 1'
+    fi
+    cat <<EOF
+chain rwui_full {
+    type filter hook prerouting priority -148; policy accept;
+    iifname != "$lan" return
+    meta mark & 1 != 0 meta mark set (meta mark & 0xfffffffe) | 0x08000000 return
+    fib daddr type local return
+    fib daddr oifname "$lan" return
+    ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3 } return
+    meta nfproto ipv4 meta mark set meta mark | 1
+    $ipv6_rule
+}
+EOF
+}
+
 device_up() {
     local flags
     flags=$(cat "/sys/class/net/$1/flags" 2>/dev/null) || return 1
@@ -49,7 +69,7 @@ native_profile() (
     routing=$(uci -q get "routewolf_ui.$profile.routing")
     launch=$(uci -q get "routewolf_ui.$profile.launch" || echo boot)
     case "$protocol" in wireguard) tool=wg ;; amneziawg) tool=awg ;; openvpn) tool=openvpn ;; *) fail 'This profile type cannot be activated by the trial.' ;; esac
-    case "$routing" in routewolf|full) ;; *) fail 'Choose selective or full routing for this profile.' ;; esac
+    case "$routing" in routewolf|inverse|full) ;; *) fail 'Invalid routing mode.' ;; esac
     case "$launch" in boot) auto=1 ;; manual) auto=0 ;; *) fail 'Invalid launch mode.' ;; esac
     if [ "$backup" = yes ]; then
         auto=0
@@ -323,7 +343,10 @@ native_profile() (
         done_ok=yes
         return 0
     fi
-    if [ "$routing" = full ]; then
+    if [ "$routing" = inverse ]; then
+        use6=$(sed -n "s/^IPV6_SUPPORT='\([01]\)'$/\1/p" /etc/routewolf/user.conf | head -n 1)
+        render_inverse_rules "$lan" "${use6:-0}" > "$state/full.nft"
+    elif [ "$routing" = full ]; then
         cat > "$state/full.nft" <<EOF
 chain rwui_full {
     type filter hook prerouting priority -148; policy accept;
@@ -332,6 +355,8 @@ chain rwui_full {
     iifname "$lan" meta nfproto ipv4 meta mark set meta mark | 1
 }
 EOF
+    fi
+    if [ "$routing" = full ] || [ "$routing" = inverse ]; then
         uci set firewall.routewolf_ui_full=include
         uci set firewall.routewolf_ui_full.type=nftables
         uci set firewall.routewolf_ui_full.position=table-post

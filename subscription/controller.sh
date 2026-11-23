@@ -37,7 +37,16 @@ remove_routing() {
 
 build_table() {
     routewolf_match=
-    [ "$mode" != routewolf ] || routewolf_match='meta mark & 0x1 == 0x1'
+    inverse_ipv6=
+    case "$mode" in
+        routewolf) routewolf_match='meta mark & 0x1 == 0x1' ;;
+        inverse)
+            routewolf_match='meta mark & 0x1 == 0'
+            if ! grep -Fxq "IPV6_SUPPORT='1'" /etc/routewolf/user.conf; then
+                inverse_ipv6='meta nfproto ipv6 return'
+            fi
+            ;;
+    esac
     nft -f - <<EOF
 table inet $table {
     set active_lans {
@@ -51,6 +60,7 @@ table inet $table {
         fib daddr type local return
         ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3 } return
         ip6 daddr != 2000::/3 return
+        $inverse_ipv6
         # Keep destinations on directly connected LAN/VLANs on the main route.
         fib daddr oifname "$lan" return
         $routewolf_match meta mark set meta mark | $mark
@@ -127,7 +137,9 @@ refresh() (
     "$helper" fetch "$state/source" > "$stage/input" || { log "Subscription download failed; keeping the previous configuration"; exit 1; }
     render=render
     [ "$backend" != xray ] || render=render-xray
-    "$helper" "$render" "$stage/input" "$state/token" "$mode" "$stage/config.json" ||
+    engine_mode=$mode
+    [ "$mode" != inverse ] || engine_mode=full
+    "$helper" "$render" "$stage/input" "$state/token" "$engine_mode" "$stage/config.json" ||
         { log "Subscription could not be imported; keeping the previous configuration"; exit 1; }
     cmp -s "$stage/config.json" "$state/config.json" && exit 0
     if [ "$backend" = xray ]; then

@@ -8,6 +8,10 @@ import time
 root = Path(__file__).resolve().parents[1]
 controller = (root / 'subscription/controller.sh').read_text(encoding='utf-8')
 functions = controller[:controller.rindex('case "${1:-}"')]
+ui = root / 'luci-app-routewolf/root/usr/libexec/routewolf-ui'
+profiles = (ui / 'profiles.sh').read_text(encoding='utf-8')
+native_inverse = profiles[profiles.index('render_inverse_rules()'):profiles.index('device_up()')]
+backup = (ui / 'backup.sh').read_text(encoding='utf-8').split('case "${1:-}"')[0]
 prefix = f'rwsub-{os.getpid()}'
 client, router, origin = (f'{prefix}-{role}' for role in ('client', 'router', 'origin'))
 
@@ -25,8 +29,8 @@ def address(namespace, dev, cidr):
     inside(namespace, 'ip', 'link', 'set', dev, 'up')
 
 
-def ping(expected):
-    result = run(['ip','netns','exec',client,'ping','-c','1','-W','1','198.51.100.2'],
+def ping(expected, target='198.51.100.2'):
+    result = run(['ip','netns','exec',client,'ping','-c','1','-W','1',target],
                  stdout=DEVNULL, stderr=DEVNULL)
     assert (result.returncode == 0) == expected
 
@@ -44,6 +48,7 @@ try:
     address(router, 'wan', '10.9.0.1/24')
     address(origin, 'origin0', '10.9.0.2/24')
     address(origin, 'lo', '198.51.100.2/32')
+    address(origin, 'lo', '198.51.100.3/32')
     inside(client, 'ip', 'route', 'add', 'default', 'via', '192.168.77.1')
     inside(router, 'ip', 'route', 'add', 'default', 'via', '10.9.0.2')
     inside(origin, 'ip', 'route', 'add', 'default', 'via', '10.9.0.1')
@@ -80,6 +85,33 @@ table inet routewolf_test_mark {
 }
 ''', text=True)
     ping(False)
+    inside(router, 'sh', '-ec', functions + '''
+remove_routing
+lan=br-lan; mode=inverse; build_table; ensure_policy -4
+nft add element inet routewolf_subscription active_lans '{ "br-lan" }'
+''')
+    ping(True)
+    ping(False, '198.51.100.3')
+    inside(router, 'sh', '-ec', functions + '\nremove_routing')
+    inside(router, 'sh', '-ec', native_inverse + '''
+{ echo 'table inet routewolf_test_native {'; render_inverse_rules br-lan 1; echo '}'; } | nft -f -
+ip -4 rule add priority 100 fwmark 0x1/0x1 table 99
+ip -4 route add default dev rwsub0 table 99
+''')
+    ping(True)
+    ping(False, '198.51.100.3')
+    inside(router, 'sh', '-ec', backup + '''
+lan=br-lan; primary=awgtest; primary_mode=inverse; mode=inverse; last_policy=
+ensure_policy
+ip -4 rule add priority 94 fwmark 0x4000000/0x4000000 table 197
+ip -4 route add default dev rwsub0 table 197
+nft add element inet routewolf_ui_backup active_lans '{ "br-lan" }'
+''')
+    ping(True)
+    ping(False, '198.51.100.3')
+    inside(router, 'nft', 'flush', 'set', 'inet', 'routewolf_ui_backup', 'active_lans')
+    ping(True)
+    ping(True, '198.51.100.3')
 finally:
     for namespace in client, router, origin:
         run(['ip','netns','del',namespace], stdout=DEVNULL, stderr=DEVNULL)

@@ -20,7 +20,7 @@ case "$profile" in ''|*[!a-zA-Z0-9_]*) fail 'Invalid profile ID.' ;; esac
 [ -x /etc/init.d/routewolf ] || fail 'Install RouteWolf first.'
 protocol=$(uci -q get "routewolf_ui.$profile.protocol")
 mode=$(uci -q get "routewolf_ui.$profile.routing")
-case "$mode" in full|routewolf|json) ;; *) fail 'Invalid routing mode.' ;; esac
+case "$mode" in full|routewolf|inverse|json) ;; *) fail 'Invalid routing mode.' ;; esac
 if [ "$protocol" = vless ]; then
     [ "$reserve" = no ] && [ "$mode" != json ] || fail 'Unsupported VLESS profile mode.'
 fi

@@ -61,14 +61,16 @@ prepare() {
     mode=$2
     profile_type=${3:-}
     printf '%s\n' "$mode" > "$stage/mode"
+    engine_mode=$mode
+    [ "$mode" != inverse ] || engine_mode=full
     [ -c /dev/net/tun ] || fail "TUN device unavailable. Install kmod-tun for this kernel."
     if [ "$profile_type" = vless ]; then
         printf '%s\n' xray > "$stage/engine"
-        "$stage/subscription" render-xray "$stage/input" "$stage/token" "$mode" "$stage/config.json" || return 3
+        "$stage/subscription" render-xray "$stage/input" "$stage/token" "$engine_mode" "$stage/config.json" || return 3
         xray run -test -c "$stage/config.json" >/dev/null 2>&1 || return 4
     else
         printf '%s\n' sing-box > "$stage/engine"
-        "$stage/subscription" render "$stage/input" "$stage/token" "$mode" "$stage/config.json" || return 3
+        "$stage/subscription" render "$stage/input" "$stage/token" "$engine_mode" "$stage/config.json" || return 3
         sing-box check -c "$stage/config.json" >/dev/null 2>&1 || return 4
     fi
     cp "$here/controller.sh" "$stage/controller"

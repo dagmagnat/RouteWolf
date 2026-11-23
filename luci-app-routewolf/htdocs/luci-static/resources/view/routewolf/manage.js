@@ -17,8 +17,9 @@ const protocols = {
 };
 
 const routeNames = {
-    routewolf: _('Выборочно по спискам RouteWolf'),
-    full: _('Весь интернет через туннель'),
+    routewolf: _('Только списки через VPN'),
+    inverse: _('Списки напрямую, остальное через VPN'),
+    full: _('Весь интернет через VPN'),
     json: _('Правила из JSON-подписки'),
     none: _('Туннель не настроен')
 };
@@ -754,7 +755,9 @@ function listPanel(result, save, action) {
         ]),
         result.lists_schedule_available ? actionRow(_('Ночное обновление в 02:00'),
             _('Обновляет библиотеку по времени роутера.'), listSchedule, result.lists_scheduled) : '',
-        E('p', { class: 'rw-list-hint' }, [_('В выборочном режиме исключения отправляются через WAN. Если запись есть и в своих списках, она идёт через туннель. Обновление библиотеки сохраняет свои записи и исключения.')]),
+        E('p', { class: 'rw-list-hint' }, [(result.backup_mode || result.mode) === 'inverse' ?
+            _('Библиотека и свои списки задают прямой выход через WAN. Исключение убирает запись из библиотеки, а свои записи имеют приоритет.') :
+            _('В выборочном режиме исключения отправляются через WAN. Если запись есть и в своих списках, она идёт через туннель. Обновление библиотеки сохраняет свои записи и исключения.')]),
         sourceMode,
         E('div', { class: 'rw-list-grid' }, cards),
         checkStatus,
@@ -799,8 +802,10 @@ function profileForm() {
         return protocols[this.cfgvalue(sectionId)] || '—';
     };
 
-    option = section.option(form.ListValue, 'routing', _('Маршрутизация'));
+    option = section.option(form.ListValue, 'routing', _('Маршрутизация'),
+        _('В двух режимах по спискам используются библиотека и свои записи. В режиме «Весь интернет через VPN» списки не ограничивают маршрутизацию.'));
     option.value('routewolf', routeNames.routewolf);
+    option.value('inverse', routeNames.inverse);
     option.value('full', routeNames.full);
     option.value('json', routeNames.json);
     option.default = 'routewolf';

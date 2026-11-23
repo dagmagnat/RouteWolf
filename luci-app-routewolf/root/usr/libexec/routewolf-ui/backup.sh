@@ -231,11 +231,17 @@ primary_healthy() {
 }
 
 ensure_policy() {
-    local policy="$primary:$mode:$lan" match= bypass=
+    local policy="$primary:$primary_mode:$mode:$lan" match= bypass= list_mark=0x1
     if [ "$last_policy" = "$policy" ] && nft list table inet "$table" >/dev/null 2>&1; then
         return 0
     fi
-    [ "$mode" != routewolf ] || match='meta mark & 0x1 == 0x1'
+    if [ "$primary" != rwsub0 ] && [ "$primary_mode" = inverse ]; then
+        list_mark=0x08000000
+    fi
+    case "$mode" in
+        routewolf) match="meta mark & $list_mark == $list_mark" ;;
+        inverse) match="meta mark & $list_mark == 0" ;;
+    esac
     # For a native primary, an expired lease sends traffic to the normal WAN
     # even if the kernel still has a stale RouteWolf policy route.
     [ "$primary" = rwsub0 ] || bypass='meta mark set meta mark & 0xfffffffe'
@@ -305,13 +311,14 @@ read_settings() {
     else
         mode=$(uci -q get "network.$dev.routewolf_backup_mode" || :)
     fi
-    case "$mode" in routewolf|full|json) ;; *) return 1 ;; esac
+    case "$mode" in routewolf|inverse|full|json) ;; *) return 1 ;; esac
     [ -x /etc/init.d/routewolf ] && [ ! -e "$state/paused-singbox" ] &&
         [ ! -e "$state/paused-route.conf" ] || return 1
     [ "$(setting active_profile)" != "$profile" ] || return 1
     lan=$(ubus call network.interface.lan status | jsonfilter -e '@.l3_device')
     case "$lan" in ''|*[!a-zA-Z0-9_.-]*) return 1 ;; esac
     selected_primary
+    primary_mode=$(setting active_mode)
     case "$primary" in
         rwsub0|awg*|wg*|tunrw0|tunrw1) [ "$primary" != "$dev" ] ;;
         *) return 1 ;;
