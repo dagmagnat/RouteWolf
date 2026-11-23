@@ -366,6 +366,7 @@ EOF
         mv "$watchdog.new" "$watchdog"
     fi
     uci set "routewolf_ui.ui.active_profile=$profile"
+    uci set "routewolf_ui.ui.preferred_profile=$profile"
     uci set "routewolf_ui.ui.active_mode=$routing"
     uci commit routewolf_ui
     if [ "$stopped_singbox" = yes ]; then

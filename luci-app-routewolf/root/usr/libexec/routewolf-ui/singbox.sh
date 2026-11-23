@@ -201,6 +201,7 @@ else
     "$monitor" disable
 fi
 uci set "routewolf_ui.ui.active_profile=$profile"
+    uci set "routewolf_ui.ui.preferred_profile=$profile"
 uci set "routewolf_ui.ui.active_mode=$mode"
 uci commit routewolf_ui
 rm -f "$state/native-active"

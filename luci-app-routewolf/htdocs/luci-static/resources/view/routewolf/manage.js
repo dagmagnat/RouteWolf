@@ -56,7 +56,7 @@ const jobErrors = {
     'runtime-missing': _('Компонент RouteWolf не найден. Для старой установки выполните обновление до v60 с параметром --luci по SSH.'),
     'update-failed': _('Не удалось проверить стабильный выпуск. Подробности доступны по SSH через rw updates status.'),
     'update-schedule': _('Обновление завершилось, но восстановить расписание списков не удалось.'),
-    paused: _('Сначала возобновите маршрутизацию на вкладке «Обзор».')
+    paused: _('Сначала включите маршрутизацию кнопкой рядом с вкладками.')
 };
 
 const listSchedule = rpc.declare({ object: 'routewolf_ui', method: 'list_schedule', params: ['action'], reject: true, expect: { ok: false } });
@@ -81,7 +81,7 @@ const linkStates = {
     active: [_('Активен'), 'on'],
     waiting: [_('Ожидает трафика'), 'waiting'],
     up: [_('Интерфейс поднят'), 'on'],
-    paused: [_('Пауза · WAN'), 'waiting'],
+    paused: [_('Выключен · WAN'), 'off'],
     fallback: [_('Переключён на WAN'), 'off'],
     backup: [_('Резерв подключён'), 'on'],
     down: [_('Остановлен'), 'off'],
@@ -107,7 +107,7 @@ function button(label, callback, accent) {
     }, [label]);
 }
 
-function activateTabs(tabs, title, progress, feedback) {
+function activateTabs(tabs, title, progress, toggle, feedback) {
     const buttons = [];
     const panels = [];
     const names = tabs.map(([id]) => id);
@@ -141,7 +141,7 @@ function activateTabs(tabs, title, progress, feedback) {
     return E('div', {}, [
         E('div', { class: 'rw-toolbar' }, [title,
             E('nav', { class: 'rw-tabs', role: 'tablist', 'aria-label': 'RouteWolf' }, buttons),
-            progress
+            progress, toggle
         ]),
         feedback, ...panels
     ]);
@@ -186,6 +186,12 @@ function actionRow(title, description, change, state, showError) {
 function statusBadge(state) {
     const [label, tone] = linkStates[state] || linkStates.none;
     return E('span', { class: 'rw-badge', 'data-state': tone }, [label]);
+}
+
+function tunnelCommand(state, profile) {
+    if (state.paused) return 'resume';
+    if (state.tunnel) return state.link_state === 'down' ? 'repair' : 'pause';
+    return profile ? 'activate' : 'choose';
 }
 
 function statusPanel(result) {
@@ -808,11 +814,13 @@ function profileForm() {
     return map;
 }
 
-async function confirmActivation(profile, action, backup = false) {
+async function confirmActivation(profile, action, backup = false, quick = false) {
     try {
         const role = backup ? 'backup' : 'primary';
         const check = await preflight(profile, role);
         const missing = check.missing || [];
+        if (quick && !missing.length && !check.restart_required)
+            return await action('activate', profile, true);
         const packageInfo = E('p', {}, []);
         function updatePackages(packages) {
             packageInfo.replaceChildren(...(packages.length ? [
@@ -967,7 +975,40 @@ return view.extend({
         };
         const profileSelect = E('select', { id: 'rw-primary-profile' });
         const backupSelect = E('select', { id: 'rw-backup-profile' });
-        const connect = button(_('Сделать основным'), ui.createHandlerFn(null, () =>
+        let current = result;
+        let preferred = uci.get(settings, 'ui', 'preferred_profile');
+        const availableProfiles = () => uci.sections(settings, 'profile').filter(section =>
+            Object.hasOwn(protocols, section.protocol));
+        function primaryProfile() {
+            const ids = availableProfiles().map(section => section['.name']);
+            const primary = [preferred, current.active_profile].find(id => ids.includes(id));
+            return primary || (ids.length === 1 && ids[0] !== current.backup_profile ? ids[0] : '');
+        }
+        const tunnelToggle = button('', ui.createHandlerFn(null, async () => {
+            const primary = primaryProfile();
+            const cmd = tunnelCommand(current, primary);
+            if (cmd === 'choose') {
+                document.getElementById('rw-tab-profiles').click();
+                profileSelect.focus();
+            } else if (cmd === 'activate') {
+                await confirmActivation(primary, action, false, true);
+            } else {
+                await action(cmd, '', true);
+            }
+        }));
+        tunnelToggle.classList.add('rw-control-toggle', 'rw-tunnel-toggle');
+        function updateTunnelToggle() {
+            const primary = primaryProfile();
+            const cmd = tunnelCommand(current, primary);
+            tunnelToggle.textContent = cmd === 'pause' ? _('Выключить') :
+                cmd === 'choose' ? _('Выбрать профиль') : _('Включить');
+            tunnelToggle.dataset.action = cmd === 'pause' ? 'disable' : 'enable';
+            const name = cmd === 'activate' ? uci.get(settings, primary, 'name') : '';
+            tunnelToggle.title = cmd === 'pause' ? _('Переключить трафик на WAN') : name || _('Включить маршрутизацию через туннель');
+            if (!tunnelToggle.classList.contains('spinning'))
+                tunnelToggle.disabled = !current.project_auth;
+        }
+        const connect = button(_('Активировать профиль'), ui.createHandlerFn(null, () =>
             profileSelect.value ? confirmActivation(profileSelect.value, action) : null), true);
         const saveBackup = button(_('Сохранить резерв'), ui.createHandlerFn(null, () =>
             backupSelect.value ? confirmActivation(backupSelect.value, action, true) :
@@ -975,20 +1016,25 @@ return view.extend({
         function updateBackupButton() {
             saveBackup.disabled = !result.project_auth || (!backupSelect.value && !result.backup_profile);
         }
+        function updateConnect() {
+            connect.disabled = !profileSelect.value || current.paused || !current.project_auth;
+        }
         backupSelect.addEventListener('change', updateBackupButton);
+        profileSelect.addEventListener('change', updateConnect);
         function updateProfiles() {
-            const profiles = uci.sections(settings, 'profile').filter(section =>
-                Object.hasOwn(protocols, section.protocol));
-            profileSelect.replaceChildren(...profiles.map(section => E('option', {
-                value: section['.name'], selected: section['.name'] === result.active_profile || null
+            const profiles = availableProfiles();
+            const primary = primaryProfile();
+            profileSelect.replaceChildren(E('option', { value: '' }, [_('Выберите профиль')]), ...profiles.map(section => E('option', {
+                value: section['.name'], selected: section['.name'] === primary || null
             }, [section.name])));
-            connect.disabled = !profiles.length || result.paused || !result.project_auth;
+            updateConnect();
             const eligible = profiles.filter(section => section.protocol !== 'vless' &&
                 (section['.name'] !== result.active_profile || section['.name'] === result.backup_profile));
             backupSelect.replaceChildren(E('option', { value: '' }, [_('Без резерва')]), ...eligible.map(section =>
                 E('option', { value: section['.name'], selected: section['.name'] === result.backup_profile || null },
                     [section.name])));
             updateBackupButton();
+            updateTunnelToggle();
         }
 
         this.map = profileForm();
@@ -1003,8 +1049,12 @@ return view.extend({
                     ]),
                     button(_('Сохранить профили'), ui.createHandlerFn(project, async () => {
                         try {
+                            const primary = profileSelect.value;
+                            if (primary)
+                                uci.set(settings, 'ui', 'preferred_profile', primary);
                             await project.map.save();
                             await commit();
+                            preferred = uci.get(settings, 'ui', 'preferred_profile');
                             updateProfiles();
                             ui.addNotification(null, E('p', {}, [_('Профили сохранены.')]), 'info');
                         } catch (error) {
@@ -1024,42 +1074,37 @@ return view.extend({
             const controls = servicePanel(result, action, showError);
             const liveStatus = E('div', {}, [statusPanel(result)]);
             const badge = statusBadge(result.link_state);
+            badge.setAttribute('aria-live', 'polite');
             poll.add(async () => {
                 const panel = liveStatus.closest('.rw-panel');
-                if (!panel || panel.hidden || document.hidden)
+                if (!panel || document.hidden || actionRunning)
                     return;
                 try {
-                    const current = await status();
+                    current = await status();
                     liveStatus.replaceChildren(statusPanel(current));
                     const [label, tone] = linkStates[current.link_state] || linkStates.none;
-                    badge.textContent = label;
+                    if (badge.textContent !== label)
+                        badge.textContent = label;
                     badge.dataset.state = tone;
+                    updateTunnelToggle();
+                    updateConnect();
                 } catch (error) {
                     // Leave the previous state visible if a poll was interrupted.
                 }
             }, 15);
-            const stopped = !result.paused && result.link_state === 'down';
-            const overview = E('div', {}, [
-                liveStatus,
-                result.tunnel || result.paused ? E('div', { class: 'rw-actions rw-routing-actions' }, [
-                    button(result.paused ? _('Возобновить маршрутизацию') :
-                        stopped ? _('Восстановить маршрутизацию') : _('Приостановить маршрутизацию'),
-                        ui.createHandlerFn(null, () => action(result.paused ? 'resume' : stopped ? 'repair' : 'pause', '', true)))
-                ]) : ''
-            ]);
             return E('div', { class: 'rw-luci', keydown: event => {
                 if (event.key === 'Escape' && !feedback.hidden) dismissError();
             } }, [
                 E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') }),
                 activateTabs([
-                    ['overview', _('Обзор'), overview],
+                    ['overview', _('Обзор'), liveStatus],
                     ['profiles', _('Профили'), profiles],
                     ['lists', _('Списки'), listEditor],
                     ['service', _('Управление'), controls]
                 ], E('div', { class: 'rw-title-row' }, [
                     E('h2', {}, ['RouteWolf']),
                     badge
-                ]), progress, feedback)
+                ]), progress, tunnelToggle, feedback)
             ]);
         });
     },

@@ -3,13 +3,14 @@
 .main-right > header.bg-primary:has(~ #maincontent .rw-luci)::after { display:none; }
 .rw-luci .rw-toolbar {
     display:grid; grid-template-columns:minmax(0,1fr) auto;
-    grid-template-areas:"title status" "tabs tabs"; align-items:center;
+    grid-template-areas:"title status" "tabs toggle"; align-items:center;
     gap:10px 16px; padding:0 0 12px; margin-bottom:16px; border-bottom:1px solid var(--rw-line);
 }
 .rw-luci .rw-toolbar h2 { margin:0; padding:0; background:none; border:0; box-shadow:none; font-size:1.45rem; line-height:1.2; }
 .rw-luci .rw-title-row { grid-area:title; display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; min-width:0; }
 .rw-luci .rw-toolbar > [role="status"] { grid-area:status; justify-self:end; }
 .rw-luci .rw-toolbar > [role="status"]:empty { display:none; }
+.rw-luci .rw-toolbar > .rw-tunnel-toggle { grid-area:toggle; justify-self:end; min-width:138px; }
 .rw-luci .rw-badge { padding:3px 9px; border-radius:20px; font-size:.78rem; font-weight:650; background:var(--rw-surface); border:1px solid var(--rw-line); white-space:nowrap; }
 .rw-luci .rw-badge[data-state="on"] { background:color-mix(in srgb,#2ea66d 17%,transparent); border-color:color-mix(in srgb,#2ea66d 40%,transparent); }
 .rw-luci .rw-badge[data-state="waiting"] { background:color-mix(in srgb,#c68c24 17%,transparent); border-color:color-mix(in srgb,#c68c24 40%,transparent); }
@@ -75,18 +76,14 @@
 .rw-luci .rw-profile-actions button, .rw-luci .rw-profile-picker select { width:196px; max-width:100%; min-height:40px; margin:0; box-sizing:border-box; }
 .rw-luci .rw-profile-actions button.cbi-button { width:196px !important; }
 .rw-luci .rw-profile-actions button,
-.rw-luci .rw-compact-table .cbi-button-add,
-.rw-luci .rw-routing-actions button {
+.rw-luci .rw-compact-table .cbi-button-add {
     display:inline-flex; align-items:center; justify-content:center;
     margin-inline:0 !important; padding:6px 10px !important;
     min-height:39px; text-align:center; white-space:normal; line-height:1.2;
     font-size:.84rem !important; box-sizing:border-box;
 }
-.rw-luci .rw-profile-actions button.spinning,
-.rw-luci .rw-routing-actions button.spinning { background-image:none !important; }
-.rw-luci .rw-profile-actions button.spinning::before,
-.rw-luci .rw-routing-actions button.spinning::before { display:none; }
-.rw-luci .rw-routing-actions { justify-content:flex-start; padding-inline:0; }
+.rw-luci .rw-profile-actions button.spinning { background-image:none !important; }
+.rw-luci .rw-profile-actions button.spinning::before { display:none; }
 .rw-luci .rw-list-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:10px; }
 .rw-luci .rw-list-grid label { display:flex; flex-direction:column; gap:5px; font-weight:600; min-width:0; }
 .rw-luci .rw-list-grid textarea { width:100%; min-width:0; height:clamp(85px,19vh,165px); font:inherit; font-family:monospace; resize:vertical; color:inherit; background:var(--rw-surface); border:1px solid var(--rw-line); border-radius:6px; padding:8px 9px; box-sizing:border-box; }
@@ -201,6 +198,9 @@
     }
 }
 @media (max-width:720px) {
+    .rw-luci .rw-toolbar { grid-template-areas:"title toggle" "status status" "tabs tabs"; }
+    .rw-luci .rw-toolbar:has(> [role="status"]:empty) { grid-template-areas:"title toggle" "tabs tabs"; }
+    .rw-luci .rw-toolbar > [role="status"] { justify-self:start; }
     .rw-luci .rw-tabs button { padding-inline:8px; }
     .rw-luci .rw-cards, .rw-luci .rw-facts, .rw-luci .rw-list-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .rw-library-filter { grid-template-columns:repeat(2,minmax(0,1fr)); }
@@ -210,9 +210,7 @@
     }
 }
 @media (max-width:420px) {
-    .rw-luci .rw-toolbar { grid-template-areas:"title title" "status status" "tabs tabs"; row-gap:8px; }
-    .rw-luci .rw-toolbar:has(> [role="status"]:empty) { grid-template-areas:"title title" "tabs tabs"; }
-    .rw-luci .rw-toolbar > [role="status"] { justify-self:start; }
+    .rw-luci .rw-toolbar { row-gap:8px; }
     .rw-luci .rw-tabs { justify-self:stretch; grid-template-columns:repeat(2,minmax(0,1fr)); }
     .rw-luci .rw-service-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
     .rw-luci .rw-cards, .rw-luci .rw-list-grid { grid-template-columns:minmax(0,1fr); }
