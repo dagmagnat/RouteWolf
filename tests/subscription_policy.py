@@ -50,6 +50,17 @@ try:
     inside(router, 'sysctl', '-qw', 'net.ipv4.ip_forward=1')
     ping(True)
     inside(router, 'sh', '-ec', functions + '\nlan=br-lan; mode=full; build_table; ensure_policy -4')
+    # BusyBox ip appends a space after the table number on OpenWrt.
+    inside(router, 'sh', '-ec', functions + '''
+ip() {
+    if [ "$2" = rule ] && [ "$3" = show ]; then
+        command ip "$@" | sed 's/$/ /'
+    else
+        command ip "$@"
+    fi
+}
+ensure_policy -4
+''')
     ping(True)
     inside(router, 'nft', '-f', '-', input='add element inet routewolf_subscription active_lans { "br-lan" timeout 3s }\n', text=True)
     ping(False)

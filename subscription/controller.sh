@@ -64,7 +64,7 @@ ensure_policy() {
     current=$(ip "$family" rule show | awk -v prio="$priority:" '$1 == prio')
     if [ -z "$current" ]; then
         ip "$family" rule add priority "$priority" fwmark "$mark/$mark" table "$rule_table" || return 1
-    elif ! printf '%s\n' "$current" | grep -Eq '^92:.* fwmark 0x2000000/0x2000000 lookup 190$'; then
+    elif ! printf '%s\n' "$current" | grep -Eq '^92:.* fwmark 0x2000000/0x2000000 lookup 190[[:space:]]*$'; then
         return 1
     fi
     ip "$family" route replace default dev "$device" table "$rule_table"
