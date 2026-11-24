@@ -103,14 +103,30 @@ release() {
     esac
 }
 
+can_keep_reserve() {
+    # A WireGuard probe and an Xray reserve use independent devices and keys.
+    case "$primary" in awg*|wg*) ;; *) return 1 ;; esac
+    [ "$dev" = rwsubb0 ] && link_active "$dev" &&
+        grep -qx xray "$state/backup-proxy/engine" 2>/dev/null &&
+        nft get element inet "$table" active_lans "{ \"$lan\" }" >/dev/null 2>&1
+}
+
 recover_primary() {
-    local attempt
-    release || return 1
-    status checking
+    local attempt keep_reserve=no
+    if can_keep_reserve && renew active_lans; then
+        keep_reserve=yes
+    else
+        release || return 1
+        status checking
+    fi
     control_device "$primary" start >/dev/null 2>&1 || return 1
     for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
         if link_active "$primary"; then
-            if primary_healthy; then return 0; fi
+            if primary_healthy; then
+                [ "$primary" = rwsub0 ] || renew primary_lans || return 1
+                [ "$keep_reserve" != yes ] || release || :
+                return 0
+            fi
             [ "$primary" = rwsub0 ] || return 1
         fi
         sleep 1
@@ -383,7 +399,6 @@ monitor() {
                 release || :
                 status conflict
             elif [ "$next_recovery" -gt 0 ] && [ "$now" -ge "$next_recovery" ] && recover_primary; then
-                if [ "$primary" != rwsub0 ]; then renew primary_lans || :; fi
                 unlock_primary
                 status waiting
                 misses=0

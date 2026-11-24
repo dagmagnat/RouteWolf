@@ -1,0 +1,5 @@
+format=1
+version=60
+luci_archive=routewolf-luci-v60-r18.tar.gz
+luci_sha256=62c9d0b7c27a564c8a19deed313dc27ae3f6dfa99d3444efae862b000afba9e5
+upgrade_agent_sha256=ccbbb26e58e9b35b520bb8db216e7c5ec9ae1a6635d35d7357348b8e681b4ba2
