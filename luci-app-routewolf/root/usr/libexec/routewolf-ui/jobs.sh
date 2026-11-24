@@ -130,6 +130,12 @@ stage_backup() (
     prepare_dns "$profile" || return 1
     protocol=$(uci -q get "routewolf_ui.$profile.protocol") || return 1
     case "$protocol" in amneziawg|wireguard|openvpn|singbox|vless|outline) ;; *) return 1 ;; esac
+    case "$protocol" in
+        singbox|vless|outline)
+            . "$lib/installer-functions.sh"
+            if ! require_proxy_ram; then reason insufficient-proxy-ram; return 1; fi
+            ;;
+    esac
     set -- $(missing_backup_tools "$protocol")
     if [ "$#" -gt 0 ]; then
         phase packages

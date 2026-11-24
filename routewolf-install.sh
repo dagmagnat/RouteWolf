@@ -254,6 +254,18 @@ router_resource_summary() {
     fi
 }
 
+routewolf_proxy_ram_sufficient() {
+    # MemTotal is the RAM actually available to Linux after hardware reservations.
+    awk '/^MemTotal:/ { enough = ($2 >= 65536); exit } END { exit !enough }' /proc/meminfo
+}
+
+require_proxy_ram() {
+    routewolf_proxy_ram_sufficient && return 0
+    msgc "$C_RED" "Sing-box, Xray and Outline require at least 64 MiB of RAM reported by Linux. Choose AmneziaWG, WireGuard or OpenVPN." \
+        "Для Sing-box, Xray и Outline нужно не менее 64 МиБ RAM по данным Linux. Выберите AmneziaWG, WireGuard или OpenVPN."
+    return 1
+}
+
 profile_local_file() {
     profile="$1"; kind="$2"
     case "$profile:$kind" in
@@ -825,6 +837,7 @@ configure_openvpn_menu() {
 }
 
 check_singbox_requirements() {
+    require_proxy_ram || return 1
     DISK_TOTAL_MB=$(df -m / 2>/dev/null | awk 'NR==2 {print $2+0}')
     DISK_FREE_MB=$(df -m / 2>/dev/null | awk 'NR==2 {print $4+0}')
     RAM_TOTAL_MB=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)
@@ -1985,14 +1998,19 @@ handle_existing_routing_config() {
 # OpenWrt 24.10 and older use opkg; OpenWrt 25.12 and newer use apk.
 # Keep all package operations behind these helpers.
 detect_pkg_manager() {
-    if command -v apk >/dev/null 2>&1; then
-        PKG_MANAGER="apk"
-    elif command -v opkg >/dev/null 2>&1; then
-        PKG_MANAGER="opkg"
-    else
-        echo "Error: neither apk nor opkg was found on this OpenWrt system."
-        exit 1
-    fi
+    local release_major
+    release_major=${VERSION_ID:-$(sed -n "s/^DISTRIB_RELEASE=['\"]*\([0-9][0-9]*\)\..*/\1/p" /etc/openwrt_release 2>/dev/null)}
+    case "$release_major" in
+        23|24) PKG_MANAGER=opkg ;;
+        25|26) PKG_MANAGER=apk ;;
+        *)
+            if command -v apk >/dev/null 2>&1; then PKG_MANAGER=apk; else PKG_MANAGER=opkg; fi
+            ;;
+    esac
+    command -v "$PKG_MANAGER" >/dev/null 2>&1 && return 0
+    msgc "$C_RED" "Expected package manager for this build: $PKG_MANAGER (missing)." \
+        "Для этой сборки нужен пакетный менеджер $PKG_MANAGER, но он не найден."
+    return 1
 }
 
 
@@ -2121,7 +2139,7 @@ apk_run() {
 }
 
 pkg_update() {
-    detect_pkg_manager
+    detect_pkg_manager || return 1
     case "$PKG_MANAGER" in
         apk) quiet_cmd /tmp/routewolf-pkg-update.log apk_run update ;;
         opkg) quiet_cmd /tmp/routewolf-pkg-update.log opkg update ;;
@@ -2129,15 +2147,15 @@ pkg_update() {
 }
 
 pkg_install() {
-    detect_pkg_manager
+    detect_pkg_manager || return 1
     case "$PKG_MANAGER" in
         apk) quiet_cmd /tmp/routewolf-pkg-install.log apk_run add "$@" ;;
-        opkg) quiet_cmd /tmp/routewolf-pkg-install.log opkg install "$@" ;;
+        opkg) opkg_package_command install "$@" ;;
     esac
 }
 
 pkg_remove() {
-    detect_pkg_manager
+    detect_pkg_manager || return 1
     case "$PKG_MANAGER" in
         apk) quiet_cmd /tmp/routewolf-pkg-remove.log apk_run del "$@" ;;
         opkg) quiet_cmd /tmp/routewolf-pkg-remove.log opkg remove "$@" ;;
@@ -2145,12 +2163,24 @@ pkg_remove() {
 }
 
 pkg_is_installed() {
-    detect_pkg_manager
+    detect_pkg_manager || return 1
     pkg="$1"
     case "$PKG_MANAGER" in
         apk) apk info -e "$pkg" >/dev/null 2>&1 ;;
         opkg) opkg list-installed | grep -q "^$pkg " ;;
     esac
+}
+
+opkg_package_command() {
+    local action="$1" log
+    shift
+    log="/tmp/routewolf-pkg-$action.log"
+    quiet_cmd "$log" opkg "$action" "$@" && return 0
+    [ "${ROUTEWOLF_OPKG_PARTIAL:-0}" = 1 ] || return 1
+    msg "Retrying the OpenWrt package indexes for: $*" "Повторно загружаю индексы OpenWrt для: $*"
+    # Even another partial refresh may have recovered the needed feed.
+    pkg_update || :
+    quiet_cmd "$log" opkg "$action" "$@"
 }
 
 
@@ -2193,13 +2223,13 @@ routewolf_clean_download_cache() {
         /tmp/awg-openwrt-feed.pem /tmp/awg-openwrt-packages.adb \
         /tmp/routewolf-install.tar.gz /tmp/routewolf.zip 2>/dev/null || true
     rm -f /tmp/amneziawg-install.sh /tmp/routewolf-awg-install.log 2>/dev/null || true
-    if [ "${PKG_MANAGER:-}" = "apk" ] || command -v apk >/dev/null 2>&1; then
+    if [ "${PKG_MANAGER:-}" = "apk" ]; then
         apk cache clean >/dev/null 2>&1 || true
     fi
 }
 
 routewolf_safe_cleanup() {
-    detect_pkg_manager
+    detect_pkg_manager || return 1
     routewolf_clean_download_cache
 
     if [ "$PKG_MANAGER" = "apk" ]; then
@@ -2228,7 +2258,7 @@ routewolf_safe_cleanup() {
 
 prepare_install_storage() {
     [ "${ROUTEWOLF_STORAGE_READY:-0}" = "1" ] && return 0
-    detect_pkg_manager
+    detect_pkg_manager || return 1
     routewolf_clean_download_cache
     _rw_free="$(routewolf_free_kb)"
     _rw_total="$(routewolf_total_kb)"
@@ -2282,13 +2312,26 @@ prepare_install_storage() {
 
 check_repo() {
     prepare_install_storage || return 1
-    if ! pkg_update; then
-        msgc "$C_RED" "Package repository update failed. Installation cannot safely continue." "Обновление репозитория пакетов не выполнено. Безопасно продолжить установку нельзя."
-        msgc "$C_YELLOW" "For OpenWrt 25.12 check: command -v wget; readlink -f $(command -v wget); apk info -e wget-nossl" "Для OpenWrt 25.12 проверьте: command -v wget; readlink -f $(command -v wget); apk info -e wget-nossl"
-        msgc "$C_YELLOW" "Also check WAN, DNS, date/time and free RAM in /tmp." "Также проверьте WAN, DNS, дату/время и свободную RAM в /tmp."
-        return 1
+    ROUTEWOLF_OPKG_PARTIAL=0
+    pkg_update && return 0
+    if [ "$PKG_MANAGER" = opkg ]; then
+        # opkg retains feeds whose downloads and signature checks succeeded,
+        # even when update returns a nonzero count of failed feeds.
+        if grep -Fq 'Signature check passed.' /tmp/routewolf-pkg-update.log; then
+            ROUTEWOLF_OPKG_PARTIAL=1
+            msgc "$C_YELLOW" "Some opkg feeds failed. Continuing with verified indexes. Required packages are still checked when installed." \
+                "Часть индексов opkg не скачалась. Продолжаю с проверенными индексами. Обязательные пакеты проверю при установке."
+            return 0
+        fi
+        msgc "$C_YELLOW" "Check access to the feed URLs above and retry opkg update." \
+            "Проверьте доступ к URL репозиториев выше и повторите opkg update."
+    elif [ "$PKG_MANAGER" = apk ]; then
+        msgc "$C_YELLOW" "Check the configured APK repositories and the HTTPS client (wget or uclient-fetch)." \
+            "Проверьте репозитории apk и HTTPS-загрузчик (wget или uclient-fetch)."
     fi
-    return 0
+    msgc "$C_RED" "Package index update failed on ${OPENWRT_RELEASE:-OpenWrt} ($PKG_MANAGER). Check WAN, DNS and router time." \
+        "Не удалось обновить индексы на ${OPENWRT_RELEASE:-OpenWrt} ($PKG_MANAGER). Проверьте WAN, DNS и время на роутере."
+    return 1
 }
 
 install_routewolf_watchdog() {
@@ -2970,6 +3013,7 @@ replace_tunnel_if_requested() {
 }
 
 add_tunnel() {
+    local proxy_allowed=0
     clear_screen
     if [ "$FORCE_REINSTALL" = "1" ]; then
         echo "Forced reinstall requested / Запрошена принудительная переустановка"
@@ -2979,37 +3023,50 @@ add_tunnel() {
     fi
     clear_screen
     ui_header "$(prompt "Select a tunnel" "Выберите туннель")"
+    if routewolf_proxy_ram_sufficient; then
+        proxy_allowed=1
+    else
+        msgc "$C_YELLOW" "Below 64 MiB of RAM: AmneziaWG, WireGuard and OpenVPN are available." \
+            "Меньше 64 МиБ RAM. Доступны AmneziaWG, WireGuard и OpenVPN."
+    fi
     if is_ru; then
         printf "1) %bAmneziaWG / Amnezia WireGuard%b     %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "2) %bWireGuard%b                         %b[работает]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "3) %bOpenVPN%b                           %b[тестируется]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
-        printf "4) %bSing-box%b                          %b[VLESS и подписки]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
-        printf "5) %bOutline%b                           %b[тестовый режим, статический ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        if [ "$proxy_allowed" = 1 ]; then
+            printf "4) %bSing-box%b                          %b[VLESS и подписки]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+            printf "5) %bOutline%b                           %b[тестовый режим, статический ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        fi
         printf "6) %bОтмена / выход%b\n" "$C_RED" "$C_RESET"
         printf "7) %bПропустить настройку туннеля%b\n" "$C_YELLOW" "$C_RESET"
     else
         printf "1) %bAmneziaWG / Amnezia WireGuard%b     %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "2) %bWireGuard%b                         %b[active]%b\n" "$C_GREEN" "$C_RESET" "$C_GREEN" "$C_RESET"
         printf "3) %bOpenVPN%b                           %b[testing]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
-        printf "4) %bSing-box%b                          %b[VLESS and subscriptions]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
-        printf "5) %bOutline%b                           %b[test mode, static ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        if [ "$proxy_allowed" = 1 ]; then
+            printf "4) %bSing-box%b                          %b[VLESS and subscriptions]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+            printf "5) %bOutline%b                           %b[test mode, static ss://]%b\n" "$C_GREEN" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        fi
         printf "6) %bCancel / exit%b\n" "$C_RED" "$C_RESET"
         printf "7) %bSkip tunnel setup%b\n" "$C_YELLOW" "$C_RESET"
     fi
 
     while true; do
         printf "%s" "$(prompt "Choice [1]: " "Выбор [1]: ")"
-        read -r TUNNEL
+        read -r TUNNEL || return 1
         TUNNEL=${TUNNEL:-1}
         case "$TUNNEL" in
             1) TUNNEL=awg; break ;;
             2) TUNNEL=wg; break ;;
             3) TUNNEL=ovpn; break ;;
-            4) TUNNEL=singbox; break ;;
-            5) TUNNEL=outline; break ;;
+            4|5)
+                require_proxy_ram || continue
+                if [ "$TUNNEL" = 4 ]; then TUNNEL=singbox; else TUNNEL=outline; fi
+                break
+                ;;
             6) msgc "$C_RED" "Cancelled" "Отменено"; exit 1 ;;
             7) msgc "$C_YELLOW" "Skip tunnel setup" "Настройка туннеля пропущена"; TUNNEL=0; break ;;
-            *) msgc "$C_RED" "Choose 1, 2, 3, 4, 5, 6 or 7." "Выберите 1, 2, 3, 4, 5, 6 или 7." ;;
+            *) msgc "$C_RED" "Choose a displayed option." "Выберите один из показанных вариантов." ;;
         esac
     done
 
@@ -3023,7 +3080,7 @@ add_tunnel() {
             msgc "$C_GREEN" "WireGuard is already installed" "WireGuard уже установлен"
         else
             msgc "$C_BLUE" "Installing WireGuard..." "Установка WireGuard..."
-            pkg_install wireguard-tools
+            pkg_install wireguard-tools kmod-wireguard || return 1
         fi
 
         route_vpn
@@ -3214,7 +3271,7 @@ dnsmasqfull() {
         msgc "$C_GREEN" "dnsmasq-full is already installed" "dnsmasq-full уже установлен"
     else
         msgc "$C_BLUE" "Installing dnsmasq-full" "Установка dnsmasq-full"
-        detect_pkg_manager
+        detect_pkg_manager || return 1
         if [ "$PKG_MANAGER" = "apk" ]; then
             pkg_install dnsmasq-full || { pkg_remove dnsmasq; pkg_install dnsmasq-full; } || {
                 msgc "$C_RED" "Failed to install dnsmasq-full. Check package repository and free space." "Не удалось установить dnsmasq-full. Проверьте репозиторий пакетов и свободное место."
@@ -3222,7 +3279,7 @@ dnsmasqfull() {
             }
         else
             cd /tmp/ || return 1
-            quiet_cmd /tmp/routewolf-dnsmasq-download.log opkg download dnsmasq-full || {
+            opkg_package_command download dnsmasq-full || {
                 msgc "$C_RED" "Failed to download dnsmasq-full. Check internet, DNS and package repository." "Не удалось скачать dnsmasq-full. Проверьте интернет, DNS и репозиторий пакетов."
                 return 1
             }
@@ -5601,7 +5658,7 @@ install_awg_packages() {
     AWG_FEED_KEY_URL="${AWG_FEED_ROOT}/keys/awg-openwrt-feed.pem"
     AWG_LOG="/tmp/routewolf-awg-install.log"
 
-    detect_pkg_manager
+    detect_pkg_manager || return 1
 
     awg_openwrt_version() {
         _v="$(ubus call system board 2>/dev/null | jsonfilter -e '@.release.version' 2>/dev/null)"
@@ -6085,14 +6142,9 @@ case "$VERSION_ID" in
     ;;
 esac
 
-if command -v apk >/dev/null 2>&1; then
-    msgc "$C_BLUE" "Package manager: apk" "Пакетный менеджер: apk"
-elif command -v opkg >/dev/null 2>&1; then
-    msgc "$C_BLUE" "Package manager: opkg" "Пакетный менеджер: opkg"
-else
-    msgc "$C_RED" "No supported package manager found: apk/opkg." "Не найден поддерживаемый пакетный менеджер: apk/opkg."
-    exit 1
-fi
+detect_pkg_manager || exit 1
+msgc "$C_BLUE" "Package manager: $PKG_MANAGER" "Пакетный менеджер: $PKG_MANAGER"
+router_resource_summary
 
 msgc "$C_RED" "All actions performed here cannot be rolled back automatically." "Все действия здесь нельзя автоматически откатить назад."
 printf "%b========================================%b\n" "$C_BLUE" "$C_RESET"

@@ -24,6 +24,12 @@ case "$mode" in full|routewolf|inverse|json) ;; *) fail 'Invalid routing mode.' 
 if [ "$protocol" = vless ]; then
     [ "$mode" != json ] || fail 'Unsupported VLESS profile mode.'
 fi
+set -- --luci-profile
+. "$lib/installer-functions.sh"
+if ! require_proxy_ram; then
+    reason insufficient-proxy-ram
+    exit 1
+fi
 launch=$(uci -q get "routewolf_ui.$profile.launch" || echo boot)
 case "$launch" in boot|manual) ;; *) fail 'Invalid launch mode.' ;; esac
 for package in firewall network; do
@@ -82,8 +88,6 @@ uci -q get "routewolf_ui.$profile.source" > "$stage/source"
 if [ "$protocol" = vless ]; then
     case "$(cat "$stage/source")" in https://*|vless://*) ;; *) fail 'Expected a VLESS link or HTTPS subscription.' ;; esac
 fi
-set -- --luci-profile
-. "$lib/installer-functions.sh"
 prepare_package_index "$protocol"
 reason package-install
 if [ "$protocol" = vless ]; then
