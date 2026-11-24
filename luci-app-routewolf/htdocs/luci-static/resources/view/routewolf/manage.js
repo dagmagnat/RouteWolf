@@ -1235,8 +1235,7 @@ return view.extend({
                 value: section['.name'], selected: section['.name'] === primary || null
             }, [section.name])));
             updateConnect();
-            const eligible = profiles.filter(section => section.protocol !== 'vless' &&
-                (section['.name'] !== result.active_profile || section['.name'] === result.backup_profile));
+            const eligible = profiles.filter(section => section['.name'] !== result.active_profile);
             backupSelect.replaceChildren(E('option', { value: '' }, [_('Без резерва')]), ...eligible.map(section =>
                 E('option', { value: section['.name'], selected: section['.name'] === result.backup_profile || null },
                     [section.name])));

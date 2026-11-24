@@ -129,7 +129,7 @@ stage_backup() (
         [ "$(uci -q get routewolf_ui.ui.active_profile || :)" != "$profile" ] || return 1
     prepare_dns "$profile" || return 1
     protocol=$(uci -q get "routewolf_ui.$profile.protocol") || return 1
-    case "$protocol" in amneziawg|wireguard|openvpn|singbox|outline) ;; *) return 1 ;; esac
+    case "$protocol" in amneziawg|wireguard|openvpn|singbox|vless|outline) ;; *) return 1 ;; esac
     set -- $(missing_backup_tools "$protocol")
     if [ "$#" -gt 0 ]; then
         phase packages
@@ -140,7 +140,7 @@ stage_backup() (
         [ -z "$(missing_backup_tools "$protocol")" ] || return 1
     fi
     case "$protocol" in
-        singbox|outline) "$lib/singbox.sh" "$profile" yes ;;
+        singbox|vless|outline) "$lib/singbox.sh" "$profile" yes ;;
         *) "$lib/profiles.sh" backup "$profile" ;;
     esac
 )
@@ -284,7 +284,13 @@ if [ "${1:-}" = worker ]; then
         *) exit 2 ;;
     esac
     result=$?
-    if [ "$result" -eq 0 ]; then phase done; reason none; fi
+    if [ "$result" -eq 0 ]; then
+        case "$1" in
+            activate|backup) "$lib/profiles.sh" prune || logger -t routewolf-ui 'Could not remove unused tunnel slots' ;;
+        esac
+        phase done
+        reason none
+    fi
     printf '%s\n' "$result" > "$work/result"
     exit "$result"
 fi

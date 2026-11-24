@@ -22,7 +22,7 @@ protocol=$(uci -q get "routewolf_ui.$profile.protocol")
 mode=$(uci -q get "routewolf_ui.$profile.routing")
 case "$mode" in full|routewolf|inverse|json) ;; *) fail 'Invalid routing mode.' ;; esac
 if [ "$protocol" = vless ]; then
-    [ "$reserve" = no ] && [ "$mode" != json ] || fail 'Unsupported VLESS profile mode.'
+    [ "$mode" != json ] || fail 'Unsupported VLESS profile mode.'
 fi
 launch=$(uci -q get "routewolf_ui.$profile.launch" || echo boot)
 case "$launch" in boot|manual) ;; *) fail 'Invalid launch mode.' ;; esac
@@ -143,7 +143,11 @@ if [ "$reserve" = yes ]; then
     completed=yes
     exit 0
 fi
-if [ -e "$route" ]; then cp "$route" "$backup/route.conf"; fi
+previous_native=
+if [ -e "$route" ]; then
+    cp "$route" "$backup/route.conf"
+    previous_native=$(sed -n "s/^VPN_ROUTE_DEV='\([A-Za-z0-9_]*\)'$/\1/p" "$backup/route.conf" | head -n 1)
+fi
 if [ -e "$watchdog" ]; then cp "$watchdog" "$backup/watchdog.conf"; fi
 if [ -f "$managed/mode" ]; then
     [ -e "$state/native-active" ] || was_active=yes
@@ -206,4 +210,5 @@ uci set "routewolf_ui.ui.active_mode=$mode"
 uci commit routewolf_ui
 rm -f "$state/native-active"
 completed=yes
+"$lib/profiles.sh" retire "$previous_native" || logger -t routewolf-ui 'Could not retire the old native tunnel'
 printf '%s\n' 'Subscription activated after successful HTTPS probe.'

@@ -36,6 +36,71 @@ device_up() {
     [ "$((flags & 1))" -ne 0 ]
 }
 
+managed_wireguard_slot() {
+    case "$1" in awgui0|awgui1|wgui0|wgui1|awgrwb|wgrwb) ;; *) return 1 ;; esac
+    [ "$(uci -q get "network.$1.routewolf_ui" || :)" = 1 ]
+}
+
+retire_wireguard_slot() {
+    managed_wireguard_slot "$1" || return 0
+    [ -z "$(uci changes network)" ] || return 1
+    ifdown "$1" || return 1
+    uci set "network.$1.auto=0" && uci commit network
+}
+
+prune_wireguard_slots() (
+    for package in network firewall; do [ -z "$(uci changes "$package")" ] || return 0; done
+    keep=$(sed -n "s/^VPN_ROUTE_DEV='\([A-Za-z0-9_]*\)'$/\1/p" "$route" "$state/paused-route.conf" 2>/dev/null || :)
+    keep="$keep $(uci -q get routewolf_ui.ui.backup_device || :)"
+    keep="$keep $(cat /var/run/routewolf-ui-backup/device 2>/dev/null || :)"
+    keep="$keep $(sed -n "s/^WATCHDOG_UCI_IFACE='\([A-Za-z0-9_]*\)'$/\1/p" "$watchdog" "$state/paused-watchdog.conf" 2>/dev/null || :)"
+    slots=
+    for dev in awgui0 awgui1 wgui0 wgui1 awgrwb wgrwb; do
+        managed_wireguard_slot "$dev" || continue
+        printf '%s\n' $keep | grep -Fxq "$dev" && continue
+        [ "$(uci -q get "network.$dev.auto" || :)" = 0 ] || continue
+        [ ! -e "/sys/class/net/$dev" ] || continue
+        status=$(ubus call "network.interface.$dev" status 2>/dev/null) || continue
+        [ "$(printf '%s' "$status" | jsonfilter -e '@.up' -e '@.pending')" = "$(printf 'false\nfalse')" ] || continue
+        zone="routewolf_ui_$dev"
+        # Skip slots referenced by other firewall sections or network devices.
+        if uci -q show firewall | awk -F= -v dev="$dev" -v zone="firewall.$zone" '
+            $1 !~ ("^" zone "[.]") && $1 !~ ("^" zone "_lan[.]") &&
+            $1 ~ /[.](network|device|src|dest)$/ {
+                for (i=1; i<=split($2, values, " "); i++) if (values[i]=="\047" dev "\047") found=1
+            }
+            END {exit !found}'; then continue; fi
+        if uci -q show network | awk -F= -v value="'$dev'" '
+            $1 ~ /[.](device|interface|tunlink)$/ && $2 == value {found=1}
+            END {exit !found}'; then continue; fi
+        slots="$slots $dev"
+    done
+    [ -n "$slots" ] || return 0
+    stage=$(mktemp -d /tmp/routewolf-ui-prune.XXXXXX)
+    trap 'rm -rf "$stage"' EXIT
+    cp /etc/config/network /etc/config/firewall "$stage/"
+    apply_prune() {
+        for dev in $slots; do
+            zone="routewolf_ui_$dev"
+            uci -q delete "network.$dev" || return 1
+            uci -q delete "network.$zone" || :
+            uci -q delete "firewall.$zone" || :
+            uci -q delete "firewall.${zone}_lan" || :
+        done
+        fw4 check && uci commit network && uci commit firewall &&
+            ubus call network reload >/dev/null && fw4 reload
+    }
+    if ! apply_prune; then
+        for package in network firewall; do
+            uci -q revert "$package" || :
+            cp "$stage/$package" "/etc/config/$package"
+        done
+        ubus call network reload >/dev/null || :
+        fw4 reload || :
+        return 1
+    fi
+)
+
 stop_old_wireguard_slots() {
     local previous attempt
     for previous in awgui0 awgui1 wgui0 wgui1; do
@@ -404,6 +469,8 @@ EOF
 )
 
 case "${1:-}" in
+    prune) prune_wireguard_slots ;;
+    retire) retire_wireguard_slot "$2" ;;
     backup) native_profile "$2" yes ;;
     activate)
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac

@@ -118,6 +118,17 @@ def verify(directory, xray, helper):
     validate_config(xray, client)
     config = json.loads(client.read_text(encoding='utf-8'))
     assert config['outbounds'][0]['streamSettings']['network'] == 'xhttp'
+    backup = directory / 'backup.json'
+    worker = Path(__file__).resolve().parents[1] / 'luci-app-routewolf/root/usr/libexec/routewolf-ui/backup-proxy.sh'
+    functions = worker.read_text(encoding='utf-8').rsplit('\ncase "${1:-}"', 1)[0]
+    subprocess.run(['sh', '-ec', functions + '\nprepare_config "$1" "$2" xray',
+                    'sh', client, backup], env={**os.environ, 'PATH': str(Path(xray).resolve().parent) +
+                                               os.pathsep + os.environ['PATH']}, check=True, timeout=20)
+    reserve = json.loads(backup.read_text(encoding='utf-8'))
+    assert reserve['inbounds'][0]['settings']['name'] == 'rwsubb0'
+    assert reserve['inbounds'][0]['settings']['gateway'][0] == '198.18.80.1/30'
+    assert reserve['inbounds'][1]['port'] == 18684
+    assert reserve['outbounds'] == config['outbounds']
     # Compilation deliberately rejects loopback subscription addresses. Adapt
     # the validated fixture to the isolated loopback server, without a TUN.
     config['outbounds'][0]['settings']['vnext'][0]['address'] = '127.0.0.1'

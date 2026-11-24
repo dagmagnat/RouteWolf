@@ -110,12 +110,16 @@ proxy_health() {
         "$helper" health "$state/config.json" "$state/token" "$1"
         return "$?"
     fi
+    xray_health "$state/token" 18683
+}
+
+xray_health() {
     local token code url
-    token=$(cat "$state/token") || return 11
+    token=$(cat "$1") || return 11
     printf '%s\n' "$token" | grep -Eq '^[0-9a-f]{48}$' || return 11
     for url in https://cp.cloudflare.com/generate_204 https://connectivitycheck.gstatic.com/generate_204; do
         code=$(printf 'proxy-user = "routewolf:%s"\n' "$token" |
-            curl --config - --proxy socks5h://127.0.0.1:18683 --noproxy '' \
+            curl --config - --proxy "socks5h://127.0.0.1:$2" --noproxy '' \
                 --silent --max-time 4 --output /dev/null --write-out '%{http_code}' "$url") ||
             { [ "$?" -ne 7 ] || return 11; continue; }
         [ "$code" != 204 ] || return 0
@@ -266,6 +270,12 @@ stop() {
 
 case "${1:-}" in
     monitor) monitor ;;
+    health-xray)
+        case "${2:-}:${3:-}" in
+            /etc/routewolf-ui/backup-proxy/token:18684) xray_health "$2" "$3" ;;
+            *) exit 2 ;;
+        esac
+        ;;
     stop) stop ;;
     status)
         cat "$runtime/status" 2>/dev/null || printf '%s\n' 'Subscription monitor is stopped'
