@@ -52,6 +52,7 @@ opkg() {
     fi
     printf 'OPKG:%s\n' "$*" >> "$ACTIONS"
     if [ "$1" = update ] && [ "$FAIL_UPDATE" = 1 ]; then echo 'feed unreachable'; return 1; fi
+    if [ "$1" = update ] && [ "$FAIL_UPDATE" = 2 ]; then echo 'Signature check passed.'; return 1; fi
     if [ "$1" = install ] && [ "$FAIL_INSTALL" = 1 ]; then echo 'kernel dependency mismatch'; return 1; fi
 }
 download_url_to_file() {
@@ -134,6 +135,12 @@ jsonfilter() {
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('feed unreachable', result.stdout)
         self.assertNotIn('OPKG:install ', actions)
+
+    def test_partial_signed_feed_update_allows_dependency_install(self):
+        result, actions, _ = self.run_case(fail_update=2)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn('Checking AmneziaWG dependencies against verified indexes', result.stdout)
+        self.assertIn('OPKG:install ', actions)
 
     def test_invalid_platform_stops_before_network_or_opkg(self):
         result, actions, _ = self.run_case(invalid_target=True)

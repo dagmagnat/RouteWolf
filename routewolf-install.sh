@@ -5963,10 +5963,15 @@ install_awg_packages() {
         # Dependencies still come from the router's configured OpenWrt feeds.
         # OPKG must validate the kernel ABI and all dependencies; never force it.
         if ! opkg update >> "$AWG_LOG" 2>&1; then
-            msgc "$C_RED" "Failed to update OpenWrt package indexes. Log: $AWG_LOG" \
-                "Не удалось обновить индексы пакетов OpenWrt. Журнал: $AWG_LOG"
-            tail -n 30 "$AWG_LOG" 2>/dev/null || true
-            return 1
+            if grep -Fq 'Signature check passed.' "$AWG_LOG"; then
+                msgc "$C_YELLOW" "Some opkg feeds failed. Checking AmneziaWG dependencies against verified indexes." \
+                    "Часть индексов opkg не скачалась. Проверяю зависимости AmneziaWG по проверенным индексам."
+            else
+                msgc "$C_RED" "Failed to update OpenWrt package indexes. Log: $AWG_LOG" \
+                    "Не удалось обновить индексы пакетов OpenWrt. Журнал: $AWG_LOG"
+                tail -n 30 "$AWG_LOG" 2>/dev/null || true
+                return 1
+            fi
         fi
         for AWG_PKG in $AWG_IPK_PACKAGES; do
             [ "${AWG_UPGRADE_PACKAGES:-0}" != 1 ] && pkg_is_installed "$AWG_PKG" && continue
