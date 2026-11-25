@@ -1424,7 +1424,7 @@ return view.extend({
             return E('div', { class: 'rw-luci', keydown: event => {
                 if (event.key === 'Escape' && !feedback.hidden) dismissError();
             } }, [
-                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') + '?v=28' }),
+                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') + '?v=29' }),
                 activateTabs([
                     ['overview', _('Обзор'), liveStatus],
                     ['profiles', _('Профили'), profiles],

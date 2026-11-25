@@ -14,8 +14,8 @@ NAME = re.search(r'^PROJECT_VERSION="([a-zA-Z0-9._-]+)"$', (ROOT / 'routewolf-in
 RELEASES = ROOT / 'releases'
 MANIFEST = RELEASES / (f'v{VERSION}.manifest' if VERSION >= 60 else 'stable.manifest')
 PANEL = RELEASES / f'routewolf-luci-v{VERSION}.tar.gz'
-PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r28.tar.gz' if VERSION == 60 else None
-PANEL_MANIFEST = RELEASES / 'luci-v60-r28.manifest' if VERSION == 60 else None
+PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r29.tar.gz' if VERSION == 60 else None
+PANEL_MANIFEST = RELEASES / 'luci-v60-r29.manifest' if VERSION == 60 else None
 MIGRATION_AGENT = RELEASES / 'routewolf-migrate-v60-r3.sh' if VERSION == 60 else None
 AGENT_PATH = 'usr/sbin/routewolf-stable-update.sh'
 FILES = (
@@ -61,7 +61,14 @@ def panel_files():
     paths.extend(p for directory in ('root', 'htdocs') for p in (app / directory).rglob('*') if p.is_file())
     paths.extend(ROOT / 'subscription' / p for p in ('install.sh', 'controller.sh', 'engine.init', 'monitor.init',
                                                      'assets.txt', 'assets-vless.txt', 'assets-names.txt'))
-    return {p.relative_to(ROOT).as_posix(): p.read_bytes().replace(b'\r\n', b'\n') for p in paths}
+    text = {'.sh', '.init', '.js', '.css', '.json', '.awk', '.uc', '.txt'}
+    files = {}
+    for path in paths:
+        content = path.read_bytes()
+        if path.suffix in text or not path.suffix:
+            content = content.replace(b'\r\n', b'\n')
+        files[path.relative_to(ROOT).as_posix()] = content
+    return files
 
 
 def verify_archive(path, expected):
