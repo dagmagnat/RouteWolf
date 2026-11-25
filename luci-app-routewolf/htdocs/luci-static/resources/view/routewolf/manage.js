@@ -121,6 +121,7 @@ function activateTabs(tabs, title, progress, toggle, feedback) {
             item.tabIndex = i === index ? 0 : -1;
             panels[i].hidden = i !== index;
         });
+        tabs[index][3]?.();
         history.replaceState(null, '', '#' + names[index]);
         if (focus)
             buttons[index].focus();
@@ -747,10 +748,11 @@ function listPanel(result, save, action) {
         drafts['exclude_' + key] = uci.get(settings, 'ui', 'exclude_' + key) || '';
     }
     const sourceMode = E('select', { 'aria-label': _('Источник списков') }, [
-        E('option', { value: 'local' }, [_('Свои записи')]),
-        E('option', { value: 'default' }, [_('Списки по умолчанию')])
+        E('option', { value: 'default' }, [_('Списки по умолчанию')]),
+        E('option', { value: 'local' }, [_('Свои записи')])
     ]);
-    let editing = 'local';
+    let editing = 'default';
+    let opened = false;
     let previewGeneration = 0;
     const changes = {};
     const checkStatus = E('p', { class: 'rw-list-hint', 'aria-live': 'polite' });
@@ -896,7 +898,7 @@ function listPanel(result, save, action) {
         previews[key] = { previous, next, status, navigation, offset: 0, retry: null };
         return E('div', {}, [E('label', {}, [label, area]), navigation]);
     });
-    return E('div', {}, [
+    const panel = E('div', {}, [
         E('div', { class: 'rw-list-sources' }, [
             E('label', { class: 'rw-list-checkbox' }, [useProject, _('Использовать списки проекта')]),
             button(_('Загрузить из библиотеки'), () => libraryDialog(addEntries)),
@@ -932,6 +934,14 @@ function listPanel(result, save, action) {
             button(_('Почему записи пропущены'), ui.createHandlerFn(null, showListReport))
         ])
     ]);
+    return {
+        panel,
+        open() {
+            if (opened) return;
+            opened = true;
+            showFields('default');
+        }
+    };
 }
 
 function profileForm() {
@@ -955,8 +965,7 @@ function profileForm() {
         return protocols[this.cfgvalue(sectionId)] || '—';
     };
 
-    option = section.option(form.ListValue, 'routing', _('Маршрутизация'),
-        _('В двух режимах по спискам используются библиотека и свои записи. В режиме «Весь интернет через VPN» списки не ограничивают маршрутизацию.'));
+    option = section.option(form.ListValue, 'routing', _('Маршрутизация'));
     option.value('routewolf', routeNames.routewolf);
     option.value('inverse', routeNames.inverse);
     option.value('full', routeNames.full);
@@ -1306,7 +1315,7 @@ return view.extend({
                 activateTabs([
                     ['overview', _('Обзор'), liveStatus],
                     ['profiles', _('Профили'), profiles],
-                    ['lists', _('Списки'), listEditor],
+                    ['lists', _('Списки'), listEditor.panel, listEditor.open],
                     ['service', _('Управление'), controls]
                 ], E('div', { class: 'rw-title-row' }, [
                     E('h2', {}, ['RouteWolf']),
