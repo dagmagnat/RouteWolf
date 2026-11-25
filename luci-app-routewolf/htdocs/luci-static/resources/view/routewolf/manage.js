@@ -293,7 +293,7 @@ function subscriptionSchedule(action, save, showError) {
     return E('section', { class: 'rw-subscription-schedule' }, [
         E('strong', {}, [label]),
         E('div', { class: 'rw-control-description' }, [_('Для текущей HTTPS-подписки sing-box или Xray. По умолчанию — раз в час.')]),
-        E('div', { class: 'rw-actions' }, [choice, custom, saveSchedule, checkNow]),
+        E('div', { class: 'rw-actions rw-aligned-controls' }, [choice, custom, saveSchedule, checkNow]),
         message
     ]);
 }
@@ -909,7 +909,7 @@ function listPanel(result, save, action) {
         E('p', { class: 'rw-list-hint' }, [(result.backup_mode || result.mode) === 'inverse' ?
             _('Библиотека и свои списки задают прямой выход через WAN. Исключение убирает запись из библиотеки, а свои записи имеют приоритет.') :
             _('В выборочном режиме исключения отправляются через WAN. Если запись есть и в своих списках, она идёт через туннель. Обновление библиотеки сохраняет свои записи и исключения.')]),
-        E('div', { class: 'rw-list-sources' }, [sourceMode, exclusions]),
+        E('div', { class: 'rw-list-sources rw-aligned-controls' }, [sourceMode, exclusions]),
         E('div', { class: 'rw-list-grid' }, cards),
         checkStatus,
         E('div', { class: 'rw-actions rw-equal-actions' }, [

@@ -57,7 +57,6 @@
 .rw-luci .rw-interface { display:flex; align-items:center; gap:10px; padding:6px 9px; border:1px solid var(--rw-line); border-radius:6px; font-size:.88rem; }
 .rw-luci .rw-service-panel { max-width:70rem; }
 .rw-luci .rw-subscription-schedule { padding:12px 0; border-bottom:1px solid var(--rw-line); }
-.rw-luci .rw-subscription-schedule button { margin:0; }
 .rw-luci .rw-subscription-custom:not([hidden]) { display:inline-flex; gap:6px; align-items:center; }
 .rw-luci .rw-subscription-custom input { width:6rem; }
 .rw-luci .rw-subscription-schedule [role="status"]:not(:empty) { display:block; margin-top:8px; }
@@ -102,6 +101,11 @@
 .rw-luci .rw-list-grid textarea:focus { outline:1px solid var(--rw-accent); outline-offset:0; }
 .rw-luci .rw-list-sources { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
 .rw-luci .rw-list-sources button { margin:0; min-height:39px; }
+.rw-luci .rw-aligned-controls { align-items:stretch; }
+.rw-luci .rw-aligned-controls > :is(select,button),
+.rw-luci .rw-aligned-controls .rw-subscription-custom input {
+    min-height:40px; max-width:100%; margin:0; box-sizing:border-box;
+}
 .rw-luci .rw-list-checkbox, .rw-library-selection label { display:inline-flex; align-items:center; gap:7px; margin:0; }
 .rw-luci .rw-list-checkbox input, .rw-library-selection input { margin:0; flex:none; }
 .rw-luci .rw-list-checkbox input[type="checkbox"] { top:auto; }
