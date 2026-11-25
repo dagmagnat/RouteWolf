@@ -136,7 +136,7 @@ func xrayNode(link string) object {
 		encryption = "none"
 	}
 	return object{
-		"protocol": "vless", "streamSettings": stream,
+		"protocol": "vless", "streamSettings": stream, nodeName: displayName(u.Fragment),
 		"settings": object{"vnext": []object{{
 			"address": u.Hostname(), "port": port,
 			"users": []object{{"id": u.User.Username(), "encryption": encryption, "flow": query.Get("flow")}},
@@ -307,7 +307,7 @@ func xrayJSONNodes(data []byte) []object {
 						encryption = "none"
 					}
 					nodes = append(nodes, object{
-						"protocol": "vless", "streamSettings": stream,
+						"protocol": "vless", "streamSettings": stream, nodeName: jsonNodeName(out, obj(profile), len(outbounds) == 1),
 						"settings": object{"vnext": []object{{
 							"address": address, "port": port,
 							"users": []object{{"id": id, "encryption": encryption, "flow": str(user["flow"])}},
@@ -324,6 +324,10 @@ func xrayJSONNodes(data []byte) []object {
 }
 
 func compileXray(data []byte, mode, token string) (object, error) {
+	return compileXrayWithNames(data, mode, token, nil)
+}
+
+func compileXrayWithNames(data []byte, mode, token string, names map[string]string) (object, error) {
 	if (mode != "routewolf" && mode != "full") || !tokenPattern.MatchString(token) || len(data) > maxSubscription {
 		return nil, errors.New("invalid VLESS mode, state or subscription size")
 	}
@@ -349,7 +353,12 @@ func compileXray(data []byte, mode, token string) (object, error) {
 		return nil, errors.New("no compatible VLESS outbounds or share links")
 	}
 	for i, node := range nodes {
-		node["tag"] = fmt.Sprintf("rw-vless-%d", i+1)
+		tag := fmt.Sprintf("rw-vless-%d", i+1)
+		if name := str(node[nodeName]); names != nil && name != "" {
+			names[tag] = name
+		}
+		delete(node, nodeName)
+		node["tag"] = tag
 	}
 	config := object{
 		"log": object{"loglevel": "none"},

@@ -3,11 +3,33 @@ package main
 import (
 	"encoding/base64"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 )
 
 const xrayExample = "vless://a3e1e0f1-2c9b-4fef-abe6-ed637842d853@vpn.example.net:443"
+
+func TestSubscriptionNamesKeepUnicodeWithoutChangingOutbound(t *testing.T) {
+	const name = "🇫🇮 Финляндия 👨‍💻 · Finland"
+	link := []byte(xrayExample + "#" + url.PathEscape(name))
+	names := map[string]string{}
+	config, err := compileXrayWithNames(link, "full", testSecret, names)
+	plain, plainErr := compileXray([]byte(xrayExample), "full", testSecret)
+	if err != nil || plainErr != nil || names["rw-vless-1"] != name || !reflect.DeepEqual(config, plain) {
+		t.Fatalf("Xray name was lost or changed the configuration: %v / %v", err, plainErr)
+	}
+	singBox, err := compile(link, "full", testSecret)
+	singBoxPlain, plainErr := compile([]byte(xrayExample), "full", testSecret)
+	if err != nil || plainErr != nil || singBox.Names["rw-node-1"] != name || !reflect.DeepEqual(singBox.Config, singBoxPlain.Config) {
+		t.Fatalf("sing-box name was lost or changed the configuration: %v / %v", err, plainErr)
+	}
+	data := []byte(`{"remarks":"🇫🇮 Финляндия 👨‍💻 · Finland","outbounds":[{"protocol":"vless","tag":"proxy","settings":{"vnext":[{"address":"vpn.example.net","port":443,"users":[{"id":"a3e1e0f1-2c9b-4fef-abe6-ed637842d853"}]}]}},{"protocol":"freedom","tag":"direct"}]}`)
+	names = map[string]string{}
+	if _, err = compileXrayWithNames(data, "full", testSecret, names); err != nil || names["rw-vless-1"] != name {
+		t.Fatalf("Xray JSON profile remarks were lost: %v", err)
+	}
+}
 
 func TestXrayXHTTPLinkKeepsTransportAndReality(t *testing.T) {
 	fields := url.Values{

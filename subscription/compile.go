@@ -13,9 +13,39 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type object = map[string]any
+
+const nodeName = "_routewolf_name"
+
+func displayName(values ...any) string {
+	for _, value := range values {
+		runes := make([]rune, 0, 128)
+		for _, r := range str(value) {
+			if !unicode.IsControl(r) && !(r >= '\u202a' && r <= '\u202e') && !(r >= '\u2066' && r <= '\u2069') {
+				runes = append(runes, r)
+			}
+			if len(runes) == 128 {
+				break
+			}
+		}
+		if name := strings.TrimSpace(string(runes)); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+func jsonNodeName(out, profile object, single bool) string {
+	tag := str(out["tag"])
+	if single || tag == "proxy" || tag == "" {
+		return displayName(out["remarks"], out["name"], profile["remarks"], profile["name"], out["tag"])
+	}
+	return displayName(out["remarks"], out["name"], out["tag"], profile["remarks"], profile["name"])
+}
+
 type group struct {
 	Tag   string   `json:"tag"`
 	Nodes []string `json:"nodes"`
@@ -190,7 +220,7 @@ func shareNode(line string) object {
 		return nil
 	}
 	query := u.Query()
-	result := object{"server": host, "server_port": port}
+	result := object{"server": host, "server_port": port, nodeName: displayName(u.Fragment)}
 	switch u.Scheme {
 	case "vless":
 		if !uuidPattern.MatchString(u.User.Username()) || (query.Get("encryption") != "" && query.Get("encryption") != "none") {
@@ -397,7 +427,8 @@ func parseJSONProfile(raw object) profile {
 	if x := obj(raw["routing"]); x != nil {
 		p.xray, p.routing = true, x
 	}
-	for _, value := range array(raw["outbounds"]) {
+	outbounds := array(raw["outbounds"])
+	for _, value := range outbounds {
 		out := obj(value)
 		tag := str(out["tag"])
 		if tag == "" {
@@ -425,9 +456,15 @@ func parseJSONProfile(raw object) profile {
 		case "block", "blackhole":
 			p.bypass[tag] = "reject"
 		default:
+			name := jsonNodeName(out, raw, len(outbounds) == 1)
 			if p.xray {
-				p.nodes[tag] = append(p.nodes[tag], xrayNodes(out)...)
+				nodes := xrayNodes(out)
+				for _, node := range nodes {
+					node[nodeName] = name
+				}
+				p.nodes[tag] = append(p.nodes[tag], nodes...)
 			} else if node := nativeNode(out); node != nil {
+				node[nodeName] = name
 				p.nodes[tag] = append(p.nodes[tag], node)
 			}
 			p.order = append(p.order, tag)
@@ -482,6 +519,7 @@ type compiled struct {
 	Config object
 	Groups []group
 	Nodes  int
+	Names  map[string]string
 }
 
 func compile(data []byte, mode, secret string) (compiled, error) {
@@ -495,7 +533,7 @@ func compile(data []byte, mode, secret string) (compiled, error) {
 	if err != nil {
 		return compiled{}, err
 	}
-	result := compiled{}
+	result := compiled{Names: map[string]string{}}
 	outbounds := []object{{"type": "direct", "tag": "rw-direct"}}
 	byTag := map[string][]string{}
 	var order []string
@@ -515,6 +553,10 @@ func compile(data []byte, mode, secret string) (compiled, error) {
 				result.Nodes++
 				n := clone(node)
 				id := fmt.Sprintf("rw-node-%d", result.Nodes)
+				if name := str(n[nodeName]); name != "" {
+					result.Names[id] = name
+				}
+				delete(n, nodeName)
 				n["tag"] = id
 				outbounds = append(outbounds, n)
 				byTag[tag] = append(byTag[tag], id)

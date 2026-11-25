@@ -11,7 +11,10 @@ fail() { printf '%s\n' "$*" >&2; exit 1; }
 download_helper() {
     stage=$1
     manifest="$here/assets.txt"
-    if [ "${2:-}" = vless ]; then manifest="$here/assets-vless.txt"; fi
+    case "${2:-}" in
+        vless) manifest="$here/assets-vless.txt" ;;
+        names) manifest="$here/assets-names.txt" ;;
+    esac
     case "$(uname -m)" in
         x86_64) arch=amd64 ;;
         aarch64) arch=arm64 ;;

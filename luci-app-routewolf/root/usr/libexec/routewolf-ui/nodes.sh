@@ -5,7 +5,8 @@ lib=/usr/libexec/routewolf-ui
 cache=/tmp/routewolf-ui-nodes
 
 source_id() {
-    uci -q get "routewolf_ui.$1.source" | sha256sum | cut -d ' ' -f1
+    for field in source protocol routing; do uci -q get "routewolf_ui.$1.$field"; done |
+        sha256sum | cut -d ' ' -f1
 }
 
 case "${1:-}" in
@@ -14,6 +15,16 @@ case "${1:-}" in
         [ "$(uci -q get "routewolf_ui.$2")" = profile ] || exit 2
         case "$(uci -q get "routewolf_ui.$2.protocol")" in vless|singbox) ;; *) exit 2 ;; esac
         uci -q get "routewolf_ui.$2.source" | grep -q '^https://' || exit 2
+        id=$(source_id "$2")
+        if [ -s "$cache/$2.names" ] && [ "$(sed -n '1p' "$cache/$2.names")" = "$id" ]; then
+            updated=$(sed -n '2p' "$cache/$2.names")
+            if [ "$(($(date +%s)-updated))" -lt 1800 ]; then
+                printf '{"nodes":'
+                tail -n +3 "$cache/$2.names"
+                printf '}\n'
+                exit 0
+            fi
+        fi
         if [ "$(uci -q get routewolf_ui.ui.active_profile || :)" = "$2" ] &&
             uci -q get "routewolf_ui.$2.source" | cmp -s - /etc/routewolf-subscription/source; then
             config=/etc/routewolf-subscription/config.json
@@ -21,17 +32,10 @@ case "${1:-}" in
             uci -q get "routewolf_ui.$2.source" | cmp -s - /etc/routewolf-ui/backup-proxy/source; then
             config=/etc/routewolf-ui/backup-proxy/config.json
         else
-            id=$(source_id "$2")
-            if [ -s "$cache/$2" ] && [ "$(sed -n '1p' "$cache/$2")" = "$id" ]; then
-                printf '{"nodes":'
-                tail -n +2 "$cache/$2"
-                printf '}\n'
-                exit 0
-            fi
             config=
         fi
         if [ -s "$config" ]; then
-            printf '{"nodes":'
+            printf '{"fetch":true,"nodes":'
             ucode "$lib/nodes.uc" list "$config"
             printf '}\n'
         else
@@ -41,8 +45,8 @@ case "${1:-}" in
     preview)
         mkdir -p "$cache"
         # Keep only the redacted list in RAM, indexed by profile and source.
-        { source_id "$2"; ucode "$lib/nodes.uc" list "$3"; } > "$cache/$2.new"
-        mv "$cache/$2.new" "$cache/$2"
+        { source_id "$2"; date +%s; ucode "$lib/nodes.uc" list "$3" "$4"; } > "$cache/$2.new"
+        mv "$cache/$2.new" "$cache/$2.names"
         ;;
     apply)
         config=$2 profile=$3 engine=$4 role=$5

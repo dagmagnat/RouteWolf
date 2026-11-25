@@ -73,7 +73,7 @@ if [ -f "$installer" ]; then
 fi
 subscription="$here/../subscription"
 if [ -f "$subscription/install.sh" ]; then
-    for file in install.sh controller.sh engine.init monitor.init assets.txt assets-vless.txt; do
+    for file in install.sh controller.sh engine.init monitor.init assets.txt assets-vless.txt assets-names.txt; do
         put_file "/usr/libexec/routewolf-ui/subscription/$file" 644 "$subscription/$file"
     done
     controller=/etc/routewolf-subscription/controller

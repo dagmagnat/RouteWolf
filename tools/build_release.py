@@ -14,8 +14,8 @@ NAME = re.search(r'^PROJECT_VERSION="([a-zA-Z0-9._-]+)"$', (ROOT / 'routewolf-in
 RELEASES = ROOT / 'releases'
 MANIFEST = RELEASES / (f'v{VERSION}.manifest' if VERSION >= 60 else 'stable.manifest')
 PANEL = RELEASES / f'routewolf-luci-v{VERSION}.tar.gz'
-PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r26.tar.gz' if VERSION == 60 else None
-PANEL_MANIFEST = RELEASES / 'luci-v60-r26.manifest' if VERSION == 60 else None
+PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r27.tar.gz' if VERSION == 60 else None
+PANEL_MANIFEST = RELEASES / 'luci-v60-r27.manifest' if VERSION == 60 else None
 MIGRATION_AGENT = RELEASES / 'routewolf-migrate-v60-r3.sh' if VERSION == 60 else None
 AGENT_PATH = 'usr/sbin/routewolf-stable-update.sh'
 FILES = (
@@ -60,7 +60,7 @@ def panel_files():
              ROOT / 'runtime/routewolf-stable-update.sh', app / 'install.sh', app / 'uninstall.sh']
     paths.extend(p for directory in ('root', 'htdocs') for p in (app / directory).rglob('*') if p.is_file())
     paths.extend(ROOT / 'subscription' / p for p in ('install.sh', 'controller.sh', 'engine.init', 'monitor.init',
-                                                     'assets.txt', 'assets-vless.txt'))
+                                                     'assets.txt', 'assets-vless.txt', 'assets-names.txt'))
     return {p.relative_to(ROOT).as_posix(): p.read_bytes().replace(b'\r\n', b'\n') for p in paths}
 
 

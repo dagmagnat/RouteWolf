@@ -90,13 +90,13 @@ if [ "$reserve" = preview ]; then
     phase download
     reason source-download
     grep -q '^https://' "$stage/source" || exit 1
-    sh "$lib/subscription/install.sh" download "$stage" "$protocol"
+    sh "$lib/subscription/install.sh" download "$stage" names
     render=render
     [ "$protocol" != vless ] || render=render-xray
     [ "$mode" != inverse ] || mode=full
     reason subscription-format
-    "$stage/subscription" "$render" "$stage/input" "$stage/token" "$mode" "$stage/config.json"
-    "$lib/nodes.sh" preview "$profile" "$stage/config.json"
+    "$stage/subscription" "$render" "$stage/input" "$stage/token" "$mode" "$stage/config.json" "$stage/names.json"
+    "$lib/nodes.sh" preview "$profile" "$stage/config.json" "$stage/names.json"
     exit
 fi
 if [ "$protocol" = vless ]; then

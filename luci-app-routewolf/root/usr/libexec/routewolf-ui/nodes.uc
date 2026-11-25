@@ -2,6 +2,7 @@ import { readfile, writefile } from 'fs';
 import { sha256 } from 'digest';
 
 let config = json(readfile(ARGV[1]));
+let names = ARGV[0] == 'list' && ARGV[2] ? json(readfile(ARGV[2])) : {};
 let matches = [];
 let seen = {};
 for (let node in config.outbounds) {
@@ -19,7 +20,8 @@ for (let node in config.outbounds) {
     push(matches, {
         id,
         tag: node.tag,
-        label: sprintf('%s:%s', address, port),
+        label: names[node.tag] || sprintf('%s:%s', address, port),
+        named: !!names[node.tag],
         transport: node.streamSettings?.network || node.transport?.type || node.type || 'vless'
     });
 }

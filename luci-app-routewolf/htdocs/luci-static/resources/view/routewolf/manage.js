@@ -1086,13 +1086,19 @@ async function serverDialog(profile, action, save, current) {
     try {
         let result = await listNodes(profile);
         if (result.fetch) {
-            if (!await action('nodes', profile, false, observer)) { message.textContent = ''; return; }
-            result = await listNodes(profile);
+            if (await action('nodes', profile, false, observer)) {
+                result = await listNodes(profile);
+            } else if (!result.nodes?.length) {
+                message.textContent = '';
+                return;
+            }
         }
         const nodes = result.nodes || [];
         if (!nodes.length) throw new Error(_('В подписке нет совместимых серверов.'));
         input.appendChild(E('option', { value: '' }, [_('Автовыбор')]));
-        nodes.forEach(node => input.appendChild(E('option', { value: node.id }, [node.label + ' · ' + node.transport])));
+        nodes.forEach(node => input.appendChild(E('option', { value: node.id }, [
+            node.named ? node.label : node.label + ' · ' + node.transport
+        ])));
         const selected = uci.get(settings, profile, 'preferred_node') || '';
         input.value = nodes.some(node => selected === node.id) ? selected : '';
         input.disabled = submit.disabled = false;

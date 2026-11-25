@@ -281,7 +281,7 @@ func run(args []string) (int, error) {
 		}
 		_, err = fmt.Fprintln(os.Stdout, format)
 		return 1, err
-	case len(args) == 5 && (args[0] == "render" || args[0] == "render-xray"):
+	case (len(args) == 5 || len(args) == 6) && (args[0] == "render" || args[0] == "render-xray"):
 		data, err := readFile(args[1], maxSubscription)
 		if err != nil {
 			return 1, err
@@ -292,11 +292,13 @@ func run(args []string) (int, error) {
 		}
 		token := strings.TrimSpace(string(key))
 		var rendered object
+		names := map[string]string{}
 		if args[0] == "render-xray" {
-			rendered, err = compileXray(data, args[3], token)
+			rendered, err = compileXrayWithNames(data, args[3], token, names)
 		} else {
 			result, compileErr := compile(data, args[3], token)
 			rendered, err = result.Config, compileErr
+			names = result.Names
 		}
 		if err != nil {
 			return 1, err
@@ -305,7 +307,14 @@ func run(args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		return 1, os.WriteFile(args[4], config, 0600)
+		if err = os.WriteFile(args[4], config, 0600); err != nil || len(args) == 5 {
+			return 1, err
+		}
+		labels, err := json.Marshal(names)
+		if err != nil {
+			return 1, err
+		}
+		return 1, os.WriteFile(args[5], labels, 0600)
 	case len(args) == 4 && args[0] == "health" && (args[3] == "ready" || args[3] == "select"):
 		return health(args[1:])
 	default:
