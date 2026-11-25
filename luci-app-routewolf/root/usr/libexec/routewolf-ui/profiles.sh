@@ -125,7 +125,10 @@ native_profile() (
     reason invalid-profile
     case "$profile" in ''|*[!a-zA-Z0-9_]*) fail 'Invalid profile ID.' ;; esac
     [ "$(uci -q get "routewolf_ui.$profile")" = profile ] || fail 'Profile not found.'
-    [ -x /usr/sbin/routewolf-route.sh ] || fail 'Install RouteWolf first.'
+    if [ ! -x /usr/sbin/routewolf-route.sh ]; then
+        reason runtime-missing
+        fail 'RouteWolf routing helper is missing.'
+    fi
     for package in network firewall; do
         [ -z "$(uci changes "$package")" ] || fail 'Save or revert pending network and firewall changes first.'
     done

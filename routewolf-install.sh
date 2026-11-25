@@ -1827,14 +1827,19 @@ ask_yes_no_global() {
     done
 }
 
+uci_sections_by_option() {
+    uci -X show "$1" 2>/dev/null | awk -F= -v type="$2" -v field=".$3" -v value="'$4'" '
+        $2 == type { sections[$1] = 1 }
+        $2 == value && substr($1, length($1) - length(field) + 1) == field {
+            section = substr($1, 1, length($1) - length(field))
+            if (section in sections) print section
+        }'
+}
+
 delete_uci_sections_by_name() {
-    config="$1"
-    type="$2"
-    name="$3"
-    while true; do
-        idx=$(uci show "$config" 2>/dev/null | sed -n "s/^${config}\.@${type}\[\([0-9]*\)\]\.name='${name}'.*/\1/p" | head -n 1)
-        [ -z "$idx" ] && break
-        uci -q delete "${config}.@${type}[$idx]"
+    local section
+    for section in $(uci_sections_by_option "$1" "$2" name "$3"); do
+        uci -q delete "$section" || return 1
     done
 }
 
@@ -4787,29 +4792,24 @@ add_routewolf() {
     fi
 
     remove_firewall_section_by_name() {
-        type="$1"
-        name="$2"
-        while true; do
-            idx=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@${type}\[\([0-9]*\)\]\.name='${name}'.*/\1/p" | head -n 1)
-            [ -z "$idx" ] && break
-            uci -q delete firewall.@${type}[$idx]
-        done
+        delete_uci_sections_by_name firewall "$1" "$2"
     }
 
     configure_ipv4_cidr_firewall() {
-        set_idx=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@ipset\[\([0-9]*\)\]\.name='vpn_subnets'.*/\1/p" | head -n 1)
-        if [ -z "$set_idx" ]; then
+        set_ref=$(uci_sections_by_option firewall ipset name vpn_subnets | head -n 1)
+        if [ -z "$set_ref" ]; then
             uci add firewall ipset >/dev/null
             uci set firewall.@ipset[-1].name='vpn_subnets'
             uci set firewall.@ipset[-1].match='dst_net'
             uci set firewall.@ipset[-1].loadfile='/tmp/lst/ipv4.lst'
         else
-            uci set firewall.@ipset[$set_idx].match='dst_net'
-            uci set firewall.@ipset[$set_idx].loadfile='/tmp/lst/ipv4.lst'
+            uci set "$set_ref.match='dst_net'"
+            uci set "$set_ref.loadfile='/tmp/lst/ipv4.lst'"
         fi
 
-        rule_idx=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@rule\[\([0-9]*\)\]\.name='mark_subnet'.*/\1/p" | head -n 1)
-        if [ -z "$rule_idx" ]; then
+        rule_ref=$(uci_sections_by_option firewall rule name mark_subnet | head -n 1)
+        [ -n "$rule_ref" ] || rule_ref=$(uci_sections_by_option firewall rule name mark_subnets | head -n 1)
+        if [ -z "$rule_ref" ]; then
             uci add firewall rule >/dev/null
             uci set firewall.@rule[-1].name='mark_subnet'
             uci set firewall.@rule[-1].src='lan'
@@ -4820,31 +4820,31 @@ add_routewolf() {
             uci set firewall.@rule[-1].target='MARK'
             uci set firewall.@rule[-1].family='ipv4'
         else
-            uci set firewall.@rule[$rule_idx].src='lan'
-            uci set firewall.@rule[$rule_idx].dest='*'
-            uci set firewall.@rule[$rule_idx].proto='all'
-            uci set firewall.@rule[$rule_idx].ipset='vpn_subnets'
-            uci set firewall.@rule[$rule_idx].set_mark='0x1'
-            uci set firewall.@rule[$rule_idx].target='MARK'
-            uci set firewall.@rule[$rule_idx].family='ipv4'
+            uci set "$rule_ref.src='lan'"
+            uci set "$rule_ref.dest='*'"
+            uci set "$rule_ref.proto='all'"
+            uci set "$rule_ref.ipset='vpn_subnets'"
+            uci set "$rule_ref.set_mark='0x1'"
+            uci set "$rule_ref.target='MARK'"
+            uci set "$rule_ref.family='ipv4'"
         fi
         uci commit firewall
     }
 
     configure_ipv6_domain_firewall() {
-        set_idx=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@ipset\[\([0-9]*\)\]\.name='vpn_domains6'.*/\1/p" | head -n 1)
-        if [ -z "$set_idx" ]; then
+        set_ref=$(uci_sections_by_option firewall ipset name vpn_domains6 | head -n 1)
+        if [ -z "$set_ref" ]; then
             uci add firewall ipset >/dev/null
             uci set firewall.@ipset[-1].name='vpn_domains6'
             uci set firewall.@ipset[-1].match='dst_ip'
             uci set firewall.@ipset[-1].family='ipv6'
         else
-            uci set firewall.@ipset[$set_idx].match='dst_ip'
-            uci set firewall.@ipset[$set_idx].family='ipv6'
+            uci set "$set_ref.match='dst_ip'"
+            uci set "$set_ref.family='ipv6'"
         fi
 
-        rule_idx=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@rule\[\([0-9]*\)\]\.name='mark_domains6'.*/\1/p" | head -n 1)
-        if [ -z "$rule_idx" ]; then
+        rule_ref=$(uci_sections_by_option firewall rule name mark_domains6 | head -n 1)
+        if [ -z "$rule_ref" ]; then
             uci add firewall rule >/dev/null
             uci set firewall.@rule[-1].name='mark_domains6'
             uci set firewall.@rule[-1].src='lan'
@@ -4855,33 +4855,33 @@ add_routewolf() {
             uci set firewall.@rule[-1].target='MARK'
             uci set firewall.@rule[-1].family='ipv6'
         else
-            uci set firewall.@rule[$rule_idx].src='lan'
-            uci set firewall.@rule[$rule_idx].dest='*'
-            uci set firewall.@rule[$rule_idx].proto='all'
-            uci set firewall.@rule[$rule_idx].ipset='vpn_domains6'
-            uci set firewall.@rule[$rule_idx].set_mark='0x1'
-            uci set firewall.@rule[$rule_idx].target='MARK'
-            uci set firewall.@rule[$rule_idx].family='ipv6'
+            uci set "$rule_ref.src='lan'"
+            uci set "$rule_ref.dest='*'"
+            uci set "$rule_ref.proto='all'"
+            uci set "$rule_ref.ipset='vpn_domains6'"
+            uci set "$rule_ref.set_mark='0x1'"
+            uci set "$rule_ref.target='MARK'"
+            uci set "$rule_ref.family='ipv6'"
         fi
         uci commit firewall
     }
 
     configure_ipv6_cidr_firewall() {
-        set_idx=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@ipset\[\([0-9]*\)\]\.name='vpn_subnets6'.*/\1/p" | head -n 1)
-        if [ -z "$set_idx" ]; then
+        set_ref=$(uci_sections_by_option firewall ipset name vpn_subnets6 | head -n 1)
+        if [ -z "$set_ref" ]; then
             uci add firewall ipset >/dev/null
             uci set firewall.@ipset[-1].name='vpn_subnets6'
             uci set firewall.@ipset[-1].match='dst_net'
             uci set firewall.@ipset[-1].family='ipv6'
             uci set firewall.@ipset[-1].loadfile='/tmp/lst/ipv6.lst'
         else
-            uci set firewall.@ipset[$set_idx].match='dst_net'
-            uci set firewall.@ipset[$set_idx].family='ipv6'
-            uci set firewall.@ipset[$set_idx].loadfile='/tmp/lst/ipv6.lst'
+            uci set "$set_ref.match='dst_net'"
+            uci set "$set_ref.family='ipv6'"
+            uci set "$set_ref.loadfile='/tmp/lst/ipv6.lst'"
         fi
 
-        rule_idx=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.@rule\[\([0-9]*\)\]\.name='mark_subnet6'.*/\1/p" | head -n 1)
-        if [ -z "$rule_idx" ]; then
+        rule_ref=$(uci_sections_by_option firewall rule name mark_subnet6 | head -n 1)
+        if [ -z "$rule_ref" ]; then
             uci add firewall rule >/dev/null
             uci set firewall.@rule[-1].name='mark_subnet6'
             uci set firewall.@rule[-1].src='lan'
@@ -4892,13 +4892,13 @@ add_routewolf() {
             uci set firewall.@rule[-1].target='MARK'
             uci set firewall.@rule[-1].family='ipv6'
         else
-            uci set firewall.@rule[$rule_idx].src='lan'
-            uci set firewall.@rule[$rule_idx].dest='*'
-            uci set firewall.@rule[$rule_idx].proto='all'
-            uci set firewall.@rule[$rule_idx].ipset='vpn_subnets6'
-            uci set firewall.@rule[$rule_idx].set_mark='0x1'
-            uci set firewall.@rule[$rule_idx].target='MARK'
-            uci set firewall.@rule[$rule_idx].family='ipv6'
+            uci set "$rule_ref.src='lan'"
+            uci set "$rule_ref.dest='*'"
+            uci set "$rule_ref.proto='all'"
+            uci set "$rule_ref.ipset='vpn_subnets6'"
+            uci set "$rule_ref.set_mark='0x1'"
+            uci set "$rule_ref.target='MARK'"
+            uci set "$rule_ref.family='ipv6'"
         fi
         uci commit firewall
     }
@@ -6062,6 +6062,12 @@ install_luci_panel() {
     msg "Open LuCI → Services → RouteWolf." "Откройте LuCI → Службы → RouteWolf."
 }
 
+routewolf_runtime_files_present() {
+    [ -x /etc/init.d/routewolf ] && [ -x /etc/init.d/routewolf-route ] &&
+        [ -x /usr/sbin/rw ] && [ -x /usr/sbin/routewolf-route.sh ] &&
+        [ -x /usr/sbin/routewolf-healthcheck.sh ]
+}
+
 install_luci_mode() {
     INSTALL_STEP=0
     INSTALL_TOTAL_STEPS=1
@@ -6070,9 +6076,9 @@ install_luci_mode() {
         complete_runtime=1
         INSTALL_TOTAL_STEPS=3
     fi
-    if [ ! -x /etc/init.d/routewolf ] || [ ! -x /usr/sbin/rw ]; then
-        [ -z "$(uci changes firewall)" ] && [ -z "$(uci changes dhcp)" ] || {
-            msg "Save pending firewall and DNS changes first." "Сначала сохраните ожидающие изменения firewall и DNS."
+    if ! routewolf_runtime_files_present; then
+        [ -z "$(uci changes network)" ] && [ -z "$(uci changes firewall)" ] && [ -z "$(uci changes dhcp)" ] || {
+            msg "Save pending network, firewall and DNS changes first." "Сначала сохраните ожидающие изменения сети, firewall и DNS."
             return 1
         }
         ROUTEWOLF_SETUP_LUCI=1
@@ -6107,8 +6113,9 @@ if [ "${ROUTEWOLF_UPDATE_ONLY:-0}" = 1 ]; then
     exec sh "$SCRIPT_DIR/update.sh" "$@"
 fi
 if [ "${1:-}" = --luci-panel ]; then
-    if [ ! -x /etc/init.d/routewolf ] || [ ! -x /usr/sbin/rw ]; then
-        msg "An installed RouteWolf runtime is required." "Сначала установите или обновите RouteWolf."
+    if ! routewolf_runtime_files_present; then
+        msg "RouteWolf runtime files are missing. Run install.sh and choose LuCI setup to repair them." \
+            "Не хватает файлов RouteWolf. Запустите install.sh и выберите установку для LuCI."
         exit 1
     fi
     install_luci_panel
@@ -6132,6 +6139,7 @@ validate_routewolf_installation() {
         msgc "$C_RED" "Route helper is missing" "Отсутствует скрипт восстановления маршрута"
         return 1
     }
+    /etc/init.d/routewolf-route enable || return 1
     /usr/sbin/routewolf-route.sh >/tmp/routewolf-final-route.log 2>&1 || {
         msgc "$C_RED" "Route helper failed" "Скрипт восстановления маршрута завершился ошибкой"
         tail -n 20 /tmp/routewolf-final-route.log 2>/dev/null || true

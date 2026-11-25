@@ -20,6 +20,30 @@ def run(body, *names):
 
 
 class InstallerPreflightTests(unittest.TestCase):
+    def test_removes_named_and_anonymous_legacy_domain_sets(self):
+        result = run(r'''
+uci() {
+    case "$*" in
+        '-X show firewall') cat <<'UCI'
+firewall.routewolf_domains=ipset
+firewall.routewolf_domains.name='vpn_domains'
+firewall.cfg156e2a=ipset
+firewall.cfg156e2a.name='vpn_domains'
+firewall.rule=rule
+firewall.rule.name='vpn_domains'
+firewall.other=ipset
+firewall.other.name='other'
+UCI
+        ;;
+        '-q delete '*) printf '%s\n' "$3" ;;
+        *) return 1 ;;
+    esac
+}
+delete_uci_sections_by_name firewall ipset vpn_domains
+''', 'uci_sections_by_option', 'delete_uci_sections_by_name')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['firewall.routewolf_domains', 'firewall.cfg156e2a'])
+
     def test_picks_package_manager_by_firmware_even_with_both_installed(self):
         result = run(r'''
 apk() { :; }
