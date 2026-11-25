@@ -10,6 +10,22 @@ import (
 
 const xrayExample = "vless://a3e1e0f1-2c9b-4fef-abe6-ed637842d853@vpn.example.net:443"
 
+func TestSubscriptionExpiry(t *testing.T) {
+	for header, want := range map[string]int64{
+		"upload=40; download=50; total=999; expire=1800000000": 1800000000,
+		"Expire = 1800000000":    1800000000,
+		"":                       0,
+		"expire=0":               0,
+		"expire=-1":              0,
+		"expire=soon":            0,
+		"expire=999999999999999": 0,
+	} {
+		if got := subscriptionExpiry(header); got != want {
+			t.Errorf("subscriptionExpiry(%q) = %d, want %d", header, got, want)
+		}
+	}
+}
+
 func TestSubscriptionNamesKeepUnicodeWithoutChangingOutbound(t *testing.T) {
 	const name = "🇫🇮 Финляндия 👨‍💻 · Finland"
 	link := []byte(xrayExample + "#" + url.PathEscape(name))

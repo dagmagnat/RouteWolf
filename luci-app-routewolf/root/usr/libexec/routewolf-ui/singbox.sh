@@ -96,7 +96,7 @@ if [ "$reserve" = preview ]; then
     [ "$mode" != inverse ] || mode=full
     reason subscription-format
     "$stage/subscription" "$render" "$stage/input" "$stage/token" "$mode" "$stage/config.json" "$stage/names.json"
-    "$lib/nodes.sh" preview "$profile" "$stage/config.json" "$stage/names.json"
+    "$lib/nodes.sh" preview "$profile" "$stage/config.json" "$stage/names.json" "$stage/expiry"
     exit
 fi
 if [ "$protocol" = vless ]; then

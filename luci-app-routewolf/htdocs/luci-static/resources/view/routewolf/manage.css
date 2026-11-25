@@ -193,7 +193,14 @@
     border-top:1px solid var(--rw-line);
 }
 .rw-luci .rw-compact-table .cbi-section-table-row > .td { padding-block:11px; }
-.rw-servers-modal select { width:100%; max-width:100%; }
+.rw-server-input .cbi-dropdown { width:100%; max-width:100%; }
+.rw-server-summary { color:inherit; opacity:.8; font-size:.9em; margin:0 0 8px; }
+.rw-server-label { overflow-wrap:anywhere; }
+.rw-server-flag {
+    display:inline-block; width:20px; height:15px; margin-inline-end:4px;
+    vertical-align:-2px; border-radius:2px;
+    background-image:url("server-flags.webp"); background-repeat:no-repeat;
+}
 .rw-servers-modal p[role]:empty { display:none; }
 #modal_overlay > .cbi-modal:has(> #cbi-routewolf_ui) {
     display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto;

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,7 +47,21 @@ func subscriptionURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-func fetch(path string) error {
+func subscriptionExpiry(header string) int64 {
+	for _, item := range strings.Split(header, ";") {
+		key, value, valid := strings.Cut(strings.TrimSpace(item), "=")
+		if !valid || !strings.EqualFold(strings.TrimSpace(key), "expire") {
+			continue
+		}
+		expiry, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err == nil && expiry > 0 && expiry <= 253402300799 {
+			return expiry
+		}
+	}
+	return 0
+}
+
+func fetch(path, expiryPath string) error {
 	raw, err := readFile(path, 8192)
 	if err != nil {
 		return err
@@ -81,6 +96,11 @@ func fetch(path string) error {
 	data, err := readLimited(resp.Body, maxSubscription)
 	if err != nil {
 		return err
+	}
+	if expiryPath != "" {
+		if err := os.WriteFile(expiryPath, []byte(strconv.FormatInt(subscriptionExpiry(resp.Header.Get("Subscription-Userinfo")), 10)), 0600); err != nil {
+			return err
+		}
 	}
 	_, err = os.Stdout.Write(data)
 	return err
@@ -262,7 +282,9 @@ func health(args []string) (int, error) {
 func run(args []string) (int, error) {
 	switch {
 	case len(args) == 2 && args[0] == "fetch":
-		return 1, fetch(args[1])
+		return 1, fetch(args[1], "")
+	case len(args) == 3 && args[0] == "fetch":
+		return 1, fetch(args[1], args[2])
 	case len(args) == 2 && args[0] == "format":
 		data, err := readFile(args[1], maxSubscription)
 		if err != nil {

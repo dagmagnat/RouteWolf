@@ -406,3 +406,7 @@ docker run --rm --network none --cap-add NET_ADMIN --memory=192m --cpus=1 \
 RouteWolf управляет подключениями через сторонние компоненты. Название в профиле
 указывает, какой движок или протокол используется. Для подписок это
 [sing-box](https://github.com/SagerNet/sing-box) и [Xray-core](https://github.com/XTLS/Xray-core).
+
+Цветные флаги в списке серверов собраны из [flag-icons](https://github.com/lipis/flag-icons).
+Они загружаются с самого роутера. [Лицензия MIT](luci-app-routewolf/htdocs/luci-static/resources/view/routewolf/server-flags.LICENSE.txt).
+Окно **Серверы** показывает количество узлов и срок действия всей подписки, если поставщик передаёт дату окончания в заголовке `Subscription-Userinfo`.

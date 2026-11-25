@@ -56,7 +56,11 @@ download_helper() {
 
 download() {
     download_helper "$1" "${2:-}"
-    "$stage/subscription" fetch "$stage/source" > "$stage/input"
+    if [ "${2:-}" = names ]; then
+        "$stage/subscription" fetch "$stage/source" "$stage/expiry" > "$stage/input"
+    else
+        "$stage/subscription" fetch "$stage/source" > "$stage/input"
+    fi
 }
 
 prepare() {

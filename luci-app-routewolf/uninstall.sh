@@ -17,7 +17,9 @@ rm -f /usr/libexec/rpcd/routewolf_ui \
     /www/luci-static/resources/view/routewolf/manage.js \
     /www/luci-static/resources/view/routewolf/manage-*.js \
     /www/luci-static/resources/view/routewolf/manage.css \
-    /www/luci-static/resources/view/routewolf/geo-catalog.js
+    /www/luci-static/resources/view/routewolf/geo-catalog.js \
+    /www/luci-static/resources/view/routewolf/server-flags.webp \
+    /www/luci-static/resources/view/routewolf/server-flags.LICENSE.txt
 rmdir /www/luci-static/resources/view/routewolf 2>/dev/null || true
 rm -f /tmp/luci-indexcache*
 /etc/init.d/rpcd reload

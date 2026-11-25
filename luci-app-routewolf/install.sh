@@ -37,6 +37,8 @@ if [ "$(readlink "$view_dir/$view_name.js" || :)" != manage.js ]; then
 fi
 put_file "$view_dir/manage.css" 644 "$view_source/manage.css"
 put_file "$view_dir/geo-catalog.js" 644 "$view_source/geo-catalog.js"
+put_file "$view_dir/server-flags.webp" 644 "$view_source/server-flags.webp"
+put_file "$view_dir/server-flags.LICENSE.txt" 644 "$view_source/server-flags.LICENSE.txt"
 menu_dir=/usr/share/luci/menu.d
 menu_stage=$(mktemp "$menu_dir/.routewolf.XXXXXX")
 trap 'rm -f "$menu_stage"' EXIT

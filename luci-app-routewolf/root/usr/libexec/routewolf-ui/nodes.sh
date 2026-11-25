@@ -16,12 +16,10 @@ case "${1:-}" in
         case "$(uci -q get "routewolf_ui.$2.protocol")" in vless|singbox) ;; *) exit 2 ;; esac
         uci -q get "routewolf_ui.$2.source" | grep -q '^https://' || exit 2
         id=$(source_id "$2")
-        if [ -s "$cache/$2.names" ] && [ "$(sed -n '1p' "$cache/$2.names")" = "$id" ]; then
-            updated=$(sed -n '2p' "$cache/$2.names")
+        if [ -s "$cache/$2.catalog" ] && [ "$(sed -n '1p' "$cache/$2.catalog")" = "$id" ]; then
+            updated=$(sed -n '2p' "$cache/$2.catalog")
             if [ "$(($(date +%s)-updated))" -lt 1800 ]; then
-                printf '{"nodes":'
-                tail -n +3 "$cache/$2.names"
-                printf '}\n'
+                tail -n +3 "$cache/$2.catalog"
                 exit 0
             fi
         fi
@@ -45,8 +43,16 @@ case "${1:-}" in
     preview)
         mkdir -p "$cache"
         # Keep only the redacted list in RAM, indexed by profile and source.
-        { source_id "$2"; date +%s; ucode "$lib/nodes.uc" list "$3" "$4"; } > "$cache/$2.new"
-        mv "$cache/$2.new" "$cache/$2.names"
+        expiry=$(cat "$5")
+        case "$expiry" in ''|*[!0-9]*) expiry=0 ;; esac
+        {
+            source_id "$2"
+            date +%s
+            printf '{"expires":%s,"nodes":' "$expiry"
+            ucode "$lib/nodes.uc" list "$3" "$4"
+            printf '}\n'
+        } > "$cache/$2.new"
+        mv "$cache/$2.new" "$cache/$2.catalog"
         ;;
     apply)
         config=$2 profile=$3 engine=$4 role=$5

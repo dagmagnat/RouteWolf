@@ -1044,19 +1044,48 @@ function profileForm(openNodes) {
     return map;
 }
 
+function serverLabel(label) {
+    // A pair of Unicode regional indicators indexes the local 26 × 26 sprite.
+    const pieces = label.split(/([\u{1F1E6}-\u{1F1FF}]{2})/u);
+    return E('span', { class: 'rw-server-label' }, pieces.map((piece, index) => {
+        if (!(index % 2)) return piece;
+        const [first, second] = Array.from(piece, letter => letter.codePointAt(0) - 0x1f1e6);
+        return E('span', {
+            class: 'rw-server-flag', 'aria-hidden': 'true',
+            style: 'background-position:' + (-first * 20) + 'px ' + (-second * 15) + 'px'
+        });
+    }));
+}
+
+function subscriptionExpiry(value) {
+    if (!Number.isInteger(value) || value <= 0)
+        return _('Срок действия не указан');
+    const expires = new Date(value * 1000);
+    const date = expires.toLocaleDateString('ru-RU');
+    const left = expires.getTime() - Date.now();
+    if (left <= 0)
+        return _('Срок истёк %s').format(date);
+    const remaining = left < 86400000 ? _('меньше суток')
+        : new Intl.RelativeTimeFormat('ru').format(Math.ceil(left / 86400000), 'day');
+    return _('До %s · %s').format(date, remaining);
+}
+
 async function serverDialog(profile, action, save, current) {
     const message = E('p', { role: 'status', 'aria-live': 'polite' }, [_('Загрузка списка серверов…')]);
     const error = E('p', { role: 'alert', class: 'rw-library-error' });
-    const input = E('select', { disabled: true, 'aria-label': _('Предпочитаемый сервер') });
+    const input = E('div', { class: 'rw-server-input' });
+    const summary = E('p', { class: 'rw-server-summary', hidden: true });
+    let dropdown;
     const observer = { update() {}, fail: text => { error.textContent = text; } };
     const close = button(_('Закрыть'), () => ui.hideModal());
     const submit = button(_('Сохранить'), async () => {
-        const selected = input.value;
+        const value = dropdown.getValue();
+        const selected = value === 'auto' ? '' : value;
         const previous = uci.get(settings, profile, 'preferred_node') || '';
         if (selected === previous) return;
         error.textContent = '';
         message.textContent = _('Сохранение…');
-        submit.disabled = input.disabled = close.disabled = true;
+        submit.disabled = input.inert = close.disabled = true;
         try {
             if (selected) uci.set(settings, profile, 'preferred_node', selected);
             else uci.unset(settings, profile, 'preferred_node');
@@ -1073,13 +1102,13 @@ async function serverDialog(profile, action, save, current) {
             error.textContent = err.message;
             message.textContent = '';
         } finally {
-            submit.disabled = input.disabled = close.disabled = false;
+            submit.disabled = input.inert = close.disabled = false;
         }
     }, true);
     submit.disabled = true;
     ui.showModal(_('Серверы подписки'), [
         E('p', {}, [_('Если выбранный сервер недоступен, RouteWolf использует другой доступный узел подписки и возвращается к выбранному после восстановления.')]),
-        input, message, error,
+        summary, input, message, error,
         E('div', { class: 'rw-actions rw-activate-actions' }, [submit, close])
     ], 'rw-servers-modal');
 
@@ -1095,14 +1124,20 @@ async function serverDialog(profile, action, save, current) {
         }
         const nodes = result.nodes || [];
         if (!nodes.length) throw new Error(_('В подписке нет совместимых серверов.'));
-        input.appendChild(E('option', { value: '' }, [_('Автовыбор')]));
-        nodes.forEach(node => input.appendChild(E('option', { value: node.id }, [
-            node.named ? node.label : node.label + ' · ' + node.transport
-        ])));
+        const choices = { auto: _('Автовыбор') };
+        nodes.forEach(node => {
+            choices[node.id] = serverLabel(node.named ? node.label : node.label + ' · ' + node.transport);
+        });
         const selected = uci.get(settings, profile, 'preferred_node') || '';
-        input.value = nodes.some(node => selected === node.id) ? selected : '';
-        input.disabled = submit.disabled = false;
-        message.textContent = selected && !input.value ? _('Ранее выбранного сервера больше нет в подписке.') : '';
+        const value = Object.hasOwn(choices, selected) ? selected : 'auto';
+        dropdown = new ui.Dropdown(value, choices, { multiple: false, optional: false, select_placeholder: _('Предпочитаемый сервер') });
+        const control = dropdown.render();
+        control.setAttribute('aria-label', _('Предпочитаемый сервер'));
+        input.appendChild(control);
+        summary.textContent = _('Серверов: %d').format(nodes.length) + ' · ' + subscriptionExpiry(result.expires);
+        summary.hidden = false;
+        submit.disabled = false;
+        message.textContent = selected && value === 'auto' ? _('Ранее выбранного сервера больше нет в подписке.') : '';
     } catch (err) {
         error.textContent = err.message;
         message.textContent = '';
@@ -1389,7 +1424,7 @@ return view.extend({
             return E('div', { class: 'rw-luci', keydown: event => {
                 if (event.key === 'Escape' && !feedback.hidden) dismissError();
             } }, [
-                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') + '?v=26' }),
+                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') + '?v=28' }),
                 activateTabs([
                     ['overview', _('Обзор'), liveStatus],
                     ['profiles', _('Профили'), profiles],
