@@ -95,5 +95,8 @@ if [ -z "$source_dir" ]; then
     exit 1
 fi
 
+# This installer uses the panel source. Release bundles are used by update.sh.
+rm -f "$source_dir"/releases/routewolf-luci-*.tar.gz || exit 1
+
 cd "$source_dir" || exit 1
 run_installer "$@"

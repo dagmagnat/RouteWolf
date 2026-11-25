@@ -5471,6 +5471,7 @@ EOF
         tail -n 30 /tmp/routewolf-lists-refresh.log 2>/dev/null || true
         return 1
     fi
+    return 0
 }
 
 add_internal_wg() {
@@ -6062,6 +6063,13 @@ install_luci_panel() {
 }
 
 install_luci_mode() {
+    INSTALL_STEP=0
+    INSTALL_TOTAL_STEPS=1
+    local complete_runtime=0 pending=/etc/routewolf/luci-setup-pending
+    if [ -e "$pending" ] || [ ! -s /etc/routewolf/runtime_version ] || [ ! -s "$ROUTEWOLF_VERSION_FILE" ]; then
+        complete_runtime=1
+        INSTALL_TOTAL_STEPS=3
+    fi
     if [ ! -x /etc/init.d/routewolf ] || [ ! -x /usr/sbin/rw ]; then
         [ -z "$(uci changes firewall)" ] && [ -z "$(uci changes dhcp)" ] || {
             msg "Save pending firewall and DNS changes first." "Сначала сохраните ожидающие изменения firewall и DNS."
@@ -6069,21 +6077,25 @@ install_luci_mode() {
         }
         ROUTEWOLF_SETUP_LUCI=1
         TUNNEL=0
-        INSTALL_TOTAL_STEPS=8
-        INSTALL_STEP=0
-        check_repo || return 1
-        add_packages || return 1
-        dnsmasqfull || return 1
-        add_mark || return 1
-        add_set || return 1
-        dnsmasqconfdir || return 1
-        install_management_commands || return 1
-        add_routewolf update || return 1
-        install_stable_runtime || return 1
-        validate_routewolf_installation || return 1
-        write_installed_version
+        complete_runtime=1
+        INSTALL_TOTAL_STEPS=11
+        run_step "$(prompt "Checking package repositories" "Проверка репозиториев пакетов")" check_repo || return 1
+        run_step "$(prompt "Installing base packages" "Установка базовых пакетов")" add_packages || return 1
+        run_step "$(prompt "Installing dnsmasq-full" "Установка dnsmasq-full")" dnsmasqfull || return 1
+        run_step "$(prompt "Configuring the routing rule" "Настройка правила маршрутизации")" add_mark || return 1
+        run_step "$(prompt "Configuring domain routing" "Настройка маршрутизации по доменам")" add_set || return 1
+        run_step "$(prompt "Configuring dnsmasq" "Настройка dnsmasq")" dnsmasqconfdir || return 1
+        run_step "$(prompt "Installing RouteWolf commands" "Установка команд RouteWolf")" install_management_commands || return 1
+        run_step "$(prompt "Preparing lists" "Подготовка списков")" add_routewolf update || return 1
     fi
-    install_luci_panel
+    if [ "$complete_runtime" = 1 ]; then
+        mkdir -p /etc/routewolf && touch "$pending" || return 1
+        run_step "$(prompt "Installing the stable runtime" "Установка стабильного ядра RouteWolf")" install_stable_runtime || return 1
+        run_step "$(prompt "Checking routing" "Проверка маршрутизации")" validate_routewolf_installation || return 1
+        write_installed_version || return 1
+        rm -f "$pending" || return 1
+    fi
+    run_step "$(prompt "Installing the LuCI panel" "Установка панели LuCI")" install_luci_panel
 }
 
 # Choose installer language before any interactive menu.

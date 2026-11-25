@@ -94,10 +94,17 @@ if [ -L /tmp/dnsmasq.d/routewolf-ui.conf ]; then
         /etc/init.d/dnsmasq restart
     fi
 fi
-rm -f /tmp/luci-indexcache*
+rpc_object_id() {
+    ubus -t 1 -v list routewolf_ui 2>/dev/null | awk 'NR == 1 { print $NF }'
+}
+
+previous_rpc=$(rpc_object_id)
 /etc/init.d/rpcd reload
 for attempt in 1 2 3 4 5; do
-    if ubus -t 3 call routewolf_ui status >/dev/null 2>&1; then
+    current_rpc=$(rpc_object_id)
+    if [ -n "$current_rpc" ] && [ "$current_rpc" != "$previous_rpc" ] &&
+        ubus -t 3 call routewolf_ui status >/dev/null 2>&1; then
+        rm -f /tmp/luci-indexcache*
         printf '%s\n' 'LuCI: Services > RouteWolf'
         exit 0
     fi

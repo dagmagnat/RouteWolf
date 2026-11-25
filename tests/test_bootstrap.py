@@ -16,11 +16,19 @@ class BootstrapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='rw-bootstrap-') as temp:
             folder = Path(temp)
             valid, broken = folder / 'complete.tgz', folder / 'truncated.tgz'
-            installer = b'#!/bin/sh\nprintf "Ran local installer with %s\\n" "$1"\n'
+            installer = (b'#!/bin/sh\n'
+                         b'[ ! -e releases/routewolf-luci-v60-r22.tar.gz ] || exit 3\n'
+                         b'[ -f releases/routewolf-v60.tar.gz ] || exit 4\n'
+                         b'printf "Ran local installer with %s\\n" "$1"\n')
             with tarfile.open(valid, 'w:gz') as archive:
-                member = tarfile.TarInfo('dagmagnat-RouteWolf-testhash/routewolf-install.sh')
-                member.size = len(installer)
-                archive.addfile(member, io.BytesIO(installer))
+                for path, content in (
+                    ('routewolf-install.sh', installer),
+                    ('releases/routewolf-luci-v60-r22.tar.gz', b'published panel'),
+                    ('releases/routewolf-v60.tar.gz', b'stable runtime'),
+                ):
+                    member = tarfile.TarInfo('dagmagnat-RouteWolf-testhash/' + path)
+                    member.size = len(content)
+                    archive.addfile(member, io.BytesIO(content))
             broken.write_bytes(valid.read_bytes()[:-8])
             scripts = {
                 'uclient-fetch': '''#!/bin/sh

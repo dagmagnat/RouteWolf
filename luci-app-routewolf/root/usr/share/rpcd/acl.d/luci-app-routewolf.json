@@ -23,6 +23,9 @@
         "job",
         "code_updates",
         "list_schedule"
+        ],
+        "uci": [
+          "commit"
         ]
       },
       "uci": [
