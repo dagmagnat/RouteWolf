@@ -117,6 +117,7 @@ xray_health() {
     local token code url
     token=$(cat "$1") || return 11
     printf '%s\n' "$token" | grep -Eq '^[0-9a-f]{48}$' || return 11
+    if xray_preferred "$1" "$2" "$token"; then return 0; fi
     for url in https://cp.cloudflare.com/generate_204 https://connectivitycheck.gstatic.com/generate_204; do
         code=$(printf 'proxy-user = "routewolf:%s"\n' "$token" |
             curl --config - --proxy "socks5h://127.0.0.1:$2" --noproxy '' \
@@ -125,6 +126,32 @@ xray_health() {
         [ "$code" != 204 ] || return 0
     done
     return 10
+}
+
+xray_preferred() {
+    local config marker api probe tag desired pid current code
+    case "$2" in
+        18683) api=18687; probe=18685; marker="$runtime/preferred-node" ;;
+        18684) api=18688; probe=18686; marker=/var/run/routewolf-ui-backup/preferred-node ;;
+        *) return 1 ;;
+    esac
+    config="${1%/*}/config.json"
+    grep -q '"rw-preferred-check"' "$config" || return 1
+    tag=$(jsonfilter -i "$config" -e '@.routing.rules[@.ruleTag="rw-preferred"].outboundTag')
+    printf '%s\n' "$tag" | grep -Eq '^rw-vless-[0-9]+$' || return 1
+    pid=$(pidof xray) || return 1
+    current=$(cat "$marker" 2>/dev/null || :)
+    desired=auto
+    code=$(printf 'proxy-user = "routewolf:%s"\n' "$3" |
+        curl --config - --proxy "socks5h://127.0.0.1:$probe" --noproxy '' +            --silent --max-time 3 --output /dev/null --write-out '%{http_code}' +            https://cp.cloudflare.com/generate_204) || code=
+    [ "$code" != 204 ] || desired=$tag
+    if [ "$current" != "$pid:$desired" ]; then
+        local override=$desired
+        [ "$desired" != auto ] || override=-r
+        xray api bo --server="127.0.0.1:$api" --timeout=2 -b rw-vless "$override" >/dev/null 2>&1 || return 1
+        printf '%s\n' "$pid:$desired" > "$marker"
+    fi
+    [ "$desired" != auto ]
 }
 
 wait_ready() {
@@ -152,6 +179,9 @@ refresh() (
     [ "$mode" != inverse ] || engine_mode=full
     "$helper" "$render" "$stage/input" "$state/token" "$engine_mode" "$stage/config.json" ||
         { log "Subscription could not be imported; keeping the previous configuration"; exit 1; }
+    if [ -x /usr/libexec/routewolf-ui/nodes.sh ]; then
+        /usr/libexec/routewolf-ui/nodes.sh apply "$stage/config.json" "$(uci -q get routewolf_ui.ui.active_profile || :)" "$backend" primary || exit 1
+    fi
     cmp -s "$stage/config.json" "$state/config.json" && exit 0
     if [ "$backend" = xray ]; then
         xray run -test -c "$stage/config.json" >/dev/null 2>&1

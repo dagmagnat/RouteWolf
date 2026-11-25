@@ -55,7 +55,8 @@
 .rw-luci .rw-facts dd { margin:0; font-weight:600; }
 .rw-luci .rw-interfaces { display:flex; flex-wrap:wrap; gap:8px; }
 .rw-luci .rw-interface { display:flex; align-items:center; gap:10px; padding:6px 9px; border:1px solid var(--rw-line); border-radius:6px; font-size:.88rem; }
-.rw-luci .rw-service-panel { max-width:70rem; }
+.rw-luci .rw-service-panel { max-width:43rem; }
+.rw-luci .rw-panel .rw-service-heading { margin:14px 0 0; }
 .rw-luci .rw-subscription-schedule { padding:12px 0; border-bottom:1px solid var(--rw-line); }
 .rw-luci .rw-subscription-custom:not([hidden]) { display:inline-flex; gap:6px; align-items:center; }
 .rw-luci .rw-subscription-custom input { width:6rem; }
@@ -70,7 +71,7 @@
 .rw-luci .rw-control-toggle[data-action="disable"] { background:#a72f3b !important; }
 .rw-luci .rw-control-toggle:hover:not(:disabled) { filter:brightness(1.12); }
 .rw-luci .rw-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:12px; }
-.rw-luci .rw-service-actions { align-items:stretch; }
+.rw-luci .rw-service-actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:stretch; }
 .rw-luci .rw-service-actions button { min-width:0; min-height:40px; margin:0; white-space:normal; overflow-wrap:anywhere; }
 .rw-luci .rw-equal-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); max-width:460px; }
 .rw-luci .rw-equal-actions button { width:100%; min-height:39px; margin:0; }
@@ -188,6 +189,12 @@
 .rw-luci .rw-compact-table .cbi-section { margin:0; }
 .rw-luci .rw-compact-table .table { margin-bottom:6px; }
 .rw-luci .rw-compact-table .td { padding:8px 10px; }
+.rw-luci .rw-compact-table .cbi-section-table-row + .cbi-section-table-row > .td {
+    border-top:1px solid var(--rw-line);
+}
+.rw-luci .rw-compact-table .cbi-section-table-row > .td { padding-block:11px; }
+.rw-servers-modal select { width:100%; max-width:100%; }
+.rw-servers-modal p[role]:empty { display:none; }
 #modal_overlay > .cbi-modal:has(> #cbi-routewolf_ui) {
     display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto;
     align-items:stretch; gap:12px; width:min(720px,calc(100vw - 28px)); min-width:0;

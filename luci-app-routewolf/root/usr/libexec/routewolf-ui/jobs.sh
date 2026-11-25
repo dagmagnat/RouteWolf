@@ -251,6 +251,7 @@ if [ "${1:-}" = worker ]; then
                     /etc/init.d/routewolf-ui-backup restart
             fi
             ;;
+        nodes) "$lib/singbox.sh" "$2" preview ;;
         local_lists) "$lib/lists.sh" apply ;;
         lists) run_runtime /usr/sbin/routewolf-stable-update.sh --lists-auto ;;
         subscription_refresh) request_subscription_refresh ;;
@@ -306,7 +307,7 @@ case "${1:-}" in
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
         [ ! -e "$state/paused-route.conf" ] && [ ! -e "$state/paused-singbox" ] || exit 2
         ;;
-    backup)
+    backup|nodes)
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
         ;;
     local_lists|lists|subscription_refresh|update|reload_project|repair|check|pause|resume|dns_on|dns_off|restart|dco_on|dco_off) ;;

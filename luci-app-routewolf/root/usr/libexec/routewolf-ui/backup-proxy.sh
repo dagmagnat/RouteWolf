@@ -27,6 +27,18 @@ prepare_config() {
         sing-box check -c "$2" >/dev/null 2>&1
 }
 
+apply_preference() {
+    local id
+    id=$(uci -q get "routewolf_ui.$2.preferred_node" || :)
+    [ -n "$id" ] || return 0
+    /usr/libexec/routewolf-ui/nodes.sh apply "$1" "$2" "$3" reserve || return 1
+    if [ "$3" = xray ]; then
+        xray run -test -c "$1" >/dev/null 2>&1
+    else
+        sing-box check -c "$1" >/dev/null 2>&1
+    fi
+}
+
 install() (
     source=$1 profile=$2
     [ -z "$(uci changes firewall)" ] || return 1
@@ -54,6 +66,7 @@ install() (
     mkdir "$stage/candidate"
     engine=$(backend "$source")
     prepare_config "$source/config.json" "$stage/candidate/config.json" "$engine" || return 1
+    apply_preference "$stage/candidate/config.json" "$profile" "$engine" || return 1
     printf '%s\n' "$engine" > "$stage/candidate/engine"
     for file in token mode source subscription; do cp -p "$source/$file" "$stage/candidate/$file"; done
     cp /etc/config/firewall "$stage/firewall"
@@ -155,6 +168,7 @@ refresh() (
     "$dir/subscription" fetch "$dir/source" > "$stage/input" &&
         "$dir/subscription" "$render" "$stage/input" "$dir/token" "$mode" "$stage/config.json" &&
         prepare_config "$stage/config.json" "$stage/backup.json" "$engine" || return 1
+    apply_preference "$stage/backup.json" "$(uci -q get routewolf_ui.ui.backup_profile || :)" "$engine" || return 1
     cmp -s "$dir/config.json" "$stage/backup.json" && return 0
     [ ! -d /tmp/routewolf-ui-job/lock ] || return 1
     mv "$stage/backup.json" "$dir/config.json"

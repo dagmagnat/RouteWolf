@@ -308,12 +308,18 @@ job_start() {
 }
 
 case "${1:-}:${2:-}" in
-    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"geodata":{"kind":"string","category":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"list_report":{},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
+    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"geodata":{"kind":"string","category":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"nodes":{"profile":"string"},"list_report":{},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
     call:status) status ;;
     call:job_status) job_status ;;
     call:preflight) preflight ;;
     call:library) library ;;
     call:geodata) geodata ;;
+    call:nodes)
+        read -r request || [ -n "$request" ] || exit 1
+        json_load "$request" 2>/dev/null || exit 1
+        json_get_var profile profile
+        /usr/libexec/routewolf-ui/nodes.sh list "$profile" 2>/dev/null
+        ;;
     call:list_report) list_report ;;
     call:job)
         if job_start; then printf '%s\n' '{"ok":true}'; else printf '%s\n' '{"ok":false}'; fi

@@ -9,9 +9,35 @@ import unittest
 
 WORKER = (Path(__file__).resolve().parents[1] / 'luci-app-routewolf'
           / 'root/usr/libexec/routewolf-ui/backup.sh')
+CONTROLLER = WORKER.parents[5] / 'subscription/controller.sh'
 
 
 class LuCIBackupTests(unittest.TestCase):
+    def test_xray_preferred_node_releases_override_and_recovers(self):
+        source = CONTROLLER.read_text(encoding='utf-8')
+        function = source[source.index('xray_preferred()'):source.index('wait_ready()')]
+        script = function + r'''
+runtime=.
+printf '"rw-preferred-check"\n' > config.json
+jsonfilter() { echo rw-vless-2; }
+pidof() { echo 42; }
+curl() { printf '%s' "$response"; }
+xray() { printf '%s\n' "$7" >> overrides; }
+response=204
+xray_preferred ./token 18683 example
+xray_preferred ./token 18683 example
+response=503
+if xray_preferred ./token 18683 example; then exit 1; fi
+response=204
+xray_preferred ./token 18683 example
+cat overrides
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(['sh', '-eu'], input=script, cwd=directory,
+                                    text=True, capture_output=True, timeout=12)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['rw-vless-2', '-r', 'rw-vless-2'])
+
     def test_failover_and_primary_recovery(self):
         with tempfile.TemporaryDirectory(prefix='routewolf-backup-') as directory:
             work = shlex.quote(Path(directory).as_posix())

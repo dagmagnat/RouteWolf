@@ -31,6 +31,7 @@ const commitProfiles = rpc.declare({ object: 'uci', method: 'commit', params: ['
 
 const jobStart = rpc.declare({ object: 'routewolf_ui', method: 'job', params: ['action', 'profile'], reject: true, expect: { ok: false } });
 const jobStatus = rpc.declare({ object: 'routewolf_ui', method: 'job_status', reject: true });
+const listNodes = rpc.declare({ object: 'routewolf_ui', method: 'nodes', params: ['profile'], reject: true });
 const preflight = rpc.declare({ object: 'routewolf_ui', method: 'preflight', params: ['profile', 'role'], reject: true });
 const jobPhases = {
     preflight: [5, _('Проверка профиля')],
@@ -323,6 +324,7 @@ function servicePanel(result, action, showError, save) {
     return E('div', { class: 'rw-service-panel' }, [
         ...items,
         subscriptionSchedule(action, save, showError),
+        E('h3', { class: 'rw-service-heading' }, [_('Действия')]),
         E('div', { class: 'rw-actions rw-service-actions' }, commands.map(([label, cmd]) => button(label, ui.createHandlerFn(null, () => {
             if ((cmd === 'restart' || cmd === 'reload_project') &&
                 !window.confirm(cmd === 'restart' ? _('Перезапустить действующий туннель?') : _('Перезапустить маршрутизацию RouteWolf?')))
@@ -944,7 +946,7 @@ function listPanel(result, save, action) {
     };
 }
 
-function profileForm() {
+function profileForm(openNodes) {
     const map = new form.Map('routewolf_ui');
     const section = map.section(form.GridSection, 'profile', _('Профили туннелей'),
         _('Из панели можно активировать AmneziaWG, WireGuard, OpenVPN, sing-box, VLESS · Xray и Outline.'));
@@ -952,6 +954,17 @@ function profileForm() {
     section.addremove = true;
     section.addbtntitle = _('Добавить профиль');
     section.modaltitle = _('Профиль туннеля');
+    const renderActions = section.renderRowActions;
+    section.renderRowActions = function(id, ...args) {
+        const cell = renderActions.call(this, id, ...args);
+        const protocol = uci.get(settings, id, 'protocol');
+        const source = uci.get(settings, id, 'source') || '';
+        if ((protocol === 'vless' || protocol === 'singbox') && source.startsWith('https://')) {
+            const actions = cell && cell.querySelector('div');
+            if (actions) actions.firstElementChild.after(button(_('Серверы'), () => openNodes(id)));
+        }
+        return cell;
+    };
 
     let option = section.option(form.Value, 'name', _('Название'));
     option.rmempty = false;
@@ -1029,6 +1042,65 @@ function profileForm() {
     };
 
     return map;
+}
+
+async function serverDialog(profile, action, save, current) {
+    const message = E('p', { role: 'status', 'aria-live': 'polite' }, [_('Загрузка списка серверов…')]);
+    const error = E('p', { role: 'alert', class: 'rw-library-error' });
+    const input = E('select', { disabled: true, 'aria-label': _('Предпочитаемый сервер') });
+    const observer = { update() {}, fail: text => { error.textContent = text; } };
+    const close = button(_('Закрыть'), () => ui.hideModal());
+    const submit = button(_('Сохранить'), async () => {
+        const selected = input.value;
+        const previous = uci.get(settings, profile, 'preferred_node') || '';
+        if (selected === previous) return;
+        error.textContent = '';
+        message.textContent = _('Сохранение…');
+        submit.disabled = input.disabled = close.disabled = true;
+        try {
+            if (selected) uci.set(settings, profile, 'preferred_node', selected);
+            else uci.unset(settings, profile, 'preferred_node');
+            await save();
+            const state = await current();
+            const operation = state.backup_profile === profile ? 'backup'
+                : state.active_profile === profile && !state.paused ? 'activate' : '';
+            if (operation && !await action(operation, profile, false, observer)) {
+                message.textContent = _('Выбор сохранён. Он будет применён при следующей активации профиля.');
+            } else {
+                message.textContent = _('Выбор сохранён.');
+            }
+        } catch (err) {
+            error.textContent = err.message;
+            message.textContent = '';
+        } finally {
+            submit.disabled = input.disabled = close.disabled = false;
+        }
+    }, true);
+    submit.disabled = true;
+    ui.showModal(_('Серверы подписки'), [
+        E('p', {}, [_('Если выбранный сервер недоступен, RouteWolf использует другой доступный узел подписки и возвращается к выбранному после восстановления.')]),
+        input, message, error,
+        E('div', { class: 'rw-actions rw-activate-actions' }, [submit, close])
+    ], 'rw-activate-modal rw-servers-modal');
+
+    try {
+        let result = await listNodes(profile);
+        if (result.fetch) {
+            if (!await action('nodes', profile, false, observer)) { message.textContent = ''; return; }
+            result = await listNodes(profile);
+        }
+        const nodes = result.nodes || [];
+        if (!nodes.length) throw new Error(_('В подписке нет совместимых серверов.'));
+        input.appendChild(E('option', { value: '' }, [_('Автовыбор')]));
+        nodes.forEach(node => input.appendChild(E('option', { value: node.id }, [node.label + ' · ' + node.transport])));
+        const selected = uci.get(settings, profile, 'preferred_node') || '';
+        input.value = nodes.some(node => selected === node.id) ? selected : '';
+        input.disabled = submit.disabled = false;
+        message.textContent = selected && !input.value ? _('Ранее выбранного сервера больше нет в подписке.') : '';
+    } catch (err) {
+        error.textContent = err.message;
+        message.textContent = '';
+    }
 }
 
 async function confirmActivation(profile, action, backup = false, quick = false) {
@@ -1253,7 +1325,7 @@ return view.extend({
             updateTunnelToggle();
         }
 
-        this.map = profileForm();
+        this.map = profileForm(id => serverDialog(id, action, save, status));
         return this.map.render().then(node => {
             updateProfiles();
             const listEditor = listPanel(result, save, action);
@@ -1311,7 +1383,7 @@ return view.extend({
             return E('div', { class: 'rw-luci', keydown: event => {
                 if (event.key === 'Escape' && !feedback.hidden) dismissError();
             } }, [
-                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') }),
+                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') + '?v=26' }),
                 activateTabs([
                     ['overview', _('Обзор'), liveStatus],
                     ['profiles', _('Профили'), profiles],

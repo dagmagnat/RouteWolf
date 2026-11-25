@@ -85,6 +85,20 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 uci -q get "routewolf_ui.$profile.source" > "$stage/source"
 [ "$(wc -c < "$stage/source")" -le 8192 ] || fail 'Subscription URL or access key is too long.'
+if [ "$reserve" = preview ]; then
+    case "$protocol" in vless|singbox) ;; *) exit 1 ;; esac
+    phase download
+    reason source-download
+    grep -q '^https://' "$stage/source" || exit 1
+    sh "$lib/subscription/install.sh" download "$stage" "$protocol"
+    render=render
+    [ "$protocol" != vless ] || render=render-xray
+    [ "$mode" != inverse ] || mode=full
+    reason subscription-format
+    "$stage/subscription" "$render" "$stage/input" "$stage/token" "$mode" "$stage/config.json"
+    "$lib/nodes.sh" preview "$profile" "$stage/config.json"
+    exit
+fi
 if [ "$protocol" = vless ]; then
     case "$(cat "$stage/source")" in https://*|vless://*) ;; *) fail 'Expected a VLESS link or HTTPS subscription.' ;; esac
 fi
@@ -146,6 +160,16 @@ if [ "$reserve" = yes ]; then
     "$lib/backup-proxy.sh" install "$stage" "$profile"
     completed=yes
     exit 0
+fi
+if [ -n "$(uci -q get "routewolf_ui.$profile.preferred_node" || :)" ]; then
+    "$lib/nodes.sh" apply "$stage/config.json" "$profile" "$(cat "$stage/engine")" primary
+    if [ "$protocol" = vless ]; then
+        reason xray-config
+        xray run -test -c "$stage/config.json" >/dev/null 2>&1
+    else
+        reason engine-config
+        sing-box check -c "$stage/config.json" >/dev/null 2>&1
+    fi
 fi
 previous_native=
 if [ -e "$route" ]; then
