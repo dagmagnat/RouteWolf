@@ -126,15 +126,15 @@
 .rw-library-footer button { margin:0; padding:7px 4px; min-height:37px; width:100%; font-size:.84rem; white-space:normal; line-height:1.2; box-sizing:border-box; }
 .rw-library-error:empty { display:none; }
 .rw-library-error { display:block; margin-bottom:8px; color:#df6a71; }
-.rw-activate-modal { width:min(560px, calc(100vw - 32px)); max-width:560px; }
+.rw-activate-modal, .rw-servers-modal { width:min(560px, calc(100vw - 32px)); max-width:560px; }
 .rw-exclusion-modal .rw-list-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:8px; }
 .rw-exclusion-modal .rw-list-grid textarea { display:block; width:100%; min-width:0; }
 .rw-activate-modal [hidden] { display:none !important; }
-.rw-activate-modal .rw-activate-actions {
+:is(.rw-activate-modal, .rw-servers-modal) .rw-activate-actions {
     display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px;
     width:min(100%, 400px); margin-inline-start:auto;
 }
-.rw-activate-modal .rw-activate-actions button {
+:is(.rw-activate-modal, .rw-servers-modal) .rw-activate-actions button {
     display:inline-flex; align-items:center; justify-content:center;
     margin:0 !important; padding:8px 14px !important; text-align:center;
     min-width:0; min-height:40px; white-space:normal; line-height:1.2;

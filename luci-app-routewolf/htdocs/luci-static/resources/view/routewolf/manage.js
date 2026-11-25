@@ -1081,7 +1081,7 @@ async function serverDialog(profile, action, save, current) {
         E('p', {}, [_('Если выбранный сервер недоступен, RouteWolf использует другой доступный узел подписки и возвращается к выбранному после восстановления.')]),
         input, message, error,
         E('div', { class: 'rw-actions rw-activate-actions' }, [submit, close])
-    ], 'rw-activate-modal rw-servers-modal');
+    ], 'rw-servers-modal');
 
     try {
         let result = await listNodes(profile);

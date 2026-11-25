@@ -1,5 +1,5 @@
 format=1
 version=60
 luci_archive=routewolf-luci-v60-r26.tar.gz
-luci_sha256=78606aa472c3e8e81faaea8b0ea7859f4dc5f9c2f4fc28ca2b8391e052552aab
+luci_sha256=cf01f5d858e9d04eda6e0694803cc3a98434ac6da14124ef4e5134d3ed1ef847
 upgrade_agent_sha256=ccbbb26e58e9b35b520bb8db216e7c5ec9ae1a6635d35d7357348b8e681b4ba2
