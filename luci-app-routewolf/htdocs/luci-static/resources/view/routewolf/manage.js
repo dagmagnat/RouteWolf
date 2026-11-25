@@ -1130,7 +1130,12 @@ async function serverDialog(profile, action, save, current) {
         });
         const selected = uci.get(settings, profile, 'preferred_node') || '';
         const value = Object.hasOwn(choices, selected) ? selected : 'auto';
-        dropdown = new ui.Dropdown(value, choices, { multiple: false, optional: false, select_placeholder: _('Предпочитаемый сервер') });
+        dropdown = new ui.Dropdown(value, choices, {
+            multiple: false,
+            optional: false,
+            sort: ['auto', ...new Set(nodes.map(node => node.id))],
+            select_placeholder: _('Предпочитаемый сервер')
+        });
         const control = dropdown.render();
         control.setAttribute('aria-label', _('Предпочитаемый сервер'));
         input.appendChild(control);
