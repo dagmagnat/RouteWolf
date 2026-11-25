@@ -3070,6 +3070,9 @@ add_tunnel() {
         esac
     done
 
+    # APK can replace dnsmasq in one transaction before a VPN uses more RAM.
+    if [ "$PKG_MANAGER" = apk ]; then dnsmasqfull || return 1; fi
+
     if [ "$TUNNEL" != singbox ]; then
         replace_tunnel_if_requested
     fi
@@ -3266,6 +3269,28 @@ add_tunnel() {
 
 }
 
+install_dnsmasq_full_apk() {
+    local memory status
+    memory=$(awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo)
+    if [ "${memory:-0}" -lt 8192 ]; then
+        msgc "$C_RED" "Less than 8 MiB RAM available for dnsmasq-full. Free memory and rerun the installer." \
+            "Для установки dnsmasq-full доступно менее 8 МиБ RAM. Освободите память и запустите установщик снова."
+        return 1
+    fi
+
+    # apk add handles replacement. A separate delete would leave DNS and
+    # DHCP unprotected if fetching or installing the replacement fails.
+    if pkg_install dnsmasq-full; then return 0; else status=$?; fi
+    if [ "$status" -eq 137 ] || grep -qw Killed /tmp/routewolf-pkg-install.log 2>/dev/null; then
+        msgc "$C_RED" "APK was killed while replacing dnsmasq. Check the kernel log for an out-of-memory event and verify DNS/DHCP before retrying." \
+            "APK прерван при замене dnsmasq. Проверьте в журнале ядра, хватило ли RAM, и убедитесь, что DNS/DHCP работает, прежде чем повторять установку."
+    else
+        msgc "$C_RED" "APK could not install dnsmasq-full. Check /tmp/routewolf-pkg-install.log." \
+            "APK не смог установить dnsmasq-full. Проверьте /tmp/routewolf-pkg-install.log."
+    fi
+    return "$status"
+}
+
 dnsmasqfull() {
     if pkg_is_installed dnsmasq-full; then
         msgc "$C_GREEN" "dnsmasq-full is already installed" "dnsmasq-full уже установлен"
@@ -3273,10 +3298,7 @@ dnsmasqfull() {
         msgc "$C_BLUE" "Installing dnsmasq-full" "Установка dnsmasq-full"
         detect_pkg_manager || return 1
         if [ "$PKG_MANAGER" = "apk" ]; then
-            pkg_install dnsmasq-full || { pkg_remove dnsmasq; pkg_install dnsmasq-full; } || {
-                msgc "$C_RED" "Failed to install dnsmasq-full. Check package repository and free space." "Не удалось установить dnsmasq-full. Проверьте репозиторий пакетов и свободное место."
-                return 1
-            }
+            install_dnsmasq_full_apk || return 1
         else
             cd /tmp/ || return 1
             opkg_package_command download dnsmasq-full || {
@@ -6051,9 +6073,9 @@ install_luci_mode() {
         INSTALL_STEP=0
         check_repo || return 1
         add_packages || return 1
+        dnsmasqfull || return 1
         add_mark || return 1
         add_set || return 1
-        dnsmasqfull || return 1
         dnsmasqconfdir || return 1
         install_management_commands || return 1
         add_routewolf update || return 1

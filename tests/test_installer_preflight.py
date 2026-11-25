@@ -79,6 +79,24 @@ require_proxy_ram
 ''', 'routewolf_proxy_ram_sufficient', 'require_proxy_ram')
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_apk_dnsmasq_install_skips_low_memory_and_never_removes_on_failure(self):
+        result = run(r'''
+awk() { printf '%s\n' "$ram"; }
+msgc() { printf '%s\n' "$2"; }
+pkg_install() { printf 'install %s\n' "$*"; return 137; }
+pkg_remove() { echo unexpected-removal; exit 99; }
+ram=8191
+if install_dnsmasq_full_apk; then exit 1; fi
+ram=10240
+install_dnsmasq_full_apk
+[ "$?" -eq 137 ]
+''', 'install_dnsmasq_full_apk')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.count('install dnsmasq-full\n'), 1)
+        self.assertIn('Less than 8 MiB', result.stdout)
+        self.assertIn('APK was killed', result.stdout)
+        self.assertNotIn('unexpected-removal', result.stdout)
+
 
 if __name__ == '__main__':
     unittest.main()
