@@ -30,6 +30,31 @@ chain rwui_full {
 EOF
 }
 
+configure_full_routing() {
+    local routing=$1 lan=$2 use6
+    if [ "$routing" = inverse ]; then
+        use6=$(sed -n "s/^IPV6_SUPPORT='\([01]\)'$/\1/p" /etc/routewolf/user.conf | head -n 1)
+        render_inverse_rules "$lan" "${use6:-0}" > "$state/full.nft"
+    elif [ "$routing" = full ]; then
+        cat > "$state/full.nft" <<EOF
+chain rwui_full {
+    type filter hook prerouting priority -148; policy accept;
+    iifname "$lan" fib daddr type local return
+    iifname "$lan" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3 } return
+    iifname "$lan" meta nfproto ipv4 meta mark set meta mark | 1
+}
+EOF
+    fi
+    if [ "$routing" = full ] || [ "$routing" = inverse ]; then
+        uci set firewall.routewolf_ui_full=include
+        uci set firewall.routewolf_ui_full.type=nftables
+        uci set firewall.routewolf_ui_full.position=table-post
+        uci set "firewall.routewolf_ui_full.path=$state/full.nft"
+    else
+        uci -q delete firewall.routewolf_ui_full || :
+    fi
+}
+
 device_up() {
     local flags
     flags=$(cat "/sys/class/net/$1/flags" 2>/dev/null) || return 1
@@ -288,6 +313,7 @@ native_profile() (
     uci -q delete "network.$dev" || :
     uci -q delete "network.$peer" || :
     uci set "network.$dev=interface"
+    uci set "network.$dev.routewolf_profile=$profile"
     if [ "$tool" = openvpn ]; then
         uci set "network.$dev.proto=none"
         uci set "network.$dev.routewolf_ui=1"
@@ -343,6 +369,7 @@ native_profile() (
         uci set "openvpn.$peer=openvpn"
         uci set "openvpn.$peer.config=$ovpn_file"
         uci set "openvpn.$peer.routewolf_ui=1"
+        uci set "openvpn.$peer.routewolf_profile=$profile"
         start_after_save=1
         [ "$backup" != yes ] || start_after_save=0
         uci set "openvpn.$peer.enabled=$start_after_save"
@@ -410,27 +437,7 @@ native_profile() (
         done_ok=yes
         return 0
     fi
-    if [ "$routing" = inverse ]; then
-        use6=$(sed -n "s/^IPV6_SUPPORT='\([01]\)'$/\1/p" /etc/routewolf/user.conf | head -n 1)
-        render_inverse_rules "$lan" "${use6:-0}" > "$state/full.nft"
-    elif [ "$routing" = full ]; then
-        cat > "$state/full.nft" <<EOF
-chain rwui_full {
-    type filter hook prerouting priority -148; policy accept;
-    iifname "$lan" fib daddr type local return
-    iifname "$lan" ip daddr { 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/3 } return
-    iifname "$lan" meta nfproto ipv4 meta mark set meta mark | 1
-}
-EOF
-    fi
-    if [ "$routing" = full ] || [ "$routing" = inverse ]; then
-        uci set firewall.routewolf_ui_full=include
-        uci set firewall.routewolf_ui_full.type=nftables
-        uci set firewall.routewolf_ui_full.position=table-post
-        uci set "firewall.routewolf_ui_full.path=$state/full.nft"
-    else
-        uci -q delete firewall.routewolf_ui_full || :
-    fi
+    configure_full_routing "$routing" "$lan"
     fw4 check
     uci commit firewall
     fw4 reload
@@ -470,12 +477,143 @@ EOF
     printf '%s\n' 'New profile activated after successful handshake.'
 )
 
+activate_existing() (
+    local profile=$1 data ref proto device interface instance lan routing old_proxy=no started=no complete=no
+    local staged zone candidate iface_zone
+    reason interface-changed
+    ref=$(uci -q get "routewolf_ui.$profile.existing_ref")
+    data=$("$lib/interfaces.sh" lookup "$ref")
+    [ -n "$data" ] || return 1
+    IFS='|' read -r _ proto device interface instance <<EOF
+$data
+EOF
+    [ "$(uci -q get "routewolf_ui.$profile.protocol")" = "$proto" ] || return 1
+    routing=$(uci -q get "routewolf_ui.$profile.routing")
+    case "$routing" in full|routewolf|inverse) ;; *) return 1 ;; esac
+    [ -z "$(uci changes firewall)" ] || return 1
+    lan=$(ubus call network.interface.lan status | jsonfilter -e '@.l3_device')
+    case "$lan" in ''|*[!a-zA-Z0-9_.-]*) return 1 ;; esac
+
+    staged=$(mktemp -d /tmp/routewolf-ui-existing.XXXXXX)
+    cp /etc/config/firewall "$staged/firewall"
+    for file in "$route" "$watchdog" "$state/full.nft"; do
+        [ ! -e "$file" ] || cp "$file" "$staged/${file##*/}"
+    done
+    cleanup_reference() {
+        if [ "$complete" = no ]; then
+            uci -q revert firewall || :
+            cp "$staged/firewall" /etc/config/firewall
+            for file in "$route" "$watchdog" "$state/full.nft"; do
+                if [ -e "$staged/${file##*/}" ]; then cp "$staged/${file##*/}" "$file"; else rm -f "$file"; fi
+            done
+            if [ "$started" = yes ]; then
+                case "$proto" in
+                    wireguard|amneziawg) ifdown "$interface" || : ;;
+                    openvpn)
+                        [ -z "$instance" ] || ubus call service delete "$(printf '{"name":"openvpn","instance":"%s"}' "$instance")" >/dev/null 2>&1 || :
+                        ;;
+                esac
+            fi
+            ip -4 route del default dev "$device" table 99 >/dev/null 2>&1 || :
+            fw4 reload || :
+            /usr/sbin/routewolf-route.sh >/dev/null 2>&1 || :
+            if [ "$old_proxy" = yes ]; then
+                /etc/init.d/routewolf-subscription-engine start >/dev/null 2>&1 || :
+                /etc/init.d/routewolf-subscription start >/dev/null 2>&1 || :
+            fi
+        fi
+        rm -rf "$staged"
+    }
+    trap cleanup_reference EXIT
+    trap 'exit 1' HUP INT TERM
+    reason tunnel-start
+    phase start
+    if ! device_up "$device"; then
+        case "$proto" in
+            wireguard|amneziawg)
+                load_network_protocol "$proto"
+                ifup "$interface"
+                started=yes
+                ;;
+            openvpn)
+                if [ -n "$instance" ]; then
+                    /etc/init.d/openvpn start "$instance"; started=yes
+                elif [ -n "$interface" ]; then ifup "$interface"; fi
+                ;;
+            outline) [ -n "$interface" ] && ifup "$interface" ;;
+        esac
+    fi
+    reason tunnel-unreachable
+    phase verify
+    for attempt in $(seq 1 20); do
+        if device_up "$device" && ip -4 addr show dev "$device" | grep -q 'inet '; then break; fi
+        sleep 1
+    done
+    device_up "$device" && ip -4 addr show dev "$device" | grep -q 'inet ' || return 1
+    if [ "$routing" != full ] &&
+        ip -4 route show table main dev "$device" | grep -Eq '^(default|0\.0\.0\.0/1|128\.0\.0\.0/1)( |$)'; then
+        reason interface-default
+        return 1
+    fi
+
+    reason route-unavailable
+    uci -q delete firewall.routewolf_ui_existing || :
+    uci -q delete firewall.routewolf_ui_existing_lan || :
+    zone=
+    for candidate in $(uci -q show firewall | sed -n 's/^firewall\.\(.*\)=zone$/\1/p'); do
+        iface_zone=$(uci -q get "firewall.$candidate.network" || :)
+        case " $iface_zone " in *" $interface "*) [ -z "$interface" ] || zone=$(uci -q get "firewall.$candidate.name" || :) ;; esac
+        iface_zone=$(uci -q get "firewall.$candidate.device" || :)
+        case " $iface_zone " in *" $device "*) zone=$(uci -q get "firewall.$candidate.name" || :) ;; esac
+        [ -z "$zone" ] || break
+    done
+    if [ -z "$zone" ]; then
+        zone=rw_existing
+        uci set firewall.routewolf_ui_existing=zone
+        uci set "firewall.routewolf_ui_existing.name=$zone"
+        uci set "firewall.routewolf_ui_existing.device=$device"
+        for entry in input=REJECT output=ACCEPT forward=REJECT masq=1 mtu_fix=1; do
+            uci set "firewall.routewolf_ui_existing.$entry"
+        done
+    fi
+    uci set firewall.routewolf_ui_existing_lan=forwarding
+    uci set firewall.routewolf_ui_existing_lan.src=lan
+    uci set "firewall.routewolf_ui_existing_lan.dest=$zone"
+    configure_full_routing "$routing" "$lan"
+    fw4 check
+    uci commit firewall
+    fw4 reload
+    printf "VPN_ROUTE_DEV='%s'\n" "$device" > "$route.new"
+    mv "$route.new" "$route"
+    /usr/sbin/routewolf-route.sh
+    ip -4 route show table 99 default dev "$device" | grep -q '^default'
+    if [ -f /etc/routewolf-subscription/mode ] && [ ! -e "$state/native-active" ]; then
+        old_proxy=yes
+        /etc/init.d/routewolf-subscription stop
+        /etc/init.d/routewolf-subscription-engine stop
+        /etc/init.d/routewolf-subscription disable
+        /etc/init.d/routewolf-subscription-engine disable
+    fi
+    printf "WATCHDOG_TYPE='none'\n" > "$watchdog.new"
+    mv "$watchdog.new" "$watchdog"
+    uci set "routewolf_ui.ui.active_profile=$profile"
+    uci set "routewolf_ui.ui.preferred_profile=$profile"
+    uci set "routewolf_ui.ui.active_mode=$routing"
+    uci commit routewolf_ui
+    touch "$state/native-active"
+    complete=yes
+)
+
 case "${1:-}" in
     prune) prune_wireguard_slots ;;
     retire) retire_wireguard_slot "$2" ;;
     backup) native_profile "$2" yes ;;
     activate)
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
+        if [ -n "$(uci -q get "routewolf_ui.$2.existing_ref" || :)" ]; then
+            activate_existing "$2"
+            exit "$?"
+        fi
         case "$(uci -q get "routewolf_ui.$2.protocol" || :)" in
             singbox|vless|outline) exec "$lib/singbox.sh" "$2" ;;
         esac

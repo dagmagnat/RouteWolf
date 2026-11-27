@@ -1,119 +1,49 @@
 #!/bin/sh
-# RouteWolf universal bootstrapper for OpenWrt.
-# It deliberately prefers /bin/uclient-fetch over a package named wget,
-# because wget-nossl on some apk-based builds cannot download HTTPS.
+set -eu
+umask 077
 
-ACTION="uninstall"
-REPO="dagmagnat/RouteWolf"
-BRANCH="${ROUTEWOLF_BRANCH:-main}"
-TMP_DIR="/tmp/routewolf-uninstall"
-[ "$ACTION" = "install" ] && TMP_DIR="/tmp/routewolf"
-ARCHIVE_FILE="/tmp/routewolf-uninstall.tar.gz"
-[ "$ACTION" = "install" ] && ARCHIVE_FILE="/tmp/routewolf.tar.gz"
-ARCHIVE_URL="https://codeload.github.com/${REPO}/tar.gz/refs/heads/${BRANCH}"
+source_url=https://raw.githubusercontent.com/dagmagnat/RouteWolf/main
+component_path=luci-app-routewolf/root/usr/libexec/routewolf-ui
+dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 
-SELF_NAME="${0##*/}"
-DIR=$(CDPATH= cd "$(dirname "$0")" 2>/dev/null && pwd)
-
-# Local mode: run directly from an unpacked repository without downloading anything.
-if [ "$SELF_NAME" = "uninstall.sh" ] && [ -f "$DIR/routewolf-uninstall.sh" ]; then
-    chmod +x "$DIR/routewolf-uninstall.sh" 2>/dev/null || true
-    exec sh "$DIR/routewolf-uninstall.sh" "$@"
-fi
-
-fetch_to_file() {
-    _url="$1"
-    _out="$2"
-    rm -f "$_out"
-
-    # OpenWrt's native HTTPS client. Calling the absolute path bypasses
-    # a broken /usr/bin/wget alternative such as wget-nossl.
-    if [ -x /bin/uclient-fetch ]; then
-        /bin/uclient-fetch -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
-        rm -f "$_out"
-        /bin/uclient-fetch -O "$_out" "$_url" && [ -s "$_out" ] && return 0
-        rm -f "$_out"
+run_uninstall() {
+    if [ ! -t 0 ] && ( : </dev/tty ) 2>/dev/null; then
+        sh "$uninstaller" "$@" </dev/tty
+    else
+        sh "$uninstaller" "$@"
     fi
-
-    if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch -O "$_out" "$_url" >/dev/null 2>&1 && [ -s "$_out" ] && return 0
-        rm -f "$_out"
-        uclient-fetch -O "$_out" "$_url" && [ -s "$_out" ] && return 0
-        rm -f "$_out"
-    fi
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 15 --max-time 180 --retry 2 "$_url" -o "$_out" && [ -s "$_out" ] && return 0
-        rm -f "$_out"
-    fi
-
-    if command -v wget >/dev/null 2>&1; then
-        if wget --help 2>&1 | grep -q -- '--no-check-certificate'; then
-            wget -O "$_out" "$_url" && [ -s "$_out" ] && return 0
-        else
-            wget -O "$_out" "$_url" && [ -s "$_out" ] && return 0
-        fi
-        rm -f "$_out"
-    fi
-
-    return 1
 }
 
-extract_archive() {
-    _archive="$1"
-    if command -v tar >/dev/null 2>&1; then
-        tar -xzf "$_archive" -C /tmp >/dev/null 2>&1 && return 0
+if [ "${0##*/}" = uninstall.sh ] && [ -f "$dir/routewolf-uninstall.sh" ]; then
+    uninstaller="$dir/routewolf-uninstall.sh"
+    export ROUTEWOLF_COMPONENT_HELPER="$dir/$component_path/components.sh"
+    run_uninstall "$@"
+    exit "$?"
+fi
+
+work=$(mktemp -d /tmp/routewolf-uninstall.XXXXXX)
+trap 'rm -rf "$work"' EXIT
+trap 'exit 1' HUP INT TERM
+fetch() {
+    local path=$1 dest=$2 native
+    native=$(command -v uclient-fetch || :)
+    [ ! -x /bin/uclient-fetch ] || native=/bin/uclient-fetch
+    if [ -n "$native" ] &&
+       (ulimit -f 256; exec "$native" -T 25 -O "$dest" "$source_url/$path") && [ -s "$dest" ]; then
+        return 0
     fi
-    if command -v busybox >/dev/null 2>&1; then
-        busybox tar -xzf "$_archive" -C /tmp >/dev/null 2>&1 && return 0
-    fi
-    if command -v gzip >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
-        gzip -dc "$_archive" | tar -xf - -C /tmp >/dev/null 2>&1 && return 0
-    fi
-    return 1
+    rm -f "$dest"
+    (ulimit -f 256; exec curl -fsSL --proto '=https' --proto-redir '=https' --max-time 35 \
+        --max-filesize 131072 -o "$dest" "$source_url/$path") && [ -s "$dest" ]
 }
-
-echo "RouteWolf: downloading ${REPO}@${BRANCH}..."
-
-rm -rf "$TMP_DIR" "$ARCHIVE_FILE"     "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf-${BRANCH}"     "/tmp/RouteWolf-main" "/tmp/routewolf-main"     "/tmp/routing-openwrt-${BRANCH}" "/tmp/routing-openwrt-main"
-
-if ! fetch_to_file "$ARCHIVE_URL" "$ARCHIVE_FILE"; then
-    echo "Error: no working HTTPS downloader could fetch RouteWolf."
-    echo "Try the short OpenWrt command:"
-    echo "  /bin/uclient-fetch -O - https://raw.githubusercontent.com/dagmagnat/RouteWolf/main/uninstall.sh | sh"
-    echo "If /bin/uclient-fetch is missing, install/use curl or upload the ZIP manually."
-    exit 1
+uninstaller="$work/uninstall.sh"
+fetch routewolf-uninstall.sh "$uninstaller"
+sh -n "$uninstaller"
+if { [ -f /etc/routewolf/watchdog.conf ] || [ -f /etc/routewolf/component-packages ] ||
+     [ -f /etc/config/routewolf_ui ] || [ -f /etc/routewolf-subscription/mode ]; } &&
+    fetch "$component_path/components.sh" "$work/components.sh" &&
+    fetch "$component_path/dependencies.sh" "$work/dependencies.sh" &&
+    sh -n "$work/components.sh" && sh -n "$work/dependencies.sh"; then
+    export ROUTEWOLF_COMPONENT_HELPER="$work/components.sh"
 fi
-
-if ! extract_archive "$ARCHIVE_FILE"; then
-    echo "Error: failed to unpack the RouteWolf tar.gz archive."
-    echo "BusyBox tar with gzip support is required; it is present in normal OpenWrt images."
-    exit 1
-fi
-rm -f "$ARCHIVE_FILE" 2>/dev/null || true
-
-if [ -d "/tmp/RouteWolf-${BRANCH}" ]; then
-    mv "/tmp/RouteWolf-${BRANCH}" "$TMP_DIR"
-elif [ -d "/tmp/routewolf-${BRANCH}" ]; then
-    mv "/tmp/routewolf-${BRANCH}" "$TMP_DIR"
-elif [ -d "/tmp/RouteWolf-main" ]; then
-    mv "/tmp/RouteWolf-main" "$TMP_DIR"
-elif [ -d "/tmp/routewolf-main" ]; then
-    mv "/tmp/routewolf-main" "$TMP_DIR"
-elif [ -d "/tmp/routing-openwrt-${BRANCH}" ]; then
-    mv "/tmp/routing-openwrt-${BRANCH}" "$TMP_DIR"
-elif [ -d "/tmp/routing-openwrt-main" ]; then
-    mv "/tmp/routing-openwrt-main" "$TMP_DIR"
-else
-    echo "Error: archive was unpacked, but the RouteWolf source directory was not found."
-    ls -la /tmp | grep -i 'route\|wolf' || true
-    exit 1
-fi
-
-cd "$TMP_DIR" || exit 1
-chmod +x install.sh update.sh uninstall.sh cleanup.sh routewolf-install.sh routewolf-uninstall.sh routewolf-check.sh 2>/dev/null || true
-sh ./routewolf-uninstall.sh "$@"
-RC="$?"
-cd / >/dev/null 2>&1 || true
-rm -rf "$TMP_DIR" "$ARCHIVE_FILE" "/tmp/RouteWolf-${BRANCH}" "/tmp/routewolf-${BRANCH}" 2>/dev/null || true
-exit "$RC"
+run_uninstall "$@"

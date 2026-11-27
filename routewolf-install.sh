@@ -6059,7 +6059,18 @@ install_luci_panel() {
         pkg_install luci || return 1
     fi
     sh "$SCRIPT_DIR/luci-app-routewolf/install.sh" || return 1
+    install_project_entrypoints || return 1
     msg "Open LuCI → Services → RouteWolf." "Откройте LuCI → Службы → RouteWolf."
+}
+
+install_project_entrypoints() {
+    mkdir -p /usr/libexec/routewolf || return 1
+    cp "$SCRIPT_DIR/update.sh" /usr/libexec/routewolf/project-update.sh &&
+        cp "$SCRIPT_DIR/project-entrypoint.sh" /usr/sbin/routewolf-update.sh &&
+        cp "$SCRIPT_DIR/routewolf-uninstall.sh" /usr/sbin/routewolf-uninstall.sh &&
+        cp "$SCRIPT_DIR/luci-app-routewolf/root/usr/libexec/routewolf-ui/components.sh" \
+            "$SCRIPT_DIR/luci-app-routewolf/root/usr/libexec/routewolf-ui/dependencies.sh" /usr/libexec/routewolf/ &&
+        chmod 755 /usr/libexec/routewolf/project-update.sh /usr/sbin/routewolf-update.sh /usr/sbin/routewolf-uninstall.sh
 }
 
 routewolf_runtime_files_present() {
@@ -6071,8 +6082,9 @@ routewolf_runtime_files_present() {
 install_luci_mode() {
     INSTALL_STEP=0
     INSTALL_TOTAL_STEPS=1
-    local complete_runtime=0 pending=/etc/routewolf/luci-setup-pending
-    if [ -e "$pending" ] || [ ! -s /etc/routewolf/runtime_version ] || [ ! -s "$ROUTEWOLF_VERSION_FILE" ]; then
+    local complete_runtime=0 current pending=/etc/routewolf/luci-setup-pending
+    current=$(cat /etc/routewolf/runtime_version 2>/dev/null || :)
+    if [ -e "$pending" ] || [ "$current" != 60 ] || [ ! -s "$ROUTEWOLF_VERSION_FILE" ]; then
         complete_runtime=1
         INSTALL_TOTAL_STEPS=4
     fi
@@ -6124,7 +6136,7 @@ if [ "${1:-}" = --luci-panel ]; then
     install_luci_panel
     exit "$?"
 fi
-if [ "${1:-}" != --luci ]; then
+if [ "${1:-}" = --console ] || [ "${1:-}" = --reinstall ]; then
     choose_language
 fi
 
@@ -6155,7 +6167,8 @@ validate_routewolf_installation() {
         return 1
     fi
 
-    if ip route show default 2>/dev/null | grep -Eq ' dev (awg0|wg0|tun[0-9]+|sbtun0|rwsub0|outline0)( |$)'; then
+    if [ "${ROUTEWOLF_SETUP_LUCI:-0}" != 1 ] &&
+        ip route show default 2>/dev/null | grep -Eq ' dev (awg0|wg0|tun[0-9]+|sbtun0|rwsub0|outline0)( |$)'; then
         msgc "$C_RED" "Unsafe VPN default route found in main table" "В основной таблице найден опасный маршрут по умолчанию через VPN"
         ip route show default 2>/dev/null || true
         return 1
@@ -6200,20 +6213,18 @@ msgc "$C_RED" "All actions performed here cannot be rolled back automatically." 
 printf "%b========================================%b\n" "$C_BLUE" "$C_RESET"
 echo ""
 
-if [ "$1" = --luci ]; then
+case "${1:-}" in
+''|--luci)
     install_luci_mode
     exit "$?"
-fi
-if [ "${FORCE_REINSTALL:-0}" != 1 ]; then
-    echo "1) $(prompt "Configure in the terminal" "Настроить в терминале")"
-    echo "2) $(prompt "Install for LuCI management" "Установить для управления через LuCI")"
-    printf '%s' "$(prompt "Setup [1]: " "Способ установки [1]: ")"
-    read -r SETUP_METHOD || SETUP_METHOD=
-    case "$SETUP_METHOD" in
-        2) install_luci_mode; exit "$?" ;;
-        1|'') ;;
-        *) msg "Choose 1 or 2." "Выберите 1 или 2."; exit 1 ;;
-    esac
+    ;;
+--console|--reinstall) ;;
+*) echo 'Usage: install.sh [--luci|--console|--update]' >&2; exit 2 ;;
+esac
+if [ -f /usr/share/luci/menu.d/luci-app-routewolf.json ] && [ -t 0 ]; then
+    printf '%s' "$(prompt "Hide the RouteWolf LuCI panel? [y/N]: " "Убрать панель RouteWolf из LuCI? [y/N]: ")"
+    read -r remove_panel || remove_panel=
+    case "$remove_panel" in y|Y|yes|YES) sh "$SCRIPT_DIR/luci-app-routewolf/uninstall.sh" --panel-only || exit 1 ;; esac
 fi
 migrate_legacy_paths
 
@@ -6222,7 +6233,16 @@ INSTALL_STEP=0
 
 run_step "$(prompt "Checking package repository" "Проверка репозитория пакетов")" check_repo || exit 1
 run_step "$(prompt "Installing basic components" "Установка базовых компонентов")" add_packages || exit 1
-run_step "$(prompt "Selecting and configuring VPN tunnel" "Выбор и настройка VPN-туннеля")" add_tunnel || exit 1
+package_helper="$SCRIPT_DIR/luci-app-routewolf/root/usr/libexec/routewolf-ui/components.sh"
+packages_before=$(mktemp /tmp/routewolf-install-packages.XXXXXX) || exit 1
+sh "$package_helper" snapshot > "$packages_before" || rm -f "$packages_before"
+tunnel_result=0
+run_step "$(prompt "Selecting and configuring VPN tunnel" "Выбор и настройка VPN-туннеля")" add_tunnel || tunnel_result=$?
+if [ -f "$packages_before" ]; then
+    sh "$package_helper" record "$packages_before" || :
+    rm -f "$packages_before"
+fi
+[ "$tunnel_result" = 0 ] || exit "$tunnel_result"
 run_step "$(prompt "Configuring policy routing mark" "Настройка правила маркировки маршрутизации")" add_mark || exit 1
 run_step "$(prompt "Configuring firewall zone" "Настройка firewall-зоны")" add_zone || exit 1
 run_step "$(prompt "Showing tunnel notes" "Показ подсказок по туннелю")" show_manual || exit 1
@@ -6233,6 +6253,7 @@ run_step "$(prompt "Installing RouteWolf management commands" "Установк�
 run_step "$(prompt "Configuring lists and RouteWolf service" "Настройка списков и сервиса RouteWolf")" add_routewolf || exit 1
 run_step "$(prompt "Restarting network" "Перезапуск сети")" /etc/init.d/network restart || exit 1
 run_step "Stable runtime and rollback" install_stable_runtime || exit 1
+install_project_entrypoints || exit 1
 run_step "$(prompt "Final routing verification" "Финальная проверка маршрутизации")" validate_routewolf_installation || exit 1
 
 if [ -n "${ROUTEWOLF_SUB_STAGE:-}" ] && [ "$TUNNEL" = singbox-subscription ]; then

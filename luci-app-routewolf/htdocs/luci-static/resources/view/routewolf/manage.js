@@ -34,6 +34,7 @@ const jobStatus = rpc.declare({ object: 'routewolf_ui', method: 'job_status', re
 const listNodes = rpc.declare({ object: 'routewolf_ui', method: 'nodes', params: ['profile'], reject: true });
 const preflight = rpc.declare({ object: 'routewolf_ui', method: 'preflight', params: ['profile', 'role'], reject: true });
 const listComponents = rpc.declare({ object: 'routewolf_ui', method: 'components', reject: true });
+const installedInterfaces = rpc.declare({ object: 'routewolf_ui', method: 'interfaces', reject: true });
 const jobPhases = {
     preflight: [5, _('Проверка профиля')],
     packages: [20, _('Загрузка и установка компонентов')],
@@ -62,6 +63,8 @@ const jobErrors = {
     'components-remove': _('Менеджер пакетов не удалил все выбранные пакеты. Возможна зависимость другого приложения.'),
     'profile-in-use': _('Сначала переключите основной профиль или снимите назначение резерва.'),
     'profile-remove': _('Не удалось удалить профиль. Проверьте несохранённые изменения и повторите попытку.'),
+    'interface-changed': _('Интерфейс OpenWrt изменился или больше не существует. Обновите список.'),
+    'interface-default': _('Интерфейс уже задаёт маршрут по умолчанию в OpenWrt. Для него доступен режим всего трафика.'),
     'route-unavailable': _('Туннель поднят, но маршрут через него недоступен.'),
     'profile-dns': _('Не удалось подключить DNS профиля. Проверьте IP-адреса и конфигурацию dnsmasq.'),
     'backup-transition': _('Резервный профиль работает или переключается. Дождитесь завершения проверки либо отключите резерв в «Профилях».'),
@@ -1057,6 +1060,7 @@ function profileForm(openNodes, removeProfile) {
     section.addremove = true;
     section.addbtntitle = _('Добавить профиль');
     section.modaltitle = _('Профиль туннеля');
+    section.filter = id => !uci.get(settings, id, 'existing_ref');
     section.handleRemove = async function(id) {
         const protocol = uci.get(settings, id, 'protocol');
         const name = uci.get(settings, id, 'name') || id;
@@ -1465,7 +1469,7 @@ return view.extend({
             backupSelect.value ? confirmActivation(backupSelect.value, action, true) :
                 action('backup', 'none', true)), true);
         function updateBackupButton() {
-            saveBackup.disabled = !result.project_auth || (!backupSelect.value && !result.backup_profile);
+            saveBackup.disabled = !current.project_auth || (!backupSelect.value && !current.backup_profile);
         }
         function updateConnect() {
             connect.disabled = !profileSelect.value || current.paused || !current.project_auth;
@@ -1479,29 +1483,85 @@ return view.extend({
                 value: section['.name'], selected: section['.name'] === primary || null
             }, [section.name])));
             updateConnect();
-            const eligible = profiles.filter(section => section['.name'] !== result.active_profile);
+            const eligible = profiles.filter(section => !section.existing_ref && section['.name'] !== current.active_profile);
             backupSelect.replaceChildren(E('option', { value: '' }, [_('Без резерва')]), ...eligible.map(section =>
-                E('option', { value: section['.name'], selected: section['.name'] === result.backup_profile || null },
+                E('option', { value: section['.name'], selected: section['.name'] === current.backup_profile || null },
                     [section.name])));
             updateBackupButton();
             updateTunnelToggle();
         }
 
-        this.map = profileForm(id => serverDialog(id, action, save, status), async (id, protocol) => {
-            await save();
-            if (!await action('remove_profile', id)) return;
+        const existing = E('div', { class: 'rw-component-list' });
+        async function refreshExisting() {
+            try {
+                const { interfaces } = await installedInterfaces();
+                const refs = new Set(interfaces.map(item => item.profile));
+                for (const profile of availableProfiles().filter(item => item.existing_ref && !refs.has(item['.name']))) {
+                    interfaces.push({ id: profile.existing_ref, label: profile.name, protocol: profile.protocol,
+                        profile: profile['.name'], missing: true });
+                }
+                existing.replaceChildren(...interfaces.map(item => {
+                    const description = item.missing ? _('Интерфейс удалён в OpenWrt') :
+                        item.up ? _('Поднят в OpenWrt') : _('Остановлен в OpenWrt');
+                    const routing = item.profile ? uci.get(settings, item.profile, 'routing') : item.routing;
+                    const actions = [];
+                    if (current.project_auth && item.profile) {
+                        const select = E('select', { 'aria-label': _('Маршрутизация') },
+                            ['full', 'routewolf', 'inverse'].map(key =>
+                                E('option', { value: key, selected: key === routing || null }, [routeNames[key]])));
+                        select.addEventListener('change', ui.createHandlerFn(null, async () => {
+                            uci.set(settings, item.profile, 'routing', select.value);
+                            await save();
+                        }));
+                        if (!item.missing) actions.push(select);
+                        actions.push(button(_('Удалить профиль'), ui.createHandlerFn(null, async () => {
+                            const question = item.missing ? _('Удалить профиль «%s»?') :
+                                _('Удалить профиль «%s» и связанный интерфейс OpenWrt?');
+                            if (window.confirm(question.format(item.label))) await deleteProfile(item.profile, item.protocol);
+                        })));
+                    } else if (current.project_auth && !item.protected && !item.missing) {
+                        actions.push(button(_('Добавить в профили'), ui.createHandlerFn(null, async () => {
+                            if (!window.confirm(_('Передать «%s» в управление RouteWolf? При удалении профиля будет удалён и связанный интерфейс.').format(item.label))) return;
+                            await save();
+                            if (await action('adopt_interface', item.id)) await reloadProfiles();
+                        })));
+                    }
+                    return E('div', { class: 'rw-existing-interface' }, [
+                        E('div', {}, [E('strong', {}, [item.label]), E('small', {}, [
+                            [protocols[item.protocol], description, routeNames[routing]].filter(Boolean).join(' · ')
+                        ])]),
+                        ...(actions.length ? [E('div', { class: 'rw-actions' }, actions)] : [])
+                    ]);
+                }));
+                if (!interfaces.length) existing.appendChild(E('p', {}, [_('Поддерживаемые интерфейсы OpenWrt отсутствуют.')]));
+            } catch {
+                existing.replaceChildren(E('p', { role: 'alert' }, [_('Не удалось загрузить интерфейсы OpenWrt.')]));
+            }
+        }
+        async function reloadProfiles() {
             uci.unload(settings);
             await project.map.render();
+            current = await status();
             preferred = uci.get(settings, 'ui', 'preferred_profile');
             updateProfiles();
+            await refreshExisting();
+        }
+        async function deleteProfile(id, protocol) {
+            await save();
+            if (!await action('remove_profile', id)) return;
+            await reloadProfiles();
             ui.addNotification(null, E('p', {}, [_('Профиль удалён.')]), 'info');
             if (protocol) await componentsDialog(action, protocol);
-        });
+        }
+        this.map = profileForm(id => serverDialog(id, action, save, status), deleteProfile);
         return this.map.render().then(node => {
             updateProfiles();
+            refreshExisting();
             const listEditor = listPanel(result, save, action);
             const profiles = E('div', {}, [
                 E('div', { class: 'rw-compact-table' }, [node]),
+                E('h3', {}, [_('Существующие интерфейсы OpenWrt')]),
+                existing,
                 E('div', { class: 'rw-actions rw-profile-actions' }, [
                     E('div', { class: 'rw-profile-picker' }, [
                         E('label', { for: 'rw-primary-profile' }, [_('Основной профиль')]), profileSelect, connect
@@ -1554,7 +1614,7 @@ return view.extend({
             return E('div', { class: 'rw-luci', keydown: event => {
                 if (event.key === 'Escape' && !feedback.hidden) dismissError();
             } }, [
-                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') + '?v=32' }),
+                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') + '?v=33' }),
                 activateTabs([
                     ['overview', _('Обзор'), liveStatus],
                     ['profiles', _('Профили'), profiles],

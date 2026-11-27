@@ -1,5 +1,5 @@
 #!/bin/sh
-# Keep the automatic channel independent of optional releases and LuCI.
+# Manual updates install RouteWolf and the LuCI panel as one project.
 set -eu
 umask 077
 base=https://github.com/dagmagnat/RouteWolf/releases
@@ -11,9 +11,11 @@ requested=
 panel=0
 
 case "${1:-}" in
-    --luci) requested=60; panel=1; shift ;;
+    '') requested=60; panel=1 ;;
+    check|--luci) requested=60; panel=1; shift ;;
+    --console) requested=60; shift ;;
     --version) requested=${2:-}; [ -n "$requested" ] || exit 2; shift 2 ;;
-    --auto|--lists-auto|--code-auto|check) mode=$1; shift ;;
+    --auto|--lists-auto|--code-auto) mode=$1; shift ;;
 esac
 [ "$#" -eq 0 ] || { echo 'Usage: update.sh [--luci|--version VERSION|--lists-auto|--code-auto]' >&2; exit 2; }
 if [ -n "$requested" ]; then
@@ -58,7 +60,10 @@ case "$available" in ''|*[!0-9]*) available=0 ;; esac
 [ "$available" -ge 8192 ] || { echo 'Less than 8 MiB available RAM; existing project retained' >&2; exit 1; }
 command -v sha256sum >/dev/null 2>&1 || exit 1
 work=$(mktemp -d /tmp/routewolf-update.XXXXXX)
-trap 'rm -rf "$work"' EXIT
+lock=/tmp/routewolf-project-update.lock
+if ! mkdir "$lock" 2>/dev/null; then rm -rf "$work"; exit 75; fi
+printf '%s\n' "$$" > "$lock/pid"
+trap 'rm -rf "$work"; rm -f "$lock/pid"; rmdir "$lock"' EXIT
 trap 'exit 1' HUP INT TERM
 
 manifest="$base/latest/download/stable.manifest"
@@ -73,12 +78,19 @@ case "$version" in ''|0*|*[!0-9]*) exit 1 ;; esac
 release="$base/download/v$version"
 current=$(cat "$state/runtime_version" 2>/dev/null || :)
 if [ "$requested" = 60 ] && { [ "$panel" = 1 ] || [ "$current" != "$version" ]; }; then
-    archive="routewolf-luci-v$version-r32.tar.gz"
-    fetch "$mirrors/luci-v$version-r32.manifest" "$work/luci.manifest" 4096 &&
+    fetch "$mirrors/luci-current.manifest" "$work/luci.manifest" 4096 &&
         [ "$(field format "$work/luci.manifest")" = 1 ] &&
         [ "$(field version "$work/luci.manifest")" = "$version" ] &&
-        [ "$(field luci_archive "$work/luci.manifest")" = "$archive" ] ||
+        field luci_archive "$work/luci.manifest" | grep -Eq '^routewolf-luci-v60-r[0-9]+\.tar\.gz$' ||
         { echo 'LuCI release manifest unavailable or invalid.' >&2; exit 1; }
+    archive=$(field luci_archive "$work/luci.manifest")
+    panel_sha=$(field luci_sha256 "$work/luci.manifest")
+    if [ "$current" = "$version" ] && [ "$panel" = 1 ] &&
+        [ "$(cat "$state/luci_revision" 2>/dev/null || :)" = "$panel_sha" ] &&
+        [ -x /usr/libexec/rpcd/routewolf_ui ] && [ -x /usr/libexec/routewolf-ui/interfaces.sh ]; then
+        echo 'RouteWolf и панель LuCI уже обновлены.'
+        exit 0
+    fi
 fi
 if [ "$requested" = 60 ] && [ "$current" != "$version" ]; then
     runtime="routewolf-v$version.tar.gz"
@@ -117,4 +129,7 @@ fi
     { echo 'Runtime has not reached the requested release; retry the update.' >&2; exit 1; }
 if [ "$panel" = 1 ]; then
     sh "$work/luci/routewolf-install.sh" --luci-panel
+    printf '%s\n' "$panel_sha" > "$state/luci_revision.new"
+    mv "$state/luci_revision.new" "$state/luci_revision"
+    echo "RouteWolf обновлён: $archive"
 fi

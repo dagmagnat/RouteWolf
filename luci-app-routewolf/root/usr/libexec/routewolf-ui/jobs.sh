@@ -126,7 +126,8 @@ stage_backup() (
     profile=$1
     reason invalid-profile
     [ "$(uci -q get "routewolf_ui.$profile" || :)" = profile ] &&
-        [ "$(uci -q get routewolf_ui.ui.active_profile || :)" != "$profile" ] || return 1
+        [ "$(uci -q get routewolf_ui.ui.active_profile || :)" != "$profile" ] &&
+        [ -z "$(uci -q get "routewolf_ui.$profile.existing_ref" || :)" ] || return 1
     prepare_dns "$profile" || return 1
     protocol=$(uci -q get "routewolf_ui.$profile.protocol") || return 1
     case "$protocol" in amneziawg|wireguard|openvpn|singbox|vless|outline) ;; *) return 1 ;; esac
@@ -206,6 +207,7 @@ remove_profile() {
     reason profile-remove
     [ "$(uci -q get "routewolf_ui.$profile" || :)" = profile ] &&
         [ -z "$(uci changes routewolf_ui)" ] || return 1
+    "$lib/interfaces.sh" remove-profile "$profile" || return 1
     uci delete "routewolf_ui.$profile" || return 1
     if [ "$(uci -q get routewolf_ui.ui.preferred_profile || :)" = "$profile" ]; then
         if ! uci delete routewolf_ui.ui.preferred_profile; then
@@ -222,9 +224,14 @@ remove_profile() {
 if [ "${1:-}" = worker ]; then
     shift
     export RW_JOB_STATE="$work"
-    trap 'rm -f "$work/pid"; rmdir "$work/lock" 2>/dev/null || :' EXIT
+    trap 'rm -f "$work/pid" "$work/packages-before"; rmdir "$work/lock" 2>/dev/null || :' EXIT
     trap 'exit 1' HUP INT TERM
     # Never return raw VPN diagnostics or provider responses through RPC.
+    case "$1" in
+        activate|backup)
+            "$lib/components.sh" snapshot > "$work/packages-before" || rm -f "$work/packages-before"
+            ;;
+    esac
     case "$1" in
         backup|activate|pause|resume|restart|repair)
             if ! wait_for_backup_monitor; then
@@ -274,13 +281,17 @@ if [ "${1:-}" = worker ]; then
             ;;
         nodes) "$lib/singbox.sh" "$2" preview ;;
         remove_profile) remove_profile "$2" ;;
+        adopt_interface)
+            reason interface-changed
+            "$lib/interfaces.sh" adopt "$2"
+            ;;
         remove_components) "$lib/components.sh" remove "$2" ;;
         local_lists) "$lib/lists.sh" apply ;;
         lists) run_runtime /usr/sbin/routewolf-stable-update.sh --lists-auto ;;
         subscription_refresh) request_subscription_refresh ;;
         update)
             reason update-failed
-            if run_runtime /usr/sbin/routewolf-stable-update.sh check; then
+            if run_runtime /usr/sbin/routewolf-update.sh check; then
                 reason update-schedule
                 "$lib/schedule.sh" keep
             else
@@ -314,6 +325,10 @@ if [ "${1:-}" = worker ]; then
         *) exit 2 ;;
     esac
     result=$?
+    if [ -f "$work/packages-before" ]; then
+        "$lib/components.sh" record "$work/packages-before" ||
+            logger -t routewolf-ui 'Could not record installed VPN components'
+    fi
     if [ "$result" -eq 0 ]; then
         case "$1" in
             activate|backup) "$lib/profiles.sh" prune || logger -t routewolf-ui 'Could not remove unused tunnel slots' ;;
@@ -336,6 +351,10 @@ case "${1:-}" in
     remove_components)
         case "${2:-}" in ''|*[!a-z,]*) exit 2 ;; esac
         [ "${#2}" -le 48 ] || exit 2
+        ;;
+    adopt_interface)
+        case "${2:-}" in ''|*[!a-zA-Z0-9_.-]*) exit 2 ;; esac
+        [ "${#2}" -le 80 ] || exit 2
         ;;
     local_lists|lists|subscription_refresh|update|reload_project|repair|check|pause|resume|dns_on|dns_off|restart|dco_on|dco_off) ;;
     *) exit 2 ;;

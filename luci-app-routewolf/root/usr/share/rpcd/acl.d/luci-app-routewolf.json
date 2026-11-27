@@ -11,6 +11,7 @@
           "library",
           "nodes",
           "components",
+          "interfaces",
           "list_report"
         ]
       },

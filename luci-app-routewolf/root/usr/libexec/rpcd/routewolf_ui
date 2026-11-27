@@ -68,6 +68,11 @@ status() {
     fi
 
     proto=
+    active_profile=$(uci -q get routewolf_ui.ui.active_profile || :)
+    active_ref=
+    if [ -n "$active_profile" ]; then
+        active_ref=$(uci -q get "routewolf_ui.$active_profile.existing_ref" || :)
+    fi
     case "$tunnel" in
         awg*) proto=amneziawg ;;
         wg*) proto=wireguard ;;
@@ -79,6 +84,17 @@ status() {
         outline0) proto=outline ;;
         '') mode=none ;;
     esac
+    if [ -n "$active_ref" ]; then
+        details=$(/usr/libexec/routewolf-ui/interfaces.sh lookup "$active_ref")
+        if [ -n "$details" ]; then
+            IFS='|' read -r _ reference_proto reference_device _ _ <<EOF
+$details
+EOF
+            [ "$reference_device" != "$tunnel" ] || proto=$reference_proto
+        else
+            tunnel= proto= mode=none
+        fi
+    fi
     case "$proto" in
         amneziawg|wireguard)
             if [ ! -d "/sys/class/net/$tunnel" ] && [ "$(uci -q get "network.$tunnel.proto" || :)" != "$proto" ]; then
@@ -154,7 +170,10 @@ status() {
     uci -q show firewall | grep -q "\.name='routewolf_force_dns'$" && dns_force=1
     json_add_boolean paused "$paused"
     json_add_boolean dns_force "$dns_force"
-    json_add_string active_profile "$(uci -q get routewolf_ui.ui.active_profile || :)"
+    if [ -n "$active_profile" ] && [ "$(uci -q get "routewolf_ui.$active_profile" || :)" != profile ]; then
+        active_profile=
+    fi
+    json_add_string active_profile "$active_profile"
     json_add_string backup_profile "$backup_profile"
     json_add_string backup_state "$backup_state"
     json_add_string backup_mode "$backup_mode"
@@ -284,7 +303,10 @@ preflight() (
     [ "$(uci -q get "routewolf_ui.$profile" || :)" = profile ] || return 1
     protocol=$(uci -q get "routewolf_ui.$profile.protocol") || return 1
     . /usr/libexec/routewolf-ui/dependencies.sh
-    missing=$(missing_components "$protocol") || return 1
+    missing=
+    if [ -z "$(uci -q get "routewolf_ui.$profile.existing_ref" || :)" ]; then
+        missing=$(missing_components "$protocol") || return 1
+    fi
     if [ "$role" = backup ]; then
         missing="$missing $(missing_backup_tools "$protocol")"
     fi
@@ -308,7 +330,7 @@ job_start() {
 }
 
 case "${1:-}:${2:-}" in
-    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"geodata":{"kind":"string","category":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"nodes":{"profile":"string"},"list_report":{},"components":{},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
+    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"geodata":{"kind":"string","category":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"nodes":{"profile":"string"},"list_report":{},"components":{},"interfaces":{},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
     call:status) status ;;
     call:job_status) job_status ;;
     call:preflight) preflight ;;
@@ -322,6 +344,7 @@ case "${1:-}:${2:-}" in
         ;;
     call:list_report) list_report ;;
     call:components) /usr/libexec/routewolf-ui/components.sh list ;;
+    call:interfaces) /usr/libexec/routewolf-ui/interfaces.sh list ;;
     call:job)
         if job_start; then printf '%s\n' '{"ok":true}'; else printf '%s\n' '{"ok":false}'; fi
         ;;

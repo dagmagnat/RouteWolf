@@ -2,7 +2,7 @@
 set -eu
 umask 077
 
-lib=/usr/libexec/routewolf-ui
+lib=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$lib/dependencies.sh"
 
 groups='xray singbox openvpn amneziawg wireguard'
@@ -153,7 +153,7 @@ list_components() {
 }
 
 remove_components() {
-    local selected=$1 group package target old_ifs
+    local selected=$1 owner_file=${2:-} group package target old_ifs
     case "$selected" in ''|*[!a-z,]*) return 2 ;; esac
     old_ifs=$IFS
     IFS=,
@@ -167,7 +167,11 @@ remove_components() {
     for group in "$@"; do
         group_packages "$group" >/dev/null || return 2
         [ -z "$(group_blocker "$group")" ] || return 1
-        target="$target $(removable_packages "$group")"
+        for package in $(removable_packages "$group"); do
+            if [ -z "$owner_file" ] || grep -Fxq "$package" "$owner_file"; then
+                target="$target $package"
+            fi
+        done
     done
     set -- $target
     [ "$#" -gt 0 ] || return 0
@@ -184,8 +188,71 @@ remove_components() {
     return 0
 }
 
+record_components() {
+    local before=$1 group package ledger=/etc/routewolf/component-packages staging
+    [ -r "$before" ] || return 1
+    read_inventory || return 1
+    mkdir -p /etc/routewolf
+    staging=$(mktemp /etc/routewolf/component-packages.XXXXXX)
+    {
+        if [ -f "$ledger" ]; then cat "$ledger"; fi
+        for group in $groups; do
+            for package in $(removable_packages "$group"); do
+                grep -Fxq "$package" "$before" || printf '%s\n' "$package"
+            done
+        done
+    } | sort -u > "$staging"
+    mv "$staging" "$ledger"
+}
+
+remove_owned() {
+    local ledger=$1 group package
+    [ -s "$ledger" ] || return 0
+    for group in $groups; do
+        for package in $(group_packages "$group"); do
+            grep -Fxq "$package" "$ledger" || continue
+            if ! remove_components "$group" "$ledger"; then
+                printf '%s\n' "Сохранены пакеты группы $group: используются или защищены зависимостями." >&2
+            fi
+            break
+        done
+    done
+}
+
+legacy_packages() {
+    local group protocol found
+    read_inventory || return 1
+    found=$(uci -q show routewolf_ui | awk -F= '
+        /\.protocol=/ { protocol[$1]=substr($2,2,length($2)-2) }
+        /\.existing_ref=/ { sub(/\.existing_ref$/, ".protocol", $1); external[$1]=1 }
+        END { for (key in protocol) if (!external[key]) print protocol[key] }')
+    protocol=$(sed -n "s/^WATCHDOG_TYPE='\([^']*\)'$/\1/p" /etc/routewolf/watchdog.conf 2>/dev/null | head -n1)
+    case "$protocol" in wg) protocol=wireguard ;; awg) protocol=amneziawg ;; ovpn) protocol=openvpn ;; esac
+    found="$found $protocol"
+    if [ -f /etc/routewolf/outline.conf ]; then found="$found outline"; fi
+    if [ -f /etc/routewolf/singbox.conf ]; then found="$found singbox"; fi
+    if [ -f /etc/routewolf-subscription/mode ]; then
+        if grep -qx xray /etc/routewolf-subscription/engine 2>/dev/null; then
+            found="$found vless"
+        else
+            found="$found singbox"
+        fi
+    fi
+    for group in $groups; do
+        for protocol in $(group_protocols "$group"); do
+            case " $(printf '%s' "$found" | tr '\n' ' ') " in
+                *" $protocol "*) removable_packages "$group"; break ;;
+            esac
+        done
+    done
+}
+
 case "${1:-}" in
     list) list_components ;;
     remove) remove_components "${2:-}" ;;
+    snapshot) read_inventory; printf '%s\n' "$installed" ;;
+    record) record_components "$2" ;;
+    legacy-packages) legacy_packages ;;
+    remove-owned) remove_owned "$2" ;;
     *) exit 2 ;;
 esac

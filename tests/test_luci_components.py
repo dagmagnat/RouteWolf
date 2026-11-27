@@ -118,6 +118,8 @@ class LuCIComponentTests(unittest.TestCase):
         start = jobs.index('remove_profile() {')
         end = jobs.index('\n}', start) + 2
         script = jobs[start:end] + r'''
+lib=.
+component_script() { :; }
 reason() { :; }
 uci() {
     case "$*" in
@@ -134,6 +136,7 @@ if remove_profile primary; then exit 1; fi
 if remove_profile reserve; then exit 2; fi
 remove_profile old
 '''
+        script = script.replace('"$lib/interfaces.sh" remove-profile', 'component_script')
         result = subprocess.run(['sh', '-s'], input=script, capture_output=True,
                                 text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)

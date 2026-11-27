@@ -191,6 +191,12 @@
 .rw-component-option input[type="checkbox"] { position:static; margin:3px 0 0; }
 .rw-component-option strong, .rw-component-option small { display:block; overflow-wrap:anywhere; }
 .rw-component-option small { opacity:.8; }
+.rw-existing-interface {
+    padding:9px 11px; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between;
+    gap:8px; border:1px solid var(--rw-line); border-radius:7px;
+}
+.rw-existing-interface small { display:block; opacity:.8; }
+.rw-luci .rw-existing-interface .rw-actions { margin:0; }
 .rw-activate-modal p[role="status"]:empty { display:none; }
 @keyframes rw-install-spin { to { transform:rotate(1turn); } }
 @media (prefers-reduced-motion:reduce) { .rw-install-spinner { animation:none; } }

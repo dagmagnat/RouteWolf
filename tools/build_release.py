@@ -14,8 +14,9 @@ NAME = re.search(r'^PROJECT_VERSION="([a-zA-Z0-9._-]+)"$', (ROOT / 'routewolf-in
 RELEASES = ROOT / 'releases'
 MANIFEST = RELEASES / (f'v{VERSION}.manifest' if VERSION >= 60 else 'stable.manifest')
 PANEL = RELEASES / f'routewolf-luci-v{VERSION}.tar.gz'
-PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r32.tar.gz' if VERSION == 60 else None
-PANEL_MANIFEST = RELEASES / 'luci-v60-r32.manifest' if VERSION == 60 else None
+PANEL_UPDATE = RELEASES / 'routewolf-luci-v60-r33.tar.gz' if VERSION == 60 else None
+PANEL_MANIFEST = RELEASES / 'luci-v60-r33.manifest' if VERSION == 60 else None
+PANEL_CURRENT = RELEASES / 'luci-current.manifest'
 MIGRATION_AGENT = RELEASES / 'routewolf-migrate-v60-r3.sh' if VERSION == 60 else None
 AGENT_PATH = 'usr/sbin/routewolf-stable-update.sh'
 FILES = (
@@ -57,6 +58,7 @@ def runtime_files():
 def panel_files():
     app = ROOT / 'luci-app-routewolf'
     paths = [ROOT / 'routewolf-install.sh', ROOT / 'routewolf-uninstall.sh',
+             ROOT / 'update.sh', ROOT / 'project-entrypoint.sh',
              ROOT / 'runtime/routewolf-stable-update.sh', app / 'install.sh', app / 'uninstall.sh']
     paths.extend(p for directory in ('root', 'htdocs') for p in (app / directory).rglob('*') if p.is_file())
     paths.extend(ROOT / 'subscription' / p for p in ('install.sh', 'controller.sh', 'engine.init', 'monitor.init',
@@ -109,6 +111,7 @@ def verify_existing():
             assert ui['format'] == '1' and ui['version'] == str(VERSION)
             assert ui['luci_archive'] == PANEL_UPDATE.name
             assert ui['luci_sha256'] == hashlib.sha256(PANEL_UPDATE.read_bytes()).hexdigest()
+            assert PANEL_CURRENT.read_bytes() == PANEL_MANIFEST.read_bytes()
             bridge = MIGRATION_AGENT.read_bytes()
             assert ui['upgrade_agent_sha256'] == hashlib.sha256(bridge).hexdigest()
             assert bridge == (ROOT / 'runtime/routewolf-stable-update.sh').read_bytes()
@@ -169,6 +172,7 @@ def build_panel_update():
         f'upgrade_agent_sha256={hashlib.sha256(bridge).hexdigest()}\n',
         encoding='utf-8', newline='\n',
     )
+    PANEL_CURRENT.write_bytes(PANEL_MANIFEST.read_bytes())
     print(f'Built {PANEL_UPDATE.name}: {len(content)} bytes')
 
 

@@ -376,7 +376,7 @@ class StabilityTests(unittest.TestCase):
 
     def test_opt_in_release_keeps_awg_dns_and_existing_schedules(self):
         self.seed_release()
-        for name in (f'v{VERSION}.manifest', PANEL_MANIFEST.name, 'routewolf-migrate-v60-r3.sh'):
+        for name in (f'v{VERSION}.manifest', 'luci-current.manifest', 'routewolf-migrate-v60-r3.sh'):
             shutil.copyfile(ROOT/'releases'/name, '/tmp/rw-downloads/'+name)
         self.seed_lists()
         write('/etc/config/network', "config interface 'awg0'\n\toption proto 'amneziawg'\n")
@@ -634,6 +634,10 @@ else:sys.exit(2)
         write('/tmp/dnsmasq.d/domains.lst','RouteWolf fixture\n')
         write('/etc/openvpn/routewolf.ovpn','private-fixture\n')
         write('/etc/openvpn/unrelated.ovpn','unrelated-fixture\n')
+        write('/etc/config/routewolf_ui',json.dumps({'ui': {'type':'settings'}}))
+        write('/usr/share/luci/menu.d/luci-app-routewolf.json','{}')
+        write('/www/luci-static/resources/view/routewolf/manage.js','// fixture')
+        write('/etc/init.d/routewolf-ui-backup','#!/bin/sh\nexit 0\n',True)
 
     def run_uninstall(self,*args,input=''):
         return subprocess.run(['sh',str(ROOT/'routewolf-uninstall.sh'),*args],input=input,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=15)
@@ -647,7 +651,7 @@ else:sys.exit(2)
         self.assertTrue(Path('/usr/sbin/rw').exists())
         self.assertNotIn('fw4',StabilityTests.actions(self))
 
-    def test_default_removes_project_and_cron_but_preserves_vpn_dns_and_neighbours(self):
+    def test_default_removes_project_panel_tunnels_and_cron_but_preserves_neighbours(self):
         dns=Path('/etc/config/dhcp').read_bytes()
         result=self.run_uninstall('--yes');self.assertEqual(result.returncode,0,result.stdout)
         self.assertFalse(Path('/usr/sbin/rw').exists())
@@ -662,7 +666,12 @@ else:sys.exit(2)
         self.assertEqual(set(firewall),{'neighbour','other_rule','zone'})
         self.assertNotEqual(call('nft', 'list', 'set', 'inet', 'fw4', 'vpn_domains').returncode, 0)
         self.assertEqual(call('nft', 'list', 'set', 'inet', 'fw4', 'unrelated').returncode, 0)
-        self.assertTrue(Path('/etc/openvpn/routewolf.ovpn').exists())
+        self.assertFalse(Path('/etc/openvpn/routewolf.ovpn').exists())
+        self.assertFalse(Path('/etc/config/routewolf_ui').exists())
+        self.assertFalse(Path('/usr/share/luci/menu.d/luci-app-routewolf.json').exists())
+        self.assertFalse(Path('/www/luci-static/resources/view/routewolf/manage.js').exists())
+        self.assertFalse(Path('/etc/init.d/routewolf-ui-backup').exists())
+        self.assertTrue(Path('/etc/openvpn/unrelated.ovpn').exists())
         self.assertTrue(Path('/tmp/dnsmasq.d/other.conf').exists())
         self.assertNotIn('network restart',StabilityTests.actions(self))
         self.assertNotIn('ifdown',StabilityTests.actions(self))
@@ -670,7 +679,9 @@ else:sys.exit(2)
         with tarfile.open(backup,'r:gz') as archive:self.assertEqual(archive.extractfile('etc/config/dhcp').read(),dns)
         self.assertEqual(backup.stat().st_mode & 0o777,0o600)
 
-    def test_purge_is_explicit_and_preserves_unrelated_openvpn_and_wan(self):
+    def test_legacy_purge_alias_removes_only_owned_interfaces(self):
+        self.packages['network']['awg0']['routewolf_ui']='1'
+        write('/etc/config/network',json.dumps(self.packages['network']))
         result=self.run_uninstall('--purge',input='DELETE\n');self.assertEqual(result.returncode,0,result.stdout)
         network=json.loads(Path('/etc/config/network').read_text())
         self.assertNotIn('awg0',network);self.assertEqual(network['wan'],self.packages['network']['wan'])
