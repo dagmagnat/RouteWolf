@@ -55,7 +55,7 @@ fi
 if [ -f "$here/../runtime/routewolf-stable-update.sh" ]; then
     put_file /usr/sbin/routewolf-stable-update.sh 755 "$here/../runtime/routewolf-stable-update.sh"
 fi
-for script in dependencies jobs lists profiles singbox schedule backup backup-proxy dns geodata subscription-refresh nodes; do
+for script in dependencies jobs lists profiles singbox schedule backup backup-proxy dns geodata subscription-refresh nodes components; do
     put_file "/usr/libexec/routewolf-ui/$script.sh" 755 "$here/root/usr/libexec/routewolf-ui/$script.sh"
 done
 put_file /usr/libexec/routewolf-ui/nodes.uc 644 "$here/root/usr/libexec/routewolf-ui/nodes.uc"

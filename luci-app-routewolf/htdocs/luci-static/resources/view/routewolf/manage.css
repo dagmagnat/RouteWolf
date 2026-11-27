@@ -183,6 +183,15 @@
 .rw-install-spinner { width:14px; height:14px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:rw-install-spin .85s linear infinite; }
 .rw-install-error:empty { display:none; }
 .rw-install-error { color:#df6a71; }
+.rw-component-list { display:grid; gap:7px; max-height:min(45dvh,360px); overflow:auto; }
+.rw-component-option {
+    display:grid; grid-template-columns:auto minmax(0,1fr); gap:10px; align-items:start;
+    padding:9px 11px; border:1px solid color-mix(in srgb,currentColor 22%,transparent); border-radius:7px;
+}
+.rw-component-option input[type="checkbox"] { position:static; margin:3px 0 0; }
+.rw-component-option strong, .rw-component-option small { display:block; overflow-wrap:anywhere; }
+.rw-component-option small { opacity:.8; }
+.rw-activate-modal p[role="status"]:empty { display:none; }
 @keyframes rw-install-spin { to { transform:rotate(1turn); } }
 @media (prefers-reduced-motion:reduce) { .rw-install-spinner { animation:none; } }
 .rw-luci .rw-results { white-space:pre-wrap; overflow-wrap:anywhere; max-height:clamp(100px,24vh,220px); overflow:auto; }

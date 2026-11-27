@@ -308,7 +308,7 @@ job_start() {
 }
 
 case "${1:-}:${2:-}" in
-    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"geodata":{"kind":"string","category":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"nodes":{"profile":"string"},"list_report":{},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
+    list:) printf '%s\n' '{"status":{},"job_status":{},"preflight":{"profile":"string","role":"string"},"geodata":{"kind":"string","category":"string"},"library":{"kind":"string","query":"string","offset":"string","group":"string","limit":"string"},"nodes":{"profile":"string"},"list_report":{},"components":{},"job":{"action":"string","profile":"string"},"startup":{"action":"string"},"code_updates":{"action":"string"},"list_schedule":{"action":"string"}}' ;;
     call:status) status ;;
     call:job_status) job_status ;;
     call:preflight) preflight ;;
@@ -321,6 +321,7 @@ case "${1:-}:${2:-}" in
         /usr/libexec/routewolf-ui/nodes.sh list "$profile" 2>/dev/null
         ;;
     call:list_report) list_report ;;
+    call:components) /usr/libexec/routewolf-ui/components.sh list ;;
     call:job)
         if job_start; then printf '%s\n' '{"ok":true}'; else printf '%s\n' '{"ok":false}'; fi
         ;;

@@ -33,6 +33,7 @@ const jobStart = rpc.declare({ object: 'routewolf_ui', method: 'job', params: ['
 const jobStatus = rpc.declare({ object: 'routewolf_ui', method: 'job_status', reject: true });
 const listNodes = rpc.declare({ object: 'routewolf_ui', method: 'nodes', params: ['profile'], reject: true });
 const preflight = rpc.declare({ object: 'routewolf_ui', method: 'preflight', params: ['profile', 'role'], reject: true });
+const listComponents = rpc.declare({ object: 'routewolf_ui', method: 'components', reject: true });
 const jobPhases = {
     preflight: [5, _('Проверка профиля')],
     packages: [20, _('Загрузка и установка компонентов')],
@@ -56,6 +57,11 @@ const jobErrors = {
     'tunnel-start': _('Интерфейс туннеля не удалось запустить.'),
     'tunnel-unreachable': _('Туннель запустился, но проверка связи не прошла.'),
     'network-restart-required': _('После перезапуска сети OpenWrt не загрузил протокол. Перезагрузите роутер через «Система → Перезагрузка» и повторите активацию.'),
+    'components-read': _('Не удалось прочитать список установленных пакетов.'),
+    'components-in-use': _('Один из выбранных компонентов используется. Обновите список и повторите попытку.'),
+    'components-remove': _('Менеджер пакетов не удалил все выбранные пакеты. Возможна зависимость другого приложения.'),
+    'profile-in-use': _('Сначала переключите основной профиль или снимите назначение резерва.'),
+    'profile-remove': _('Не удалось удалить профиль. Проверьте несохранённые изменения и повторите попытку.'),
     'route-unavailable': _('Туннель поднят, но маршрут через него недоступен.'),
     'profile-dns': _('Не удалось подключить DNS профиля. Проверьте IP-адреса и конфигурацию dnsmasq.'),
     'backup-transition': _('Резервный профиль работает или переключается. Дождитесь завершения проверки либо отключите резерв в «Профилях».'),
@@ -300,6 +306,102 @@ function subscriptionSchedule(action, save, showError) {
     ]);
 }
 
+const componentNames = {
+    xray: _('Xray · VLESS / WebSocket'),
+    singbox: _('sing-box · включая Outline'),
+    openvpn: _('OpenVPN'),
+    amneziawg: _('AmneziaWG'),
+    wireguard: _('WireGuard')
+};
+const componentBlockers = {
+    profile: _('Используется сохранённым профилем'),
+    running: _('Используется работающим или приостановленным туннелем'),
+    network: _('Используется сетевой конфигурацией OpenWrt'),
+    'built-in': _('Входит в прошивку')
+};
+
+async function componentsDialog(action, protocol = '') {
+    const preferred = ({ vless: 'xray', outline: 'singbox' })[protocol] || protocol;
+    let groups;
+    try {
+        groups = (await listComponents()).groups;
+    } catch {
+        ui.addNotification(null, E('p', {}, [jobErrors['components-read']]));
+        return;
+    }
+    if (preferred) {
+        groups = groups.filter(group => group.id === preferred && !group.blocker);
+        if (!groups.length) return;
+    }
+
+    const list = E('div', { class: 'rw-component-list' });
+    const message = E('p', { role: 'status' });
+    const error = E('p', { role: 'alert', class: 'rw-install-error' });
+    const close = button(_('Закрыть'), () => ui.hideModal());
+    let fields = [];
+    const remove = button(_('Удалить выбранное'), ui.createHandlerFn(null, async () => {
+        const selected = fields.filter(({ field }) => field.checked).map(({ group }) => group);
+        if (!selected.length) return;
+        const names = selected.map(group => componentNames[group.id]).join(', ');
+        if (!window.confirm(_('Удалить установленные пакеты: %s?').format(names))) return;
+        close.disabled = true;
+        error.textContent = '';
+        message.textContent = _('Проверка и удаление пакетов…');
+        fields.forEach(({ field }) => { field.disabled = true; });
+        try {
+            const ok = await action('remove_components', selected.map(group => group.id).join(','), false, {
+                update: state => {
+                    if (state.phase === 'remove') message.textContent = _('Удаление пакетов…');
+                },
+                fail: text => { error.textContent = text; }
+            });
+            if (ok) {
+                ui.hideModal();
+                ui.addNotification(null, E('p', {}, [_('Выбранные пакеты удалены.')]), 'info');
+            } else {
+                const latest = (await listComponents()).groups;
+                renderGroups(preferred ? latest.filter(group => group.id === preferred) : latest);
+            }
+        } catch {
+            list.replaceChildren();
+            remove.disabled = true;
+            error.textContent = jobErrors['components-read'];
+        } finally {
+            close.disabled = false;
+            message.textContent = '';
+        }
+    }), true);
+    function renderGroups(rows) {
+        fields = rows.map(group => {
+            const field = E('input', { type: 'checkbox', disabled: group.blocker ? true : null });
+            field.addEventListener('change', () => {
+                remove.disabled = !fields.some(item => item.field.checked);
+            });
+            return { group, field };
+        });
+        list.replaceChildren(...fields.map(({ group, field }) => {
+            const detail = componentBlockers[group.blocker] ||
+                (group.removable.length < group.packages.length ? _('Для удаления: %s').format(group.removable.join(', ')) : '');
+            return E('label', { class: 'rw-component-option' }, [
+                field, E('span', {}, [
+                    E('strong', {}, [componentNames[group.id]]),
+                    E('small', {}, [group.packages.join(', ')]),
+                    ...(detail ? [E('small', {}, [detail])] : [])
+                ])
+            ]);
+        }));
+        if (!rows.length) list.appendChild(E('p', {}, [_('Компоненты туннелей не установлены.')]));
+        remove.disabled = true;
+    }
+    renderGroups(groups);
+    ui.showModal(_('Компоненты туннелей'), [
+        E('p', {}, [preferred ? _('Профиль удалён. Его пакеты можно удалить сейчас или позже во вкладке «Управление».') :
+            _('Выберите пакеты, которые больше не нужны. Одной галочкой выбирается весь компонент.')]),
+        list, message, error,
+        E('div', { class: 'rw-actions rw-activate-actions' }, [remove, close])
+    ], 'rw-activate-modal');
+}
+
 function servicePanel(result, action, showError, save) {
     const setting = change => async value => {
         if (!await change(value))
@@ -326,12 +428,12 @@ function servicePanel(result, action, showError, save) {
         ...items,
         subscriptionSchedule(action, save, showError),
         E('h3', { class: 'rw-service-heading' }, [_('Действия')]),
-        E('div', { class: 'rw-actions rw-service-actions' }, commands.map(([label, cmd]) => button(label, ui.createHandlerFn(null, () => {
+        E('div', { class: 'rw-actions rw-service-actions' }, [...commands.map(([label, cmd]) => button(label, ui.createHandlerFn(null, () => {
             if ((cmd === 'restart' || cmd === 'reload_project') &&
                 !window.confirm(cmd === 'restart' ? _('Перезапустить действующий туннель?') : _('Перезапустить маршрутизацию RouteWolf?')))
                 return;
             return action(cmd);
-        }))))
+        }))), button(_('Удалить компоненты'), ui.createHandlerFn(null, () => componentsDialog(action)))])
     ]);
 }
 
@@ -947,7 +1049,7 @@ function listPanel(result, save, action) {
     };
 }
 
-function profileForm(openNodes) {
+function profileForm(openNodes, removeProfile) {
     const map = new form.Map('routewolf_ui');
     const section = map.section(form.GridSection, 'profile', _('Профили туннелей'),
         _('Из панели можно активировать AmneziaWG, WireGuard, OpenVPN, sing-box, VLESS · Xray и Outline.'));
@@ -955,6 +1057,12 @@ function profileForm(openNodes) {
     section.addremove = true;
     section.addbtntitle = _('Добавить профиль');
     section.modaltitle = _('Профиль туннеля');
+    section.handleRemove = async function(id) {
+        const protocol = uci.get(settings, id, 'protocol');
+        const name = uci.get(settings, id, 'name') || id;
+        if (!window.confirm(_('Удалить профиль «%s»?').format(name))) return;
+        await removeProfile(id, protocol);
+    };
     const renderActions = section.renderRowActions;
     section.renderRowActions = function(id, ...args) {
         const cell = renderActions.call(this, id, ...args);
@@ -1379,7 +1487,16 @@ return view.extend({
             updateTunnelToggle();
         }
 
-        this.map = profileForm(id => serverDialog(id, action, save, status));
+        this.map = profileForm(id => serverDialog(id, action, save, status), async (id, protocol) => {
+            await save();
+            if (!await action('remove_profile', id)) return;
+            uci.unload(settings);
+            await project.map.render();
+            preferred = uci.get(settings, 'ui', 'preferred_profile');
+            updateProfiles();
+            ui.addNotification(null, E('p', {}, [_('Профиль удалён.')]), 'info');
+            if (protocol) await componentsDialog(action, protocol);
+        });
         return this.map.render().then(node => {
             updateProfiles();
             const listEditor = listPanel(result, save, action);
@@ -1437,7 +1554,7 @@ return view.extend({
             return E('div', { class: 'rw-luci', keydown: event => {
                 if (event.key === 'Escape' && !feedback.hidden) dismissError();
             } }, [
-                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') + '?v=29' }),
+                E('link', { rel: 'stylesheet', href: L.resource('view/routewolf/manage.css') + '?v=32' }),
                 activateTabs([
                     ['overview', _('Обзор'), liveStatus],
                     ['profiles', _('Профили'), profiles],

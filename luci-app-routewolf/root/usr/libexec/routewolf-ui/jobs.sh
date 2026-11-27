@@ -198,6 +198,27 @@ request_subscription_refresh() {
     mkdir -p "$target" && touch "$target/refresh-request"
 }
 
+remove_profile() {
+    local profile=$1
+    reason profile-in-use
+    [ "$(uci -q get routewolf_ui.ui.active_profile || :)" != "$profile" ] &&
+        [ "$(uci -q get routewolf_ui.ui.backup_profile || :)" != "$profile" ] || return 1
+    reason profile-remove
+    [ "$(uci -q get "routewolf_ui.$profile" || :)" = profile ] &&
+        [ -z "$(uci changes routewolf_ui)" ] || return 1
+    uci delete "routewolf_ui.$profile" || return 1
+    if [ "$(uci -q get routewolf_ui.ui.preferred_profile || :)" = "$profile" ]; then
+        if ! uci delete routewolf_ui.ui.preferred_profile; then
+            uci -q revert routewolf_ui
+            return 1
+        fi
+    fi
+    if ! uci commit routewolf_ui; then
+        uci -q revert routewolf_ui
+        return 1
+    fi
+}
+
 if [ "${1:-}" = worker ]; then
     shift
     export RW_JOB_STATE="$work"
@@ -252,6 +273,8 @@ if [ "${1:-}" = worker ]; then
             fi
             ;;
         nodes) "$lib/singbox.sh" "$2" preview ;;
+        remove_profile) remove_profile "$2" ;;
+        remove_components) "$lib/components.sh" remove "$2" ;;
         local_lists) "$lib/lists.sh" apply ;;
         lists) run_runtime /usr/sbin/routewolf-stable-update.sh --lists-auto ;;
         subscription_refresh) request_subscription_refresh ;;
@@ -307,8 +330,12 @@ case "${1:-}" in
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
         [ ! -e "$state/paused-route.conf" ] && [ ! -e "$state/paused-singbox" ] || exit 2
         ;;
-    backup|nodes)
+    backup|nodes|remove_profile)
         case "${2:-}" in ''|*[!a-zA-Z0-9_]*) exit 2 ;; esac
+        ;;
+    remove_components)
+        case "${2:-}" in ''|*[!a-z,]*) exit 2 ;; esac
+        [ "${#2}" -le 48 ] || exit 2
         ;;
     local_lists|lists|subscription_refresh|update|reload_project|repair|check|pause|resume|dns_on|dns_off|restart|dco_on|dco_off) ;;
     *) exit 2 ;;
