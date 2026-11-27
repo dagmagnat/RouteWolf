@@ -27,6 +27,19 @@ network_protocol_loaded() {
     esac
 }
 
+load_network_protocol() {
+    local attempt
+    network_protocol_loaded "$1" && return 0
+    phase network-restart
+    reason network-restart-required
+    /etc/init.d/network restart >/dev/null 2>&1 || return 1
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        network_protocol_loaded "$1" && return 0
+        sleep 1
+    done
+    network_protocol_loaded "$1"
+}
+
 missing_components() {
     case "$1" in
         wireguard)

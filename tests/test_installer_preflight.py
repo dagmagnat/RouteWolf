@@ -20,6 +20,31 @@ def run(body, *names):
 
 
 class InstallerPreflightTests(unittest.TestCase):
+    def test_luci_restarts_network_only_for_unloaded_protocol(self):
+        dependencies = (Path(__file__).resolve().parents[1] /
+                        'luci-app-routewolf/root/usr/libexec/routewolf-ui/dependencies.sh')
+        definitions = dependencies.read_text(encoding='utf-8').replace(
+            '/etc/init.d/network restart >/dev/null 2>&1', 'restart_network')
+        behavior = r'''
+phase() { printf '%s\n' "$1"; }
+reason() { :; }
+sleep() { :; }
+network_protocol_loaded() { [ "$1" = openvpn ] || [ "$loaded" = yes ]; }
+restart_network() { echo restart; loaded=$after_restart; }
+
+loaded=no; after_restart=yes
+load_network_protocol openvpn || exit 1
+load_network_protocol wireguard || exit 2
+load_network_protocol wireguard || exit 3
+loaded=no; after_restart=no
+if load_network_protocol amneziawg; then exit 4; fi
+'''
+        result = subprocess.run(['sh', '-s'], input=definitions + '\n' + behavior,
+                                encoding='utf-8', capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['network-restart', 'restart',
+                                                      'network-restart', 'restart'])
+
     def test_removes_named_and_anonymous_legacy_domain_sets(self):
         result = run(r'''
 uci() {

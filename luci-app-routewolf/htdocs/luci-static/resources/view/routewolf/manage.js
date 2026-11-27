@@ -38,6 +38,7 @@ const jobPhases = {
     packages: [20, _('Загрузка и установка компонентов')],
     download: [45, _('Загрузка подписки')],
     config: [60, _('Проверка конфигурации')],
+    'network-restart': [68, _('Перезапуск сети. Связь с роутером может ненадолго пропасть.')],
     start: [75, _('Запуск туннеля')],
     verify: [90, _('Проверка соединения')],
     done: [100, _('Готово')]
@@ -54,7 +55,7 @@ const jobErrors = {
     'insufficient-proxy-ram': _('Для sing-box, Xray и Outline нужно не менее 64 МиБ RAM по данным Linux. Выберите AmneziaWG, WireGuard или OpenVPN.'),
     'tunnel-start': _('Интерфейс туннеля не удалось запустить.'),
     'tunnel-unreachable': _('Туннель запустился, но проверка связи не прошла.'),
-    'network-restart-required': _('Компоненты установлены. Перезапустите сеть или перезагрузите роутер через «Система → Перезагрузка», затем снова активируйте профиль.'),
+    'network-restart-required': _('После перезапуска сети OpenWrt не загрузил протокол. Перезагрузите роутер через «Система → Перезагрузка» и повторите активацию.'),
     'route-unavailable': _('Туннель поднят, но маршрут через него недоступен.'),
     'profile-dns': _('Не удалось подключить DNS профиля. Проверьте IP-адреса и конфигурацию dnsmasq.'),
     'backup-transition': _('Резервный профиль работает или переключается. Дождитесь завершения проверки либо отключите резерв в «Профилях».'),
@@ -1172,8 +1173,9 @@ async function confirmActivation(profile, action, backup = false, quick = false)
             E('div', { class: 'rw-install-status', role: 'status' }, [spinner, status, reading]),
             meter
         ]);
-        const error = E('p', { class: 'rw-install-error', role: 'alert' },
-            check.restart_required ? [jobErrors['network-restart-required']] : []);
+        const error = E('p', { class: 'rw-install-error', role: 'alert' });
+        const mayRestartNetwork = ['wireguard', 'amneziawg'].includes(check.protocol) &&
+            (missing.length || check.restart_required);
         let reloadOnClose = false;
         const close = button(_('Отмена'), () => {
             ui.hideModal();
@@ -1198,10 +1200,11 @@ async function confirmActivation(profile, action, backup = false, quick = false)
                 const ok = await action(backup ? 'backup' : 'activate', profile, false, {
                     update: state => {
                         setProgress(state.phase);
-                        if (['download', 'config', 'start', 'verify', 'done'].includes(state.phase) &&
+                        if (['download', 'config', 'network-restart', 'start', 'verify', 'done'].includes(state.phase) &&
                             meter.value >= 45)
                             packageInfo.hidden = true;
                     },
+                    reconnect: mayRestartNetwork ? () => setProgress('network-restart') : null,
                     fail: message => { error.textContent = message; }
                 });
                 spinner.hidden = true;
@@ -1217,10 +1220,6 @@ async function confirmActivation(profile, action, backup = false, quick = false)
                         const current = await preflight(profile, role);
                         const remaining = current.missing || [];
                         updatePackages(remaining);
-                        if (current.restart_required) {
-                            error.textContent = jobErrors['network-restart-required'];
-                            confirm.hidden = true;
-                        }
                         if (!remaining.length)
                             confirm.textContent = readyLabel;
                     } catch (error) {
@@ -1228,11 +1227,10 @@ async function confirmActivation(profile, action, backup = false, quick = false)
                     }
                 }
             }), true);
-        if (check.restart_required)
-            confirm.disabled = true;
         ui.showModal(backup ? _('Резервный профиль') : _('Активация профиля'), [
             E('p', {}, [backup ? _('Резерв включится при отказе основного профиля. Для подписки сначала проверяются все серверы.') :
                 _('Маршрут переключится после проверки нового туннеля.')]),
+            ...(mayRestartNetwork ? [E('p', {}, [_('При необходимости роутер сам перезапустит сеть. Соединение может ненадолго прерваться.')])] : []),
             packageInfo,
             progress,
             error,
@@ -1279,9 +1277,19 @@ return view.extend({
             try {
                 if (!await jobStart(cmd, profile))
                     throw new Error(_('Действие недоступно или уже выполняется другая операция.'));
+                let reconnectAttempts = 0;
                 for (let attempt = 0; attempt < 150; attempt++) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
-                    const state = await jobStatus();
+                    let state;
+                    try {
+                        state = await jobStatus();
+                        reconnectAttempts = 0;
+                    } catch (error) {
+                        if (!observer?.reconnect || ++reconnectAttempts > 25)
+                            throw error;
+                        observer.reconnect();
+                        continue;
+                    }
                     if (observer)
                         observer.update(state);
                     if (state.running)

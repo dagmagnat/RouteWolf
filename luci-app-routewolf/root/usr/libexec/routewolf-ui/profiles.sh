@@ -249,9 +249,8 @@ native_profile() (
         fi
         [ -z "$(missing_components "$protocol")" ] || return 1
     fi
-    if ! network_protocol_loaded "$protocol"; then
-        reason network-restart-required
-        fail 'OpenWrt has not loaded the installed tunnel protocol. Reboot the router and retry.'
+    if ! load_network_protocol "$protocol"; then
+        fail 'OpenWrt has not loaded the installed tunnel protocol after restarting the network.'
     fi
     phase start
     reason tunnel-start

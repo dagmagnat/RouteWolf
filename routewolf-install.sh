@@ -6074,7 +6074,7 @@ install_luci_mode() {
     local complete_runtime=0 pending=/etc/routewolf/luci-setup-pending
     if [ -e "$pending" ] || [ ! -s /etc/routewolf/runtime_version ] || [ ! -s "$ROUTEWOLF_VERSION_FILE" ]; then
         complete_runtime=1
-        INSTALL_TOTAL_STEPS=3
+        INSTALL_TOTAL_STEPS=4
     fi
     if ! routewolf_runtime_files_present; then
         [ -z "$(uci changes network)" ] && [ -z "$(uci changes firewall)" ] && [ -z "$(uci changes dhcp)" ] || {
@@ -6084,7 +6084,7 @@ install_luci_mode() {
         ROUTEWOLF_SETUP_LUCI=1
         TUNNEL=0
         complete_runtime=1
-        INSTALL_TOTAL_STEPS=11
+        INSTALL_TOTAL_STEPS=12
         run_step "$(prompt "Checking package repositories" "Проверка репозиториев пакетов")" check_repo || return 1
         run_step "$(prompt "Installing base packages" "Установка базовых пакетов")" add_packages || return 1
         run_step "$(prompt "Installing dnsmasq-full" "Установка dnsmasq-full")" dnsmasqfull || return 1
@@ -6099,9 +6099,12 @@ install_luci_mode() {
         run_step "$(prompt "Installing the stable runtime" "Установка стабильного ядра RouteWolf")" install_stable_runtime || return 1
         run_step "$(prompt "Checking routing" "Проверка маршрутизации")" validate_routewolf_installation || return 1
         write_installed_version || return 1
+    fi
+    run_step "$(prompt "Installing the LuCI panel" "Установка панели LuCI")" install_luci_panel || return 1
+    if [ "$complete_runtime" = 1 ]; then
+        run_step "$(prompt "Restarting network" "Перезапуск сети")" /etc/init.d/network restart || return 1
         rm -f "$pending" || return 1
     fi
-    run_step "$(prompt "Installing the LuCI panel" "Установка панели LuCI")" install_luci_panel
 }
 
 # Choose installer language before any interactive menu.
