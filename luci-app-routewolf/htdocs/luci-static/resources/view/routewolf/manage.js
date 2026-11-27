@@ -116,7 +116,7 @@ const maxListBytes = 24576;
 
 function button(label, callback, accent) {
     return E('button', {
-        class: 'btn cbi-button ' + (accent ? 'cbi-button-positive' : 'cbi-button-action'),
+        class: 'btn cbi-button ' + (accent === 'danger' ? 'cbi-button-negative' : accent ? 'cbi-button-positive' : 'cbi-button-action'),
         type: 'button',
         click: callback
     }, [label]);
@@ -323,31 +323,42 @@ const componentBlockers = {
     'built-in': _('Входит в прошивку')
 };
 
-async function componentsDialog(action, protocol = '') {
-    const preferred = ({ vless: 'xray', outline: 'singbox' })[protocol] || protocol;
+async function installedComponentGroups() {
+    const { groups } = await listComponents();
+    if (!Array.isArray(groups)) throw new Error('Invalid component inventory');
+    return groups;
+}
+
+async function componentsDialog(action) {
     let groups;
     try {
-        groups = (await listComponents()).groups;
+        groups = await installedComponentGroups();
     } catch {
         ui.addNotification(null, E('p', {}, [jobErrors['components-read']]));
         return;
     }
-    if (preferred) {
-        groups = groups.filter(group => group.id === preferred && !group.blocker);
-        if (!groups.length) return;
-    }
-
     const list = E('div', { class: 'rw-component-list' });
     const message = E('p', { role: 'status' });
     const error = E('p', { role: 'alert', class: 'rw-install-error' });
     const close = button(_('Закрыть'), () => ui.hideModal());
     let fields = [];
+    const selectAll = E('input', { type: 'checkbox' });
+    const selectAllLabel = E('label', { class: 'rw-component-option' }, [
+        selectAll, E('strong', {}, [_('Выбрать все доступные')])
+    ]);
+    const choices = () => fields.filter(({ group }) => !group.blocker);
+    selectAll.addEventListener('change', () => {
+        for (const { field } of choices()) field.checked = selectAll.checked;
+        updateChoice();
+    });
     const remove = button(_('Удалить выбранное'), ui.createHandlerFn(null, async () => {
         const selected = fields.filter(({ field }) => field.checked).map(({ group }) => group);
         if (!selected.length) return;
         const names = selected.map(group => componentNames[group.id]).join(', ');
         if (!window.confirm(_('Удалить установленные пакеты: %s?').format(names))) return;
         close.disabled = true;
+        selectAll.disabled = true;
+        remove.disabled = true;
         error.textContent = '';
         message.textContent = _('Проверка и удаление пакетов…');
         fields.forEach(({ field }) => { field.disabled = true; });
@@ -362,24 +373,30 @@ async function componentsDialog(action, protocol = '') {
                 ui.hideModal();
                 ui.addNotification(null, E('p', {}, [_('Выбранные пакеты удалены.')]), 'info');
             } else {
-                const latest = (await listComponents()).groups;
-                renderGroups(preferred ? latest.filter(group => group.id === preferred) : latest);
+                renderGroups(await installedComponentGroups());
             }
         } catch {
+            renderGroups([]);
             list.replaceChildren();
-            remove.disabled = true;
             error.textContent = jobErrors['components-read'];
         } finally {
             close.disabled = false;
             message.textContent = '';
         }
-    }), true);
+    }), 'danger');
+    function updateChoice() {
+        const available = choices();
+        const count = available.filter(({ field }) => field.checked).length;
+        selectAll.checked = available.length > 0 && count === available.length;
+        selectAll.indeterminate = count > 0 && count < available.length;
+        selectAll.disabled = available.length === 0;
+        selectAllLabel.hidden = available.length === 0;
+        remove.disabled = count === 0;
+    }
     function renderGroups(rows) {
         fields = rows.map(group => {
             const field = E('input', { type: 'checkbox', disabled: group.blocker ? true : null });
-            field.addEventListener('change', () => {
-                remove.disabled = !fields.some(item => item.field.checked);
-            });
+            field.addEventListener('change', updateChoice);
             return { group, field };
         });
         list.replaceChildren(...fields.map(({ group, field }) => {
@@ -394,13 +411,12 @@ async function componentsDialog(action, protocol = '') {
             ]);
         }));
         if (!rows.length) list.appendChild(E('p', {}, [_('Компоненты туннелей не установлены.')]));
-        remove.disabled = true;
+        updateChoice();
     }
     renderGroups(groups);
     ui.showModal(_('Компоненты туннелей'), [
-        E('p', {}, [preferred ? _('Профиль удалён. Его пакеты можно удалить сейчас или позже во вкладке «Управление».') :
-            _('Выберите пакеты, которые больше не нужны. Одной галочкой выбирается весь компонент.')]),
-        list, message, error,
+        E('p', {}, [_('Отметьте ненужные компоненты. Под каждым указаны установленные пакеты.')]),
+        selectAllLabel, list, message, error,
         E('div', { class: 'rw-actions rw-activate-actions' }, [remove, close])
     ], 'rw-activate-modal');
 }
@@ -436,7 +452,7 @@ function servicePanel(result, action, showError, save) {
                 !window.confirm(cmd === 'restart' ? _('Перезапустить действующий туннель?') : _('Перезапустить маршрутизацию RouteWolf?')))
                 return;
             return action(cmd);
-        }))), button(_('Удалить компоненты'), ui.createHandlerFn(null, () => componentsDialog(action)))])
+        }))), button(_('Удалить компоненты'), ui.createHandlerFn(null, () => componentsDialog(action)), 'danger')])
     ]);
 }
 
@@ -1062,10 +1078,9 @@ function profileForm(openNodes, removeProfile) {
     section.modaltitle = _('Профиль туннеля');
     section.filter = id => !uci.get(settings, id, 'existing_ref');
     section.handleRemove = async function(id) {
-        const protocol = uci.get(settings, id, 'protocol');
         const name = uci.get(settings, id, 'name') || id;
         if (!window.confirm(_('Удалить профиль «%s»?').format(name))) return;
-        await removeProfile(id, protocol);
+        await removeProfile(id);
     };
     const renderActions = section.renderRowActions;
     section.renderRowActions = function(id, ...args) {
@@ -1517,7 +1532,7 @@ return view.extend({
                         actions.push(button(_('Удалить профиль'), ui.createHandlerFn(null, async () => {
                             const question = item.missing ? _('Удалить профиль «%s»?') :
                                 _('Удалить профиль «%s» и связанный интерфейс OpenWrt?');
-                            if (window.confirm(question.format(item.label))) await deleteProfile(item.profile, item.protocol);
+                            if (window.confirm(question.format(item.label))) await deleteProfile(item.profile);
                         })));
                     } else if (current.project_auth && !item.protected && !item.missing) {
                         actions.push(button(_('Добавить в профили'), ui.createHandlerFn(null, async () => {
@@ -1546,12 +1561,11 @@ return view.extend({
             updateProfiles();
             await refreshExisting();
         }
-        async function deleteProfile(id, protocol) {
+        async function deleteProfile(id) {
             await save();
             if (!await action('remove_profile', id)) return;
             await reloadProfiles();
             ui.addNotification(null, E('p', {}, [_('Профиль удалён.')]), 'info');
-            if (protocol) await componentsDialog(action, protocol);
         }
         this.map = profileForm(id => serverDialog(id, action, save, status), deleteProfile);
         return this.map.render().then(node => {

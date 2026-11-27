@@ -99,7 +99,9 @@ associated() {
         }'
 }
 
-list_interfaces() {
+list_interfaces() (
+    # jshn initializes its namespace and JSON state using unset shell variables.
+    set +u
     . /usr/share/libubox/jshn.sh
     local active mode id proto device interface instance paused
     active=$(selected_device)
@@ -128,7 +130,7 @@ $(inventory)
 EOF
     json_close_array
     json_dump
-}
+)
 
 adopt() {
     local ref=$1 data proto device iface instance name profile routing

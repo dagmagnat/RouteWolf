@@ -31,7 +31,7 @@ opkg() {
 }
 apk() {
     case "$*" in
-        info) awk '{print $1}' installed ;;
+        '--no-network --repositories-file /dev/null info') awk '{print $1}' installed ;;
         '--no-network del '*) shift 2; remove_test_packages "$@" ;;
         *) exit 8 ;;
     esac
@@ -47,19 +47,32 @@ remove_test_packages() {
 
 
 class LuCIComponentTests(unittest.TestCase):
-    def remove(self, selection, *, profile='', network='', running='', firmware='', version=24):
+    def run_worker(self, selection, *, command='remove', profile='', network='', running='', firmware='', version=24):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'os-release').write_text(f'VERSION_ID="{version}.1"\n')
             (root / 'installed').write_text(
                 'xray-core - 1\nsing-box-tiny - 1\nluci-app-openvpn - 1\n'
                 'openvpn-openssl - 1\nkmod-tun - 1\nwireguard-tools - 1\nkmod-wireguard - 1\n'
+                'amneziawg-tools - 1\nkmod-amneziawg - 1\n'
             )
             (root / 'firmware').write_text(firmware)
             (root / 'profiles').write_text(profile + '\n', newline='\n')
             (root / 'network').write_text(network + '\n', newline='\n')
+            (root / 'jshn.sh').write_text(
+                'unset JSON_PREFIX\n'
+                'json_init() { [ -z "$JSON_PREFIX" ]; }\n'
+                'json_add_array() { :; }\n'
+                'json_close_array() { :; }\n'
+                'json_add_object() { :; }\n'
+                'json_close_object() { :; }\n'
+                'json_add_string() { printf "%s=%s\\n" "$1" "$2"; }\n'
+                'json_dump() { :; }\n',
+                newline='\n',
+            )
             script = SOURCE.replace('. "$lib/dependencies.sh"', ':')
             for original, fixture in {
+                '/usr/share/libubox/jshn.sh': './jshn.sh',
                 '/etc/os-release': 'os-release',
                 '/rom/usr/lib/opkg/status': 'firmware',
                 '/rom/lib/apk/db/installed': 'firmware',
@@ -70,14 +83,26 @@ class LuCIComponentTests(unittest.TestCase):
                 '/tmp/routewolf-component-remove.log': 'remove.log',
             }.items():
                 script = script.replace(original, fixture)
-            config = 'running=$2\nset -- remove "$1"\n'
+            config = 'running=$2\nset -- "$3" "$1"\n'
             result = subprocess.run(
-                ['sh', '-s', '--', selection, running],
+                ['sh', '-s', '--', selection, running, command],
                 cwd=directory, input=SETUP + config + script, text=True,
                 capture_output=True, timeout=10,
             )
             removed = (root / 'removed').read_text().splitlines() if (root / 'removed').exists() else []
             return result, removed
+
+    def remove(self, selection, **configuration):
+        return self.run_worker(selection, **configuration)
+
+    def test_lists_installed_groups_without_a_profile_or_json_prefix(self):
+        result, removed = self.run_worker('', command='list', version=25)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('id=amneziawg', result.stdout)
+        self.assertIn('=amneziawg-tools', result.stdout)
+        self.assertIn('id=xray', result.stdout)
+        self.assertNotIn('=kmod-tun', result.stdout)
+        self.assertEqual(removed, [])
 
     def test_opkg_removes_group_as_one_operation_and_keeps_base_packages(self):
         result, removed = self.remove('xray,openvpn,wireguard', firmware='Package: kmod-wireguard\n')

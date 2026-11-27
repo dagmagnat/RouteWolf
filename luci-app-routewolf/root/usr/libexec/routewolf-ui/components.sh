@@ -33,7 +33,7 @@ read_inventory() {
     case "$version" in ''|*[!0-9]*) version=0 ;; esac
     if present apk && { [ "$version" -ge 25 ] || ! present opkg; }; then
         manager=apk
-        installed=$(apk info 2>/dev/null) || return 1
+        installed=$(apk --no-network --repositories-file /dev/null info 2>/dev/null) || return 1
         built_in=$(sed -n 's/^P://p' /rom/lib/apk/db/installed /rom/usr/lib/apk/db/installed 2>/dev/null || :)
     else
         manager=opkg
@@ -125,7 +125,9 @@ read_configuration() {
         /etc/routewolf/route.conf /etc/routewolf-ui/paused-route.conf 2>/dev/null || :)
 }
 
-list_components() {
+list_components() (
+    # jshn initializes its namespace and JSON state using unset shell variables.
+    set +u
     . /usr/share/libubox/jshn.sh
     local group current available blocker package
     read_inventory && read_configuration || return 1
@@ -150,7 +152,7 @@ list_components() {
     done
     json_close_array
     json_dump
-}
+)
 
 remove_components() {
     local selected=$1 owner_file=${2:-} group package target old_ifs

@@ -296,3 +296,11 @@
     .rw-luci .rw-service-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
     .rw-luci .rw-cards, .rw-luci .rw-list-grid { grid-template-columns:minmax(0,1fr); }
 }
+
+.rw-service-actions .cbi-button-negative,
+.rw-activate-modal .cbi-button-negative {
+    background: #a7253b;
+    border-color: #a7253b;
+    color: #fff;
+}
+.rw-activate-modal .rw-component-option[hidden] { display: none; }
