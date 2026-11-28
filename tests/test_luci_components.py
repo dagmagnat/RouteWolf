@@ -19,6 +19,7 @@ uci() {
         '-q show routewolf_ui') cat profiles ;;
         '-q show network') cat network ;;
         '-q show openvpn') return 1 ;;
+        'commit routewolf_ui') return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -47,7 +48,7 @@ remove_test_packages() {
 
 
 class LuCIComponentTests(unittest.TestCase):
-    def run_worker(self, selection, *, command='remove', profile='', network='', running='', firmware='', version=24):
+    def run_worker(self, selection, *, command='remove', profile='', network='', running='', firmware='', version=24, subscription=False, paused=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'os-release').write_text(f'VERSION_ID="{version}.1"\n')
@@ -57,6 +58,18 @@ class LuCIComponentTests(unittest.TestCase):
                 'amneziawg-tools - 1\nkmod-amneziawg - 1\n'
             )
             (root / 'firmware').write_text(firmware)
+            if subscription:
+                (root / 'old-subscription').mkdir()
+                (root / 'old-subscription/mode').write_text('routewolf\n')
+                (root / 'old-subscription/engine').write_text('xray\n')
+                (root / 'subscription').mkdir()
+                (root / 'subscription/install.sh').write_text(
+                    '#!/bin/sh\n[ "$1" = remove ] || exit 1\ntouch subscription-removed\n',
+                    newline='\n',
+                )
+            if paused:
+                (root / 'ui-state').mkdir()
+                (root / 'ui-state/paused-singbox').touch()
             (root / 'profiles').write_text(profile + '\n', newline='\n')
             (root / 'network').write_text(network + '\n', newline='\n')
             (root / 'jshn.sh').write_text(
@@ -90,6 +103,9 @@ class LuCIComponentTests(unittest.TestCase):
                 capture_output=True, timeout=10,
             )
             removed = (root / 'removed').read_text().splitlines() if (root / 'removed').exists() else []
+            if command == 'remove' and result.returncode == 0 and subscription and paused:
+                self.assertTrue((root / 'subscription-removed').exists())
+                self.assertFalse((root / 'ui-state/paused-singbox').exists())
             return result, removed
 
     def remove(self, selection, **configuration):
@@ -102,6 +118,26 @@ class LuCIComponentTests(unittest.TestCase):
         self.assertIn('=amneziawg-tools', result.stdout)
         self.assertIn('id=xray', result.stdout)
         self.assertNotIn('=kmod-tun', result.stdout)
+        self.assertEqual(removed, [])
+
+    def test_paused_orphan_configuration_does_not_block_unused_engine(self):
+        result, _ = self.run_worker('', command='list', version=25, subscription=True, paused=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('id=xray\nblocker=\n', result.stdout)
+
+    def test_removes_unused_engine_and_its_paused_orphan_subscription(self):
+        result, removed = self.run_worker('xray', version=25, subscription=True, paused=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(removed, ['xray-core'])
+
+    def test_paused_orphan_with_live_process_still_blocks_removal(self):
+        result, removed = self.run_worker('xray', version=25, subscription=True, paused=True, running='xray')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(removed, [])
+
+    def test_unpaused_legacy_subscription_stays_protected(self):
+        result, removed = self.run_worker('xray', version=25, subscription=True)
+        self.assertNotEqual(result.returncode, 0)
         self.assertEqual(removed, [])
 
     def test_opkg_removes_group_as_one_operation_and_keeps_base_packages(self):

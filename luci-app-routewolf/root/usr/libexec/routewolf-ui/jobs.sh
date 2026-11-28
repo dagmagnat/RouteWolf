@@ -82,7 +82,9 @@ control_routing() {
         pause)
             if [ -e /etc/routewolf-subscription/mode ] && [ ! -e "$state/native-active" ]; then
                 /etc/init.d/routewolf-subscription disable &&
-                    /etc/init.d/routewolf-subscription stop && touch "$state/paused-singbox"
+                    /etc/init.d/routewolf-subscription stop &&
+                    /etc/init.d/routewolf-subscription-engine disable &&
+                    /etc/init.d/routewolf-subscription-engine stop && touch "$state/paused-singbox"
                 return
             fi
             [ -s "$route" ] && [ ! -e "$state/paused-route.conf" ] || return 1
@@ -97,7 +99,8 @@ control_routing() {
             ;;
         resume)
             if [ -e "$state/paused-singbox" ]; then
-                /etc/init.d/routewolf-subscription enable && /etc/init.d/routewolf-subscription start &&
+                /etc/init.d/routewolf-subscription-engine enable &&
+                    /etc/init.d/routewolf-subscription enable && /etc/init.d/routewolf-subscription start &&
                     rm -f "$state/paused-singbox"
                 return
             fi

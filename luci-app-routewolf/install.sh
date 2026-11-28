@@ -59,6 +59,11 @@ for script in dependencies jobs lists profiles singbox schedule backup backup-pr
     put_file "/usr/libexec/routewolf-ui/$script.sh" 755 "$here/root/usr/libexec/routewolf-ui/$script.sh"
 done
 /usr/libexec/routewolf-ui/interfaces.sh mark-legacy
+# Older pause actions left the subscription engine running without routing.
+if [ -e /etc/routewolf-ui/paused-singbox ] && [ ! -e /etc/routewolf-ui/native-active ]; then
+    /etc/init.d/routewolf-subscription-engine disable
+    /etc/init.d/routewolf-subscription-engine stop
+fi
 put_file /usr/libexec/routewolf-ui/nodes.uc 644 "$here/root/usr/libexec/routewolf-ui/nodes.uc"
 put_file /usr/libexec/routewolf-ui/library.awk 644 "$here/root/usr/libexec/routewolf-ui/library.awk"
 put_file /usr/libexec/routewolf-ui/openvpn.awk 644 "$here/root/usr/libexec/routewolf-ui/openvpn.awk"

@@ -62,6 +62,21 @@ removable_packages() {
     done
 }
 
+orphaned_subscription() {
+    [ -f /etc/routewolf-subscription/mode ] &&
+        [ -e /etc/routewolf-ui/paused-singbox ] &&
+        [ ! -e /etc/routewolf-ui/native-active ] &&
+        [ -z "$profiles" ]
+}
+
+subscription_group() {
+    if grep -qx xray /etc/routewolf-subscription/engine 2>/dev/null; then
+        echo xray
+    else
+        echo singbox
+    fi
+}
+
 group_blocker() {
     local group=$1 protocol section binary subsystem utility
     for protocol in $(group_protocols "$group"); do
@@ -71,9 +86,9 @@ group_blocker() {
         fi
     done
     if [ "$group" = xray ] || [ "$group" = singbox ]; then
-        if [ -f /etc/routewolf-subscription/mode ] && [ ! -e /etc/routewolf-ui/native-active ]; then
-            subsystem=singbox
-            if grep -qx xray /etc/routewolf-subscription/engine 2>/dev/null; then subsystem=xray; fi
+        if [ -f /etc/routewolf-subscription/mode ] && [ ! -e /etc/routewolf-ui/native-active ] &&
+           ! orphaned_subscription; then
+            subsystem=$(subscription_group)
             if [ "$group" = "$subsystem" ]; then echo running; return; fi
         fi
     fi
@@ -155,7 +170,7 @@ list_components() (
 )
 
 remove_components() {
-    local selected=$1 owner_file=${2:-} group package target old_ifs
+    local selected=$1 owner_file=${2:-} group package target old_ifs section profile
     case "$selected" in ''|*[!a-z,]*) return 2 ;; esac
     old_ifs=$IFS
     IFS=,
@@ -175,6 +190,20 @@ remove_components() {
             fi
         done
     done
+    if orphaned_subscription; then
+        for group in "$@"; do
+            [ "$group" = "$(subscription_group)" ] || continue
+            sh "$lib/subscription/install.sh" remove || return 1
+            rm -f /etc/routewolf-ui/paused-singbox
+            for section in active_profile preferred_profile backup_profile; do
+                profile=$(uci -q get "routewolf_ui.ui.$section" || :)
+                if [ -n "$profile" ] && [ "$(uci -q get "routewolf_ui.$profile" || :)" != profile ]; then
+                    uci -q delete "routewolf_ui.ui.$section" || return 1
+                fi
+            done
+            uci commit routewolf_ui || return 1
+        done
+    fi
     set -- $target
     [ "$#" -gt 0 ] || return 0
     phase remove
