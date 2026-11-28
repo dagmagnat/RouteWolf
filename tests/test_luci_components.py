@@ -84,6 +84,7 @@ class LuCIComponentTests(unittest.TestCase):
                 newline='\n',
             )
             script = SOURCE.replace('. "$lib/dependencies.sh"', ':')
+            script = script.replace('lib=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)', 'lib=$PWD')
             for original, fixture in {
                 '/usr/share/libubox/jshn.sh': './jshn.sh',
                 '/etc/os-release': 'os-release',
